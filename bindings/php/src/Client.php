@@ -220,11 +220,16 @@ final class Client
         if ($jsonBody !== null) {
             $headers[] = 'Content-Type: application/json';
         }
+        // Stripped of CR/LF before going anywhere near a raw header
+        // line: both come straight from the incoming request
+        // ($_SERVER, ultimately the visitor's own browser), so without
+        // this an embedded newline could inject an additional,
+        // unintended header into this outbound call.
         if (($ua = $_SERVER['HTTP_USER_AGENT'] ?? null) !== null) {
-            $headers[] = "User-Agent: {$ua}";
+            $headers[] = 'User-Agent: ' . str_replace(["\r", "\n"], '', $ua);
         }
         if (($ip = $_SERVER['REMOTE_ADDR'] ?? null) !== null) {
-            $headers[] = "X-Forwarded-For: {$ip}";
+            $headers[] = 'X-Forwarded-For: ' . str_replace(["\r", "\n"], '', $ip);
         }
 
         if (\function_exists('curl_init')) {
