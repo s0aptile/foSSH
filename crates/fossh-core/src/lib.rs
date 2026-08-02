@@ -10,6 +10,7 @@
 //! 100% unit-testable logic with no side effects.
 
 pub mod config;
+pub mod hist;
 pub mod hll;
 pub mod sanitize_path;
 pub mod types;

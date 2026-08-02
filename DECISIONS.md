@@ -53,7 +53,7 @@ One entry per non-obvious choice. Newest at the bottom. Format: decision, altern
 
 ---
 
-## ADR-0007 — `props: Vec<(Key, Val)>` instead of the `SmallVec` shown in §6
+## ADR-0006 — `props: Vec<(Key, Val)>` instead of the `SmallVec` shown in §6
 
 **Decision:** `Event::props` is `Vec<(Key, Val)>`, with the S4 16-item cap enforced at construction/validation time, not in the type.
 **Alternatives rejected:** `SmallVec<[(Key, Val); 16]>` as literally sketched in §6's illustrative struct.
@@ -61,7 +61,7 @@ One entry per non-obvious choice. Newest at the bottom. Format: decision, altern
 
 ---
 
-## ADR-0008 — Property *values* use the P8 grammar with the S4 length cap, not the literal `{1,64}` from P8's prose
+## ADR-0007 — Property *values* use the P8 grammar with the S4 length cap, not the literal `{1,64}` from P8's prose
 
 **Decision:** `Name`, `Key`, and `Val` all share the charset `[a-z0-9_.:-]`; `Name`/`Key` cap at 64 bytes, `Val` caps at 256 bytes.
 **Alternatives rejected:** Applying `[a-z0-9_.:-]{1,64}` literally to property values too, as P8's sentence reads if taken word-for-word.
@@ -69,7 +69,7 @@ One entry per non-obvious choice. Newest at the bottom. Format: decision, altern
 
 ---
 
-## ADR-0009 — Registrable-domain extraction is a curated-suffix heuristic, not a full Public Suffix List
+## ADR-0008 — Registrable-domain extraction is a curated-suffix heuristic, not a full Public Suffix List
 
 **Decision:** `Host::from_referrer_url` reduces a referrer URL's host to "last two labels", except for a hand-maintained list of ~47 common multi-part suffixes (`co.uk`, `com.tr`, `co.jp`, ...) where it keeps three.
 **Alternatives rejected:** Vendoring the real Public Suffix List (~250 KB, thousands of entries, needs periodic refresh from an external source) for byte-perfect eTLD+1 extraction.
@@ -77,7 +77,37 @@ One entry per non-obvious choice. Newest at the bottom. Format: decision, altern
 
 ---
 
-## ADR-0010 — Credential handling for local privileged commands
+## ADR-0009 — `rollup_hourly.uniques` is `BLOB`, plus an added `value_hist BLOB` column, beyond §6's literal `CREATE TABLE`
+
+**Decision:** `uniques` stores a serialized HyperLogLog sketch (`BLOB NOT NULL`), not an `INTEGER` count. A `value_hist BLOB` column (a mergeable log2-bucket histogram, `fossh_core::hist::Histogram`) is added; `p50`/`p95` stay `INTEGER` as shown, but are point estimates recomputed from `value_hist` on every upsert rather than the source of truth.
+**Alternatives rejected:** Following §6's `CREATE TABLE` literally (`uniques INTEGER`, no `value_hist`).
+**Reason:** §6's own prose ("stored as a BLOB, so raw visitor values can be deleted at day boundary while cardinality survives") contradicts the `INTEGER` in the SQL snippet three lines below it — they can't both be right. A rollup bucket gets updated incrementally across many compactor passes within its hour; correctly folding one more event into an existing bucket's uniques/percentiles requires a mergeable sketch, not a number you can no longer un-average. Full reasoning and the exact schema are in `schema.rs`'s module doc comment. Neither addition reopens P1 — both are aggregate/sketch data with no visitor-level content, and the column-set invariant test still pins an exact list.
+
+---
+
+## ADR-0010 — Property keys intern into the same `names` table as event names
+
+**Decision:** `props.k REFERENCES names(id)` — no separate keys table.
+**Reason:** §6 has no dedicated interning table for property keys, only `names`/`paths`/`refs`; keys and event names are both short allowlisted identifiers under the identical grammar (P8), so sharing one string-interning table is the natural reading rather than inventing a fourth table §6 never mentions.
+
+---
+
+## ADR-0011 — k-anonymity (P6) folds on estimated *uniques*, not *hits*
+
+**Decision:** `Store::query_rollup`'s k-anonymity fold compares a group's estimated distinct-visitor count (`Hll::estimate()`) against `k`, not its event/hit count.
+**Alternatives rejected:** Folding on `hits` (raw event volume) instead.
+**Reason:** P6 says "grouped query result whose *bucket count* is below k" — ambiguous between the two metrics. The privacy property k-anonymity is actually protecting is "this row doesn't correspond to a handful of identifiable people," which is a statement about distinct visitors, not event volume — a page with 500 hits from 2 people is exactly the small-group case k-anonymity exists to hide, and folding only on hits would let it through.
+
+---
+
+## ADR-0012 — `path_id = 0` sentinel for "no path" in `rollup_hourly`
+
+**Decision:** Events with no `path` (e.g. some `Action`/`Timing` events) roll up with `path_id = 0`, a value never assigned to a real interned path, rather than `NULL`.
+**Reason:** `rollup_hourly` is `WITHOUT ROWID` with `path_id` as part of the composite `PRIMARY KEY`; SQLite implicitly forbids `NULL` in any column of a `WITHOUT ROWID` table's primary key (unlike an ordinary rowid table, where `events.path_id` — a plain nullable column, not part of a `WITHOUT ROWID` key — is `NULL` for the same case). `paths.id` is an `INTEGER PRIMARY KEY` (rowid alias), which SQLite starts allocating from `1`, so `0` is safe to reserve.
+
+---
+
+## ADR-0013 — Credential handling for local privileged commands
 
 **Decision:** No password is ever placed in a shell command, file, or log from this session. Where a build step genuinely needs `sudo` (installing a missing system package), the exact command is surfaced for the user to run themselves via their own shell, rather than piping a credential through a tool call.
 **Reason:** A plaintext password embedded in a command is retained wherever that command is recorded. Standard toolchain setup (rustup, cargo, musl target) needed no elevated privileges at all; `cc`/`gcc` were already present on this machine, so this has not come up in practice for M1.
