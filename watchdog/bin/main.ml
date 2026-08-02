@@ -5,28 +5,44 @@
    auth gate's network listener and the QUIC IPC channel to core
    (§2.1/§3.4) — Auth/Session (lib/auth.ml, lib/session.ml) are real,
    tested, standalone modules, but nothing in this file accepts a
-   connection and calls them yet. That's the next pass; see
-   DECISIONS.md and dev/DURUM.md for exactly what's built versus
-   still open. Running this binary today gives you real crash-restart
-   plus real tamper detection on every restart *and* on the initial
-   launch, and nothing else.
+   connection and calls them yet. Also not wired: automatically
+   calling `bootstrap-send` from this startup path. That's deliberate,
+   not an oversight — see the `bootstrap-send` paragraph below for
+   why. See dev/DURUM.md for exactly what's connected versus still
+   separate pieces.
 
    Usage:
-     fossh-watchdog <program> <gnupghome> <expected-key-fingerprint>
-                     <manifest-path> [args...]
+     fossh-watchdog <program> <gnupghome> <manifest-path> [args...]
      fossh-watchdog bootstrap-send <socket-path> <fingerprint>
 
-   The second form is §2.4's bootstrap handoff — sends this
-   installation's fingerprint to core's listener
-   (`fossh_admin::watchdog_pin::run_bootstrap_listener`, the Rust
-   side) exactly once, with a bounded retry since the two processes
-   have no guaranteed startup ordering. Still not wired into the first
-   form's own startup sequence yet — see dev/DURUM.md for exactly
-   what's connected versus still separate pieces (in particular: this
-   binary does not yet generate its own keypair, so nothing calls
-   `bootstrap-send` automatically today; it exists as a real,
-   independently-usable operation, exercised by a real cross-language
-   test against the actual Rust listener, not just scaffolding).
+   The manifest is always verified against *this watchdog's own* key
+   — `Keypair.ensure_keypair` loads it from `gnupghome` if one already
+   exists there, or generates a fresh Ed25519 signing key on first
+   run if not (§2.4: per-install, never shipped in the installer,
+   never silently regenerated once it exists). An earlier version of
+   this binary took the expected fingerprint as a separate CLI
+   argument — dropped, because the manifest is always supposed to be
+   signed by the watchdog's own key (§3.3: "sign it with the
+   watchdog's own key"), so accepting a *different* fingerprint from
+   an operator was a real footgun (a copy-paste mistake would have
+   silently pointed verification at the wrong key) with no legitimate
+   use for it.
+
+   `bootstrap-send` (§2.4's handoff to core, `fossh_admin::watchdog_pin`
+   on the Rust side) exists as a real, independently-usable, tested
+   operation — including a real cross-language test against the
+   compiled Rust listener — but is not auto-invoked from the
+   supervision loop above. Deliberately: the handoff is meant to run
+   exactly once per install, and this binary has no local record yet
+   of "have I already handed off successfully" independent of asking
+   core (whose own listener is itself one-shot and may simply no
+   longer be listening after a prior success) — auto-calling it on
+   every restart without that state would either hammer a socket
+   that's usually gone, or need a second persisted marker file whose
+   own failure semantics (what if the handoff succeeded but writing
+   the marker failed?) deserve deliberate design, not a rushed
+   addition alongside unrelated changes. Tracked as open, not silently
+   skipped — see dev/DURUM.md.
 
    Exit codes (distinct on purpose — §3.6 requires being able to tell
    "refused, needs attention" apart from "exited cleanly", and a
@@ -39,7 +55,8 @@
      4 - restart-storm guard tripped
      5 - could not even read the manifest file (fails closed the same
          as a tamper detection, distinguished for diagnosability)
-     6 - bootstrap-send failed (exhausted retries) *)
+     6 - bootstrap-send failed (exhausted retries)
+     7 - could not establish this watchdog's own keypair at startup *)
 
 open Fossh_watchdog_lib
 
@@ -122,8 +139,16 @@ let () =
       | Error e ->
           log "BOOTSTRAP HANDOFF FAILED: %s" (Bootstrap.describe_error e);
           exit 6)
-  | _ :: program :: gnupghome :: expected_key_fingerprint :: manifest_path :: rest
-    ->
+  | _ :: program :: gnupghome :: manifest_path :: rest ->
+      let expected_key_fingerprint =
+        match Keypair.ensure_keypair ~gnupghome ~uid:"fossh-watchdog" with
+        | Ok fpr ->
+            log "watchdog key fingerprint: %s" fpr;
+            fpr
+        | Error e ->
+            log "COULD NOT ESTABLISH WATCHDOG KEYPAIR: %s" (Keypair.describe_error e);
+            exit 7
+      in
       let args = Array.of_list (program :: rest) in
       let supervisor = Supervisor.create ~program args in
       let (_ : int option) =
@@ -167,7 +192,6 @@ let () =
       done
   | _ ->
       prerr_endline
-        "usage: fossh-watchdog <program> <gnupghome> <expected-key-fingerprint> \
-         <manifest-path> [args...]\n\
+        "usage: fossh-watchdog <program> <gnupghome> <manifest-path> [args...]\n\
         \       fossh-watchdog bootstrap-send <socket-path> <fingerprint>";
       exit 2

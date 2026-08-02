@@ -4,6 +4,6 @@
  (libraries fossh_watchdog_lib unix))
 
 (tests
- (names test_nonce test_auth test_session test_manifest test_supervisor test_bootstrap)
+ (names test_nonce test_auth test_session test_manifest test_supervisor test_bootstrap test_keypair)
  (modules :standard \ test_helpers)
  (libraries fossh_watchdog_lib test_helpers unix threads.posix))

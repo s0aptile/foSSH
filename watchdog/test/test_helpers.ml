@@ -31,29 +31,16 @@ let run_gpg_ok ~(gnupghome : string) (args : string list) : string =
 
 type key = { gnupghome : string; fingerprint : string }
 
+(* Delegates to the real product code (Keypair.ensure_keypair) rather
+   than duplicating gpg key-generation logic here — every test that
+   calls [generate_key] (nearly all of them, across every test file in
+   this suite) now exercises the exact function real watchdog startup
+   will call, not a parallel test-only reimplementation of it. *)
 let generate_key ?(uid = "test <test@example.invalid>") () : key =
   let gnupghome = mkdtemp () in
-  let (_ : string) =
-    run_gpg_ok ~gnupghome
-      [ "--passphrase"; ""; "--quick-generate-key"; uid; "ed25519"; "sign"; "0" ]
-  in
-  let listing = run_gpg_ok ~gnupghome [ "--with-colons"; "--list-secret-keys" ] in
-  let found =
-    String.split_on_char '\n' listing
-    |> List.find_map (fun line ->
-           if String.length line > 4 && String.sub line 0 4 = "fpr:" then
-             match String.split_on_char ':' line with
-             | _ :: _ :: _ :: _ :: _ :: _ :: _ :: _ :: _ :: fpr :: _ -> Some fpr
-             | _ -> None
-           else None)
-  in
-  (* NB: `Option.value ~default:(failwith ...) found` would call
-     `failwith` unconditionally — `~default` is a plain, eagerly
-     evaluated argument, not a lazy thunk, in OCaml. A real match is
-     required to make the failure conditional. *)
-  match found with
-  | Some fingerprint -> { gnupghome; fingerprint }
-  | None -> failwith "could not find fingerprint in gpg listing"
+  match Keypair.ensure_keypair ~gnupghome ~uid with
+  | Ok fingerprint -> { gnupghome; fingerprint }
+  | Error e -> failwith (Keypair.describe_error e)
 
 let export_pubkey (k : key) : string =
   run_gpg_ok ~gnupghome:k.gnupghome [ "--export"; k.fingerprint ]
