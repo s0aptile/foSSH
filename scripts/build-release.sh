@@ -27,6 +27,4 @@ cd "$project_root"
 cargo build --release --workspace
 (cd crates/fossh-ffi && cargo build --release)
 
-echo "build-release: done. Verify with:"
-echo "  strings target/release/fossh-cgi target/release/fossh target/release/fossh-tui crates/fossh-ffi/target/release/libfossh.so | grep -i '/home/\\|/Users/'"
-echo "  (must be empty)"
+echo "build-release: done. Verify with scripts/check-identity-hygiene.sh."

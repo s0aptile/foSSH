@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: test, clippy, fmt (both workspaces)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: root workspace — test
+        run: cargo test --workspace
+      - name: root workspace — clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: root workspace — fmt
+        run: cargo fmt --all -- --check
+      - name: fossh-ffi workspace — test
+        working-directory: crates/fossh-ffi
+        run: cargo test
+      - name: fossh-ffi workspace — clippy
+        working-directory: crates/fossh-ffi
+        run: cargo clippy --all-targets -- -D warnings
+      - name: fossh-ffi workspace — fmt
+        working-directory: crates/fossh-ffi
+        run: cargo fmt --all -- --check
+      - name: network-denied test run (P-invariant: zero egress from the ingest path)
+        # §17: "Test suite passes with network fully denied." A firewall
+        # rule proves this far more than an env var a test could ignore.
+        run: |
+          sudo iptables -I OUTPUT -m owner --uid-owner "$(id -u)" -p tcp --syn -j REJECT
+          cargo test --workspace --offline
+          sudo iptables -D OUTPUT -m owner --uid-owner "$(id -u)" -p tcp --syn -j REJECT
+
+  supply-chain:
+    name: cargo audit + cargo deny (both workspaces)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-audit cargo-deny --locked
+      - run: cargo audit
+      - run: cargo deny check
+      - working-directory: crates/fossh-ffi
+        run: cargo audit
+      - working-directory: crates/fossh-ffi
+        run: cargo deny check
+
+  release-hygiene:
+    name: identity-hygiene gate (§19.4.12)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the git-identity check needs full history, not a shallow clone
+      - name: prove the gate itself catches something, before trusting a clean run
+        run: ./scripts/test-identity-hygiene-gate.sh
+      - name: check this repository
+        env:
+          # Populate as a repository secret to also check for the real
+          # name/email specifically — see scripts/check-identity-hygiene.sh's
+          # own header comment for why that's a secret, not a literal
+          # pattern committed to this file.
+          FOSSH_HYGIENE_EXTRA_PATTERNS: ${{ secrets.FOSSH_HYGIENE_EXTRA_PATTERNS }}
+        run: ./scripts/check-identity-hygiene.sh
