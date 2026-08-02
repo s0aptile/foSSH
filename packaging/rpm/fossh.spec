@@ -1,18 +1,18 @@
 # foSSH RPM spec (chapter §3.11). No `rust2rpm`/Fedora Rust-packaging
 # macros used — this build environment doesn't have that package, so
-# %build/%install are plain `cargo build --release --workspace` plus
+# %%build/%%install are plain `cargo build --release --workspace` plus
 # manual `install -D`, which is a valid, common alternative to the full
 # Fedora Rust packaging guideline flow, just less automated.
 #
-# Version note: `%{srcversion}` (hyphenated, matches Cargo's own
-# `0.1.0-alpha.1`) names the source tarball/directory; `%{version}`
+# Version note: `%%{srcversion}` (hyphenated, matches Cargo's own
+# `0.1.0-alpha.1`) names the source tarball/directory; `%%{version}`
 # (tilde form, RPM's own prerelease convention — sorts *before*
 # `0.1.0` with no suffix, which is the ordering an alpha needs) is what
 # actually appears in the built package's metadata. Kept separate so
 # neither has to deal with the other's separator character.
 %global srcversion 0.1.0-alpha.1
 # Cargo's own release profile (strip = true) already strips every
-# binary before %install even runs; there's no meaningful debug info
+# binary before %%install even runs; there's no meaningful debug info
 # left for rpm's own automatic debuginfo/debugsource extraction to
 # find. Left enabled, that step started failing outright once
 # scripts/build-release.sh's --remap-path-prefix was added (rpm's
@@ -76,6 +76,15 @@ This is an open-alpha release (%{srcversion}). See
 ./scripts/build-release.sh
 checkmodule -m -o packaging/selinux/fossh.mod packaging/selinux/fossh.te
 semodule_package -o packaging/selinux/fossh.pp -m packaging/selinux/fossh.mod -f packaging/selinux/fossh.fc
+
+%check
+# Dev-profile, not %%build's release profile — a second, separate
+# build/test cycle, same as every other test run in this project (see
+# dev/DURUM.md). Same network caveat as %%build above: needs a warm
+# cargo registry cache, not yet safe under a network-denied mock/koji
+# build (§3.10).
+cargo test --workspace
+(cd crates/fossh-ffi && cargo test)
 
 %install
 install -D -m0755 target/release/fossh %{buildroot}%{_bindir}/fossh
