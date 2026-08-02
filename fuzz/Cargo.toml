@@ -1,0 +1,50 @@
+[package]
+name = "fossh-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+fossh-core = { path = "../crates/fossh-core" }
+fossh-ingest = { path = "../crates/fossh-ingest" }
+fossh-fcgi = { path = "../crates/fossh-fcgi" }
+
+[[bin]]
+name = "json_body"
+path = "fuzz_targets/json_body.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "query_string"
+path = "fuzz_targets/query_string.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "forwarded_for"
+path = "fuzz_targets/forwarded_for.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fcgi_framing"
+path = "fuzz_targets/fcgi_framing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "spool_frame"
+path = "fuzz_targets/spool_frame.rs"
+test = false
+doc = false
+bench = false

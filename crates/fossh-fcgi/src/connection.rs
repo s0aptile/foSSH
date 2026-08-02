@@ -424,7 +424,7 @@ mod tests {
         write_record(&mut buf, RecordType::BeginRequest, 1, &begin_body);
         let filler = vec![b'x'; u16::MAX as usize]; // 65535, the max one record can carry
         write_record(&mut buf, RecordType::Params, 1, &filler);
-        write_record(&mut buf, RecordType::Params, 1, &[b'y', b'y']); // 65535 + 2 > MAX_PARAMS_BYTES (65536)
+        write_record(&mut buf, RecordType::Params, 1, b"yy"); // 65535 + 2 > MAX_PARAMS_BYTES (65536)
 
         let mut cursor = Cursor::new(buf);
         let err = read_request(&mut cursor, false).unwrap_err();

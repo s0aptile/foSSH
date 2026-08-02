@@ -17,10 +17,7 @@
 
 #![forbid(unsafe_code)]
 
-mod connection;
-mod protocol;
-mod writer;
-
+use fossh_fcgi::{connection, protocol, writer};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};

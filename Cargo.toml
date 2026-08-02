@@ -12,7 +12,10 @@ members = [
 ]
 # Crates join `members` as each milestone lands (M2 adds fossh-store, etc.) — see DECISIONS.md.
 # fossh-ffi is deliberately NEVER a member — see DECISIONS.md "FFI crate split".
-exclude = ["crates/fossh-ffi"]
+# fuzz/ is deliberately never a member either: cargo-fuzz needs nightly,
+# its own profile.release.debug override, and no panic="abort" — all of
+# which would collide with this workspace's shared release profile below.
+exclude = ["crates/fossh-ffi", "fuzz"]
 
 [workspace.package]
 version = "0.1.0-alpha.1"

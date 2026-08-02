@@ -9,6 +9,10 @@ homepage.workspace = true
 rust-version.workspace = true
 description = "foSSH persistent FastCGI listener (M7, feature `fcgi`) and optional loopback/unix-socket-only HTTP listener (feature `http`, off by default, S7-enforced)."
 
+[lib]
+name = "fossh_fcgi"
+path = "src/lib.rs"
+
 [[bin]]
 name = "fossh-fcgi"
 path = "src/main.rs"
