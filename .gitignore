@@ -6,6 +6,7 @@
 /fossh-oa-*.zip
 SHA256SUMS
 PUBLISH.md
+/private/
 *.swp
 .DS_Store
 __MACOSX/
