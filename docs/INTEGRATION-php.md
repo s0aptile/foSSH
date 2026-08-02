@@ -36,6 +36,10 @@ Or set `FOSSH_ENDPOINT`/`FOSSH_KEY` as environment variables (most hosting panel
 
 This makes a plain outbound HTTPS request per call (`curl` if the extension is available, otherwise PHP's own stream wrapper — nothing beyond stock PHP is required), authenticated with the write key as a bearer token. It never touches `ext-ffi` or `proc_open`, which is why it's the one that actually works on a locked-down shared host. A slow or unreachable foSSH endpoint costs at most ~2 seconds (the built-in timeout) and never throws — a page render never fails because telemetry did.
 
+### No Composer either? `docs/fossh-config.php`
+
+Some shared hosting has no shell at all — no SSH, so no way to run `composer require` in the first place, only FTP or a hosting panel's own File Manager. For that case, skip `bindings/php` entirely and use [`docs/fossh-config.php`](fossh-config.php): a single, self-contained file with two blanks (the write key from step 1, and the `https://` address foSSH runs at). Fill them in by editing the file directly, upload it anywhere your PHP can reach, add one `require_once` line to your site, and it records a page view automatically on every include — no Composer, no other file it depends on, and it cannot fatal your site even if the blanks are left empty or the foSSH endpoint is briefly unreachable. Read the file's own header comment for the exact three steps; it's written for the same non-technical, FTP-only audience this whole section exists for.
+
 ### Getting correct per-visitor stats: `FOSSH_TRUST_FORWARDED_FOR`
 
 This part matters and is easy to get silently wrong. When your shared-hosting PHP relays a request to your foSSH instance, the TCP connection *to foSSH* comes from the shared host's own server — not from your actual visitor. Left unhandled, every visitor across your entire shared-hosting account would collapse into a single "visitor" as far as foSSH's hashing is concerned, because they'd all appear to arrive from the same IP.
