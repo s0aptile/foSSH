@@ -20,8 +20,10 @@ crate-type = ["cdylib", "staticlib"]
 fossh-core = { path = "../fossh-core" }
 fossh-store = { path = "../fossh-store" }
 fossh-ingest = { path = "../fossh-ingest" }
+fossh-admin = { path = "../fossh-admin" }
 blake3 = "1.5"
 serde_json = "1"
+zeroize = "1.8"
 
 [dev-dependencies]
 toml = "0.8"

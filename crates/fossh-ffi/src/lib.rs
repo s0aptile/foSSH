@@ -39,6 +39,7 @@ use fossh_ingest::pipeline::{self, EventFields, PipelineError, PipelineOutcome, 
 use fossh_ingest::salt::InMemorySalt;
 use fossh_ingest::{auth, compact, spool};
 use fossh_store::Store;
+use zeroize::Zeroizing;
 
 /// §11: "`fossh_abi_version()` returns a `u32` the bindings check at
 /// load." Bump on any breaking change to the functions below.
@@ -127,6 +128,13 @@ struct CtxState {
     store: Store,
     site: Option<SiteContext>,
     salt: InMemorySalt,
+    /// §3.8: per-install data-encryption key, loaded once at
+    /// `fossh_init` — spool frames (`mode = "spool"`) are sealed under
+    /// this before ever touching disk. Same fixed path
+    /// (`data_dir/.data_key`) `fossh-cgi` and `fossh-cli maintain` use,
+    /// so whichever transport a given deployment mixes can still drain
+    /// what another one spooled.
+    data_key: Zeroizing<[u8; 32]>,
     last_error: FosshError,
 }
 
@@ -186,8 +194,12 @@ fn record(state: &mut CtxState, event: Event) -> Result<(), FosshError> {
                 .map_err(|_| FosshError::WriteFailed)?;
         }
         fossh_core::config::Mode::Spool => {
-            spool::append_frame(&spool_dir(&state.config.data_dir, site.id), &event)
-                .map_err(|_| FosshError::WriteFailed)?;
+            spool::append_frame(
+                &spool_dir(&state.config.data_dir, site.id),
+                &event,
+                &state.data_key,
+            )
+            .map_err(|_| FosshError::WriteFailed)?;
         }
     }
     Ok(())
@@ -267,11 +279,14 @@ pub unsafe extern "C" fn fossh_init(config_path: *const c_char) -> *mut fossh_ct
         let db_path = config.data_dir.join("fossh.db");
         let store = Store::open(&db_path).ok()?;
         let salt = InMemorySalt::new().ok()?;
+        let data_key =
+            fossh_admin::data_key::load_or_generate(&config.data_dir.join(".data_key")).ok()?;
         let state = CtxState {
             config,
             store,
             site: None,
             salt,
+            data_key,
             last_error: FosshError::Internal,
         };
         Some(Box::into_raw(Box::new(fossh_ctx {
@@ -720,7 +735,13 @@ pub unsafe extern "C" fn fossh_flush(ctx: *mut fossh_ctx) -> i32 {
             return 0;
         }
         let dir = spool_dir(&state.config.data_dir, site.id);
-        match compact::drain_site_spool(&mut state.store, &dir) {
+        // A local copy, not a borrow of `state.data_key` — splitting a
+        // mutable borrow of `state.store` from an immutable borrow of
+        // another field on the same call doesn't hold up through the
+        // `MutexGuard` indirection here the way it would for a plain
+        // owned struct.
+        let data_key: Zeroizing<[u8; 32]> = Zeroizing::new(*state.data_key);
+        match compact::drain_site_spool(&mut state.store, &dir, &data_key) {
             Ok(_) => 0,
             Err(_) => FosshError::Internal as i32,
         }

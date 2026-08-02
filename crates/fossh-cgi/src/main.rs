@@ -190,11 +190,23 @@ fn main() {
         Vec::new()
     };
 
+    // §3.8: per-install data-encryption key for the spool. Loaded here
+    // (not before the `/healthz` early return above) so that route
+    // stays true to its own "no data_dir access at all" invariant.
+    let data_key = match fossh_admin::data_key::load_or_generate(&data_dir.join(".data_key")) {
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("fossh-cgi: could not load data-encryption key: {e}");
+            std::process::exit(1);
+        }
+    };
+
     let params = HandleParams {
         env: &env,
         body: &body,
         data_dir: &data_dir,
         salt_dir: &salt_dir,
+        data_key: &data_key,
         rate_limit_per_sec,
         rate_limit_burst,
         respect_optout_signals,

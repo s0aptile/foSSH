@@ -175,6 +175,9 @@ pub struct HandleParams<'a> {
     /// One directory shared by every site — see the comment above on why
     /// this isn't `site_dir`-scoped like spool/ratelimit/nonces.
     pub salt_dir: &'a Path,
+    /// §3.8: the per-install data-encryption key spooled events are
+    /// sealed under before they touch disk (`fossh_admin::data_key`).
+    pub data_key: &'a [u8; 32],
     pub rate_limit_per_sec: u32,
     pub rate_limit_burst: u32,
     pub respect_optout_signals: bool,
@@ -241,7 +244,7 @@ pub fn handle_ingest(params: &HandleParams) -> CgiResponse {
             let dir = spool_dir(params.data_dir, site.site_id());
             let mut any_failed = false;
             for event in &events {
-                if spool::append_frame(&dir, event).is_err() {
+                if spool::append_frame(&dir, event, params.data_key).is_err() {
                     any_failed = true;
                 }
             }
@@ -277,6 +280,8 @@ mod tests {
     use fossh_core::base32;
     use fossh_store::Site;
     use std::fs;
+
+    const TEST_KEY: [u8; 32] = [0x42; 32];
 
     fn scratch_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -335,6 +340,7 @@ mod tests {
             body: b"",
             data_dir: Path::new("/nonexistent/path/that/does/not/exist"),
             salt_dir: Path::new("/nonexistent/path/that/does/not/exist"),
+            data_key: &TEST_KEY,
             rate_limit_per_sec: 60,
             rate_limit_burst: 600,
             respect_optout_signals: true,
@@ -351,6 +357,7 @@ mod tests {
             body: br#"{"name":"pageview"}"#,
             data_dir: &dir,
             salt_dir: &dir,
+            data_key: &TEST_KEY,
             rate_limit_per_sec: 60,
             rate_limit_burst: 600,
             respect_optout_signals: true,
@@ -377,6 +384,7 @@ mod tests {
             body: br#"{"name":"pageview","path":"/hello"}"#,
             data_dir: &dir,
             salt_dir: &dir,
+            data_key: &TEST_KEY,
             rate_limit_per_sec: 60,
             rate_limit_burst: 600,
             respect_optout_signals: true,
@@ -390,8 +398,11 @@ mod tests {
             "public site echoes Origin"
         );
 
-        let frames =
-            spool::read_frames(&spool_dir(&dir, SiteId::new(1)).join("current.bin")).unwrap();
+        let frames = spool::read_frames(
+            &spool_dir(&dir, SiteId::new(1)).join("current.bin"),
+            &TEST_KEY,
+        )
+        .unwrap();
         assert_eq!(frames.len(), 1);
         fs::remove_dir_all(&dir).ok();
     }
@@ -414,6 +425,7 @@ mod tests {
             body: br#"{"name":"pageview"}"#,
             data_dir: &dir,
             salt_dir: &dir,
+            data_key: &TEST_KEY,
             rate_limit_per_sec: 60,
             rate_limit_burst: 600,
             respect_optout_signals: true,
@@ -442,6 +454,7 @@ mod tests {
             body,
             data_dir: &dir,
             salt_dir: &dir,
+            data_key: &TEST_KEY,
             rate_limit_per_sec: 60,
             rate_limit_burst: 600,
             respect_optout_signals: true,
@@ -474,6 +487,7 @@ mod tests {
             body,
             data_dir: &dir,
             salt_dir: &dir,
+            data_key: &TEST_KEY,
             rate_limit_per_sec: 60,
             rate_limit_burst: 600,
             respect_optout_signals: true,
@@ -507,6 +521,7 @@ mod tests {
             body,
             data_dir: &dir,
             salt_dir: &dir,
+            data_key: &TEST_KEY,
             rate_limit_per_sec: 60,
             rate_limit_burst: 600,
             respect_optout_signals: true,
@@ -544,6 +559,7 @@ mod tests {
             body,
             data_dir: &dir,
             salt_dir: &dir,
+            data_key: &TEST_KEY,
             rate_limit_per_sec: 60,
             rate_limit_burst: 600,
             respect_optout_signals: true,
@@ -570,6 +586,7 @@ mod tests {
             body: b"",
             data_dir: &dir,
             salt_dir: &dir,
+            data_key: &TEST_KEY,
             rate_limit_per_sec: 60,
             rate_limit_burst: 600,
             respect_optout_signals: true,
@@ -595,6 +612,7 @@ mod tests {
             body: br#"{"name":"pageview"}"#,
             data_dir: &dir,
             salt_dir: &dir,
+            data_key: &TEST_KEY,
             rate_limit_per_sec: 60,
             rate_limit_burst: 2, // configured burst 2 -> public sites get floor(2/2)=1
             respect_optout_signals: true,

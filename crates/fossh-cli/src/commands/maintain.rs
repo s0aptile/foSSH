@@ -18,6 +18,18 @@ pub fn run(_args: &[String]) -> i32 {
     let mut store = open_store(&config.data_dir);
     let now = unix_now();
 
+    // §3.8: the same per-install data-encryption key `fossh-cgi` seals
+    // spool frames under — must be loaded from the same fixed path to
+    // ever decrypt anything it wrote.
+    let data_key = match fossh_admin::data_key::load_or_generate(&config.data_dir.join(".data_key"))
+    {
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("fossh maintain: could not load data-encryption key: {e}");
+            return 1;
+        }
+    };
+
     let sites = match store.list_sites() {
         Ok(s) => s,
         Err(e) => {
@@ -30,7 +42,7 @@ pub fn run(_args: &[String]) -> i32 {
     let mut total_corrupt = 0u64;
     for site in &sites {
         let dir = site_spool_dir(&config.data_dir, site.id);
-        match fossh_ingest::compact::drain_site_spool(&mut store, &dir) {
+        match fossh_ingest::compact::drain_site_spool(&mut store, &dir, &data_key) {
             Ok(stats) => {
                 total_recorded += stats.events_recorded;
                 total_corrupt += stats.frames_corrupt;

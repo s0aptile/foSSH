@@ -15,6 +15,7 @@
 
 pub mod auth;
 pub mod compact;
+pub mod crypto;
 pub mod pipeline;
 pub mod random;
 pub mod ratelimit;

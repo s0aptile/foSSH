@@ -36,7 +36,7 @@ Status values: **not started**, **in progress**, **written, unverified** (code e
 | 3.5 | Privilege separation enforcement | not started | Creating the real `fossh-svc`/`fossh-watchdog` system users needs `useradd`, i.e. root — same password constraint as above; filesystem-permission tests can still run against simulated ownership where root isn't required, full end-to-end needs the user's `dnf install`/setup. |
 | 3.6 | Tamper detection | not started | Depends on the shared Rust crypto crate from 3.3's design. |
 | 3.7 | CGI input trust boundary + fuzzing | not started | `cargo-fuzz` install kicked off in background at chapter start. |
-| 3.8 | Data-at-rest encryption | not started | |
+| 3.8 | Data-at-rest encryption | implemented (spool only) | Spool frames sealed with ChaCha20-Poly1305 under a per-install key; the rollup SQLite database is deliberately not encrypted this pass — see ADR-0027 for the reasoning (it holds aggregates, not raw rows). |
 | 3.9 | Local TUI admin console | not started | `ratatui` confirmed to build cleanly in this environment (test compile succeeded, network to crates.io works). |
 | 3.10 | Supply chain & build hardening | not started | `cargo-audit`, `cargo-deny`, `cargo-fuzz` installs kicked off in background at chapter start. |
 | 3.11 | RPM packaging & setup wizard | core packaging done | `packaging/rpm/fossh.spec` builds a real, complete `fossh-0.1.0~alpha.1-1.fc44.x86_64.rpm` end to end on this box (`dist/`, gitignored) — verified via an actual full `rpmbuild -bb`, not just spec-parsing. `%post` leaves the service enabled but not started (awaiting-setup, per §3.11's own wording). Not done: `rpmlint` (not installed), and the setup wizard's full "enroll a real key" step, since that depends on the watchdog (§3.3). |
@@ -55,6 +55,14 @@ Restated here only so a reader of this file doesn't have to cross-reference the 
 ## Retrospectives
 
 (Appended one entry per sub-chapter as its QA gate closes.)
+
+### §3.8 — Data-at-rest encryption
+
+Scoped to the spool specifically, not the rollup SQLite database — see ADR-0027 for the full reasoning (the database holds k-anonymity-folded aggregates; the spool is where genuinely raw, per-visitor telemetry actually sits on disk, even if briefly). Built: `fossh_admin::data_key` (per-install key, race-safe `load_or_generate`, 5 tests including 8 real concurrent threads racing a cold-start), `fossh_ingest::crypto` (ChaCha20-Poly1305 seal/open, 7 tests covering the round trip, wrong key, tampered ciphertext, and truncation), and wiring through all three transports that touch the spool: `fossh-cgi` (loads the key once per process, after the privilege drop, before the `/healthz` fast path would ever need it), `fossh-cli maintain`, and `fossh-ffi`'s `mode = "spool"` path (`record`/`fossh_flush`) — confirmed by running `fossh-ffi`'s own `flush_drains_the_spool_in_spool_mode` test, which exercises the modified code directly, not just a unit test of the crypto primitive in isolation.
+
+Added two integration-level tests beyond the crypto module's own unit tests: one asserts the literal on-disk spool file bytes don't contain a distinctive plaintext path/name marker (proving encryption actually happens at the file level, not just in a round-trip assertion that could pass even if encryption were accidentally a no-op), and one confirms draining with the wrong key reports every frame `Corrupt` rather than panicking or silently producing wrong data.
+
+Full workspace (both the root and `fossh-ffi`'s separate one) still green after the change: 280 + 32 = 312 tests, clippy clean, fmt clean in both. The RPM built for §3.11 predates this change — rebuilding it to pick up the new code is a follow-up, not done as part of this entry.
 
 ### §3.1 — glibc gatekeeping
 

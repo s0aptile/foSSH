@@ -247,7 +247,12 @@ pub fn decode_event(buf: &[u8]) -> Result<Event, IngestError> {
 /// timestamp-named file first if it's already at or past
 /// `SPOOL_ROTATE_BYTES` — rotation itself is a `rename()`, not a write to
 /// the file being appended, so it doesn't affect this call's atomicity.
-pub fn append_frame(dir: &Path, event: &Event) -> Result<(), IngestError> {
+///
+/// `key` (§3.8) is the per-install data-encryption key
+/// (`fossh_admin::data_key`) — the encoded event is sealed
+/// (`crate::crypto::seal`) before it ever touches disk, so the on-disk
+/// payload is ciphertext, not the plaintext `encode_event` produces.
+pub fn append_frame(dir: &Path, event: &Event, key: &[u8; 32]) -> Result<(), IngestError> {
     fs::create_dir_all(dir)?;
     let current = dir.join("current.bin");
 
@@ -264,7 +269,7 @@ pub fn append_frame(dir: &Path, event: &Event) -> Result<(), IngestError> {
         fs::rename(&current, dir.join(rotated_name))?;
     }
 
-    let payload = encode_event(event);
+    let payload = crate::crypto::seal(key, &encode_event(event))?;
     let mut frame = Vec::with_capacity(HEADER_LEN + payload.len());
     frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
     frame.extend_from_slice(&crc32(&payload).to_le_bytes());
@@ -309,7 +314,13 @@ pub enum DrainedFrame {
 /// erroring) at the first incomplete trailing frame — the tail end of a
 /// write still in progress when the compactor runs looks exactly like
 /// that, and it'll be picked up whole on the next drain.
-pub fn read_frames(path: &Path) -> Result<Vec<DrainedFrame>, IngestError> {
+///
+/// `key` must be the same per-install data-encryption key `append_frame`
+/// sealed each payload with — a mismatched key decrypts to garbage
+/// indistinguishably from a corrupt frame (see `crate::crypto::open`),
+/// so a frame written under a different key is reported as
+/// `DrainedFrame::Corrupt`, not a distinct error.
+pub fn read_frames(path: &Path, key: &[u8; 32]) -> Result<Vec<DrainedFrame>, IngestError> {
     let mut file = match File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -333,7 +344,7 @@ pub fn read_frames(path: &Path) -> Result<Vec<DrainedFrame>, IngestError> {
         if crc32(payload) != expected_crc {
             frames.push(DrainedFrame::Corrupt);
         } else {
-            match decode_event(payload) {
+            match crate::crypto::open(key, payload).and_then(|pt| decode_event(&pt)) {
                 Ok(event) => frames.push(DrainedFrame::Event(event)),
                 Err(_) => frames.push(DrainedFrame::Corrupt),
             }
@@ -347,6 +358,8 @@ pub fn read_frames(path: &Path) -> Result<Vec<DrainedFrame>, IngestError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TEST_KEY: [u8; 32] = [0x42; 32];
     use std::path::PathBuf;
 
     #[test]
@@ -449,10 +462,10 @@ mod tests {
     #[test]
     fn append_then_drain_round_trips() {
         let dir = scratch_dir("append-drain");
-        append_frame(&dir, &sample_event()).unwrap();
-        append_frame(&dir, &sample_event()).unwrap();
+        append_frame(&dir, &sample_event(), &TEST_KEY).unwrap();
+        append_frame(&dir, &sample_event(), &TEST_KEY).unwrap();
 
-        let frames = read_frames(&dir.join("current.bin")).unwrap();
+        let frames = read_frames(&dir.join("current.bin"), &TEST_KEY).unwrap();
         assert_eq!(frames.len(), 2);
         for f in frames {
             match f {
@@ -464,9 +477,52 @@ mod tests {
     }
 
     #[test]
+    fn spool_file_on_disk_does_not_contain_the_plaintext_path_or_name() {
+        // §3.8: the whole point is that the bytes on disk aren't
+        // readable without the key — assert that directly against the
+        // real file, not just that encode/decode round-trips in memory.
+        let dir = scratch_dir("at-rest");
+        let mut ev = sample_event();
+        ev.path = Some(SanitizedPath::from_raw("/a-very-distinctive-path-marker"));
+        append_frame(&dir, &ev, &TEST_KEY).unwrap();
+
+        let on_disk = fs::read(dir.join("current.bin")).unwrap();
+        let on_disk_str = String::from_utf8_lossy(&on_disk);
+        assert!(
+            !on_disk_str.contains("a-very-distinctive-path-marker"),
+            "the plaintext path must not appear anywhere in the on-disk spool file"
+        );
+        assert!(
+            !on_disk_str.contains("pageview"),
+            "nor the plaintext event name"
+        );
+
+        // But it still round-trips correctly with the right key.
+        let frames = read_frames(&dir.join("current.bin"), &TEST_KEY).unwrap();
+        assert_eq!(frames.len(), 1);
+        match &frames[0] {
+            DrainedFrame::Event(decoded) => assert_events_eq(decoded, &ev),
+            DrainedFrame::Corrupt => panic!("unexpected corrupt frame"),
+        }
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn draining_with_the_wrong_key_reports_corrupt_not_a_panic_or_silent_wrong_data() {
+        let dir = scratch_dir("wrong-key");
+        append_frame(&dir, &sample_event(), &TEST_KEY).unwrap();
+
+        let wrong_key = [0x99u8; 32];
+        let frames = read_frames(&dir.join("current.bin"), &wrong_key).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert!(matches!(frames[0], DrainedFrame::Corrupt));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn spool_file_is_0600() {
         let dir = scratch_dir("perms-fresh");
-        append_frame(&dir, &sample_event()).unwrap();
+        append_frame(&dir, &sample_event(), &TEST_KEY).unwrap();
         let mode = fs::metadata(dir.join("current.bin"))
             .unwrap()
             .permissions()
@@ -484,7 +540,7 @@ mod tests {
         fs::write(&current, b"").unwrap();
         fs::set_permissions(&current, fs::Permissions::from_mode(0o644)).unwrap();
 
-        append_frame(&dir, &sample_event()).unwrap();
+        append_frame(&dir, &sample_event(), &TEST_KEY).unwrap();
 
         let mode = fs::metadata(&current).unwrap().permissions().mode() & 0o777;
         assert_eq!(
@@ -497,23 +553,23 @@ mod tests {
     #[test]
     fn missing_spool_file_drains_to_empty() {
         let dir = scratch_dir("missing");
-        let frames = read_frames(&dir.join("current.bin")).unwrap();
+        let frames = read_frames(&dir.join("current.bin"), &TEST_KEY).unwrap();
         assert!(frames.is_empty());
     }
 
     #[test]
     fn truncated_trailing_frame_is_left_for_next_drain() {
         let dir = scratch_dir("truncated-tail");
-        append_frame(&dir, &sample_event()).unwrap();
+        append_frame(&dir, &sample_event(), &TEST_KEY).unwrap();
         // Simulate a write that was cut off mid-frame (e.g. process killed
         // mid-append) by chopping bytes off the end of a second, otherwise
         // well-formed append.
-        append_frame(&dir, &sample_event()).unwrap();
+        append_frame(&dir, &sample_event(), &TEST_KEY).unwrap();
         let path = dir.join("current.bin");
         let full = fs::read(&path).unwrap();
         fs::write(&path, &full[..full.len() - 5]).unwrap();
 
-        let frames = read_frames(&path).unwrap();
+        let frames = read_frames(&path, &TEST_KEY).unwrap();
         assert_eq!(
             frames.len(),
             1,
@@ -525,16 +581,16 @@ mod tests {
     #[test]
     fn corrupt_frame_is_flagged_not_fatal_to_the_rest_of_the_drain() {
         let dir = scratch_dir("corrupt-middle");
-        append_frame(&dir, &sample_event()).unwrap();
+        append_frame(&dir, &sample_event(), &TEST_KEY).unwrap();
         let path = dir.join("current.bin");
         let mut bytes = fs::read(&path).unwrap();
         // Flip a byte inside the payload (well past the header) to break the CRC.
         let flip_at = bytes.len() - 3;
         bytes[flip_at] ^= 0xFF;
         fs::write(&path, &bytes).unwrap();
-        append_frame(&dir, &sample_event()).unwrap(); // a good frame after the corrupt one
+        append_frame(&dir, &sample_event(), &TEST_KEY).unwrap(); // a good frame after the corrupt one
 
-        let frames = read_frames(&path).unwrap();
+        let frames = read_frames(&path, &TEST_KEY).unwrap();
         assert_eq!(frames.len(), 2);
         assert!(matches!(frames[0], DrainedFrame::Corrupt));
         assert!(matches!(frames[1], DrainedFrame::Event(_)));
@@ -548,7 +604,7 @@ mod tests {
         let current = dir.join("current.bin");
         fs::write(&current, vec![0u8; SPOOL_ROTATE_BYTES as usize]).unwrap();
 
-        append_frame(&dir, &sample_event()).unwrap();
+        append_frame(&dir, &sample_event(), &TEST_KEY).unwrap();
 
         // The oversized file must have been renamed aside, and a fresh
         // (small) current.bin holds just the new frame.

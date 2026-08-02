@@ -12,4 +12,5 @@
 //! keypair/session logic (§2.1) land here as those sub-chapters are
 //! implemented.
 
+pub mod data_key;
 pub mod setup_token;

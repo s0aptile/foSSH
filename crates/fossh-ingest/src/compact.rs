@@ -26,7 +26,16 @@ pub struct CompactStats {
 /// Drains every spool file in `spool_dir` (the live `current.bin`,
 /// staged aside first, plus any already-rotated `spool-*.bin` files from
 /// `spool::append_frame`'s own 8 MiB rotation) into `store`.
-pub fn drain_site_spool(store: &mut Store, spool_dir: &Path) -> Result<CompactStats, IngestError> {
+///
+/// `key` (§3.8) must be the same per-install data-encryption key the
+/// spool was written under (`fossh_admin::data_key`) — see
+/// `spool::read_frames` for what happens to a frame written under a
+/// different key.
+pub fn drain_site_spool(
+    store: &mut Store,
+    spool_dir: &Path,
+    key: &[u8; 32],
+) -> Result<CompactStats, IngestError> {
     let mut stats = CompactStats::default();
     if !spool_dir.is_dir() {
         return Ok(stats);
@@ -42,7 +51,7 @@ pub fn drain_site_spool(store: &mut Store, spool_dir: &Path) -> Result<CompactSt
                 .unwrap_or(0)
         ));
         if fs::rename(&current, &staged).is_ok() {
-            drain_file(store, &staged, &mut stats)?;
+            drain_file(store, &staged, &mut stats, key)?;
             fs::remove_file(&staged).ok();
         }
     }
@@ -53,7 +62,7 @@ pub fn drain_site_spool(store: &mut Store, spool_dir: &Path) -> Result<CompactSt
             let name = name.to_string_lossy();
             if name.starts_with("spool-") && name.ends_with(".bin") {
                 let path = entry.path();
-                drain_file(store, &path, &mut stats)?;
+                drain_file(store, &path, &mut stats, key)?;
                 fs::remove_file(&path).ok();
             }
         }
@@ -62,8 +71,13 @@ pub fn drain_site_spool(store: &mut Store, spool_dir: &Path) -> Result<CompactSt
     Ok(stats)
 }
 
-fn drain_file(store: &mut Store, path: &Path, stats: &mut CompactStats) -> Result<(), IngestError> {
-    let frames = spool::read_frames(path)?;
+fn drain_file(
+    store: &mut Store,
+    path: &Path,
+    stats: &mut CompactStats,
+    key: &[u8; 32],
+) -> Result<(), IngestError> {
+    let frames = spool::read_frames(path, key)?;
     stats.files_processed += 1;
     for frame in frames {
         match frame {
@@ -92,6 +106,8 @@ mod tests {
     use fossh_core::validate::Name;
     use std::io::Write;
     use std::path::PathBuf;
+
+    const TEST_KEY: [u8; 32] = [0x42; 32];
 
     fn scratch_dir(name: &str) -> PathBuf {
         let dir =
@@ -122,18 +138,18 @@ mod tests {
     fn missing_spool_dir_is_a_no_op() {
         let dir = scratch_dir("missing");
         let mut store = Store::open_in_memory().unwrap();
-        let stats = drain_site_spool(&mut store, &dir).unwrap();
+        let stats = drain_site_spool(&mut store, &dir, &TEST_KEY).unwrap();
         assert_eq!(stats, CompactStats::default());
     }
 
     #[test]
     fn drains_current_bin_and_records_events() {
         let dir = scratch_dir("basic");
-        spool::append_frame(&dir, &sample_event(1_700_000_000)).unwrap();
-        spool::append_frame(&dir, &sample_event(1_700_000_100)).unwrap();
+        spool::append_frame(&dir, &sample_event(1_700_000_000), &TEST_KEY).unwrap();
+        spool::append_frame(&dir, &sample_event(1_700_000_100), &TEST_KEY).unwrap();
 
         let mut store = Store::open_in_memory().unwrap();
-        let stats = drain_site_spool(&mut store, &dir).unwrap();
+        let stats = drain_site_spool(&mut store, &dir, &TEST_KEY).unwrap();
         assert_eq!(stats.events_recorded, 2);
         assert_eq!(stats.frames_corrupt, 0);
         assert_eq!(store.count_events(SiteId::new(1)).unwrap(), 2);
@@ -143,9 +159,9 @@ mod tests {
     #[test]
     fn current_bin_is_gone_after_a_successful_drain() {
         let dir = scratch_dir("cleanup");
-        spool::append_frame(&dir, &sample_event(1_700_000_000)).unwrap();
+        spool::append_frame(&dir, &sample_event(1_700_000_000), &TEST_KEY).unwrap();
         let mut store = Store::open_in_memory().unwrap();
-        drain_site_spool(&mut store, &dir).unwrap();
+        drain_site_spool(&mut store, &dir, &TEST_KEY).unwrap();
         assert!(!dir.join("current.bin").exists());
         // And no leftover "draining-*.bin" files either.
         let leftovers: Vec<_> = fs::read_dir(&dir)
@@ -164,14 +180,18 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         // Simulate a file already rotated by `append_frame`'s 8 MiB logic.
         let mut frame = Vec::new();
-        let payload = spool::encode_event(&sample_event(1_700_000_000));
+        let payload = crate::crypto::seal(
+            &TEST_KEY,
+            &spool::encode_event(&sample_event(1_700_000_000)),
+        )
+        .unwrap();
         frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         frame.extend_from_slice(&spool::crc32(&payload).to_le_bytes());
         frame.extend_from_slice(&payload);
         fs::write(dir.join("spool-123.bin"), &frame).unwrap();
 
         let mut store = Store::open_in_memory().unwrap();
-        let stats = drain_site_spool(&mut store, &dir).unwrap();
+        let stats = drain_site_spool(&mut store, &dir, &TEST_KEY).unwrap();
         assert_eq!(stats.events_recorded, 1);
         assert!(!dir.join("spool-123.bin").exists());
         fs::remove_dir_all(&dir).ok();
@@ -180,16 +200,16 @@ mod tests {
     #[test]
     fn corrupt_frames_are_counted_and_do_not_abort_the_drain() {
         let dir = scratch_dir("corrupt");
-        spool::append_frame(&dir, &sample_event(1_700_000_000)).unwrap();
+        spool::append_frame(&dir, &sample_event(1_700_000_000), &TEST_KEY).unwrap();
         let path = dir.join("current.bin");
         let mut bytes = fs::read(&path).unwrap();
         let flip_at = bytes.len() - 2;
         bytes[flip_at] ^= 0xFF;
         fs::write(&path, &bytes).unwrap();
-        spool::append_frame(&dir, &sample_event(1_700_000_100)).unwrap(); // a good frame after
+        spool::append_frame(&dir, &sample_event(1_700_000_100), &TEST_KEY).unwrap(); // a good frame after
 
         let mut store = Store::open_in_memory().unwrap();
-        let stats = drain_site_spool(&mut store, &dir).unwrap();
+        let stats = drain_site_spool(&mut store, &dir, &TEST_KEY).unwrap();
         assert_eq!(stats.events_recorded, 1);
         assert_eq!(stats.frames_corrupt, 1);
         fs::remove_dir_all(&dir).ok();
@@ -204,7 +224,8 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let current = dir.join("current.bin");
 
-        let payload_a = spool::encode_event(&sample_event(1));
+        let payload_a =
+            crate::crypto::seal(&TEST_KEY, &spool::encode_event(&sample_event(1))).unwrap();
         let mut frame_a = Vec::new();
         frame_a.extend_from_slice(&(payload_a.len() as u32).to_le_bytes());
         frame_a.extend_from_slice(&spool::crc32(&payload_a).to_le_bytes());
@@ -220,14 +241,15 @@ mod tests {
         let staged = dir.join("draining-test.bin");
         fs::rename(&current, &staged).unwrap();
 
-        let payload_b = spool::encode_event(&sample_event(2));
+        let payload_b =
+            crate::crypto::seal(&TEST_KEY, &spool::encode_event(&sample_event(2))).unwrap();
         let mut frame_b = Vec::new();
         frame_b.extend_from_slice(&(payload_b.len() as u32).to_le_bytes());
         frame_b.extend_from_slice(&spool::crc32(&payload_b).to_le_bytes());
         frame_b.extend_from_slice(&payload_b);
         open_writer.write_all(&frame_b).unwrap(); // written via the pre-rename fd
 
-        let frames = spool::read_frames(&staged).unwrap();
+        let frames = spool::read_frames(&staged, &TEST_KEY).unwrap();
         assert_eq!(
             frames.len(),
             2,
