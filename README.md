@@ -27,7 +27,28 @@ That last command prints a write key once — it's the credential every binding/
 
 ## Privacy and security
 
-`THREAT_MODEL.md` and `PRIVACY.md` cover the invariants this project holds itself to (k-anonymity thresholds, salted visitor hashing, no cross-site correlation, no `Set-Cookie`, zero outbound network access from the ingest path) once written — tracked in `DURUM.md`. In the meantime, `DECISIONS.md`'s ADR log is the authoritative record of what's actually implemented and why.
+`THREAT_MODEL.md` and `PRIVACY.md` cover the invariants this project holds itself to (k-anonymity thresholds, salted visitor hashing, no cross-site correlation, no `Set-Cookie`, zero outbound network access from the ingest path), including what's explicitly *not* defended against and this release's alpha caveats (no third-party audit, no fuzzing run yet). `DECISIONS.md`'s ADR log is the authoritative record of what's actually implemented and why.
+
+## Documentation index
+
+This is a lot of root-level files — most of them sit here because the project's own legal/authorship addendum (§19 of the original spec) requires it, the same way `LICENSE`/`NOTICE`/`SECURITY.md` sit at the root of most real-world repositories for tooling (GitHub included) to find them. One map through all of it:
+
+| File | What it's for |
+|---|---|
+| `readme.md` | The *release* readme (zip root) — shorter, quickstart-focused. Distinct from this file. |
+| `PRIVACY.md` / `PRIVACY.tr.md` | Paste-able privacy-page text, in English and Turkish. |
+| `README.tr.md` | Turkish translation of this file. |
+| `THREAT_MODEL.md` | Assets, adversaries, what's defended against and what isn't, alpha caveats. |
+| `tos.md` | Terms of use and disclaimer — the legal posture, not a contract for services. |
+| `SECURITY.md` | How to report a vulnerability. |
+| `NOTICE` | Third-party dependency licenses, generated, not hand-maintained. |
+| `AUTHORS`, `LICENSE-APACHE`, `LICENSE-MIT` | Exactly what they say. |
+| `RULES.md` | Naming, tone, the public/private boundary, platform support, positioning. |
+| `DURUM.md` | Live status of the current development chapter. |
+| `DECISIONS.md` | The ADR log — every non-obvious choice, and why. |
+| `docs/` | Per-language and per-webserver integration guides. |
+| `PUBLISH.md` | Gitignored, not shipped — the author's own publishing copy-paste sheet. |
+| `private-onlyauthor/` | Gitignored, not shipped — anything identifying, or any private note, for the author's eyes only. |
 
 ## License
 

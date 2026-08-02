@@ -250,3 +250,11 @@ Setup-token hashing uses `SHA256` (the `sha2` crate — RustCrypto, not hand-rol
 **Explicitly not done in this pass, flagged rather than silently skipped:** wiring the first three checks into an actual CI `release-hygiene` job (§19.4.12's "wire the first three into CI"), and the deliberate-failure test proving the `$0aptile`-quoting grep gate itself works (matching the S3 gate's pattern) — both need real CI infrastructure (a `.github/workflows/` file) that doesn't exist in this repository yet; building it is chapter/M8 scope, not this ADR's.
 
 ---
+
+## ADR-0030 — RPM `%install` strips binaries explicitly; `%global debug_package %{nil}` silently disabled rpm's own implicit strip too
+
+**Decision:** `packaging/rpm/fossh.spec`'s `%install` now runs `strip --strip-all` on the three installed binaries explicitly, rather than relying on either Cargo's `strip = true` release-profile setting or rpm's own automatic post-install stripping.
+**What was actually observed, not assumed:** after ADR-0029 disabled automatic debuginfo/debugsource generation (`%global debug_package %{nil}`, needed because rpm's `find-debuginfo` couldn't resolve the `--remap-path-prefix`-rewritten source paths back to real files), the *installed* binaries in the built RPM came back `file`-reported as "not stripped" — despite Cargo's own `strip = true` genuinely stripping the exact same build moments earlier (confirmed directly: an identical local build outside rpmbuild, using the same `scripts/build-release.sh`, produces a `file`-reported "stripped" binary of the expected ~536 KB; the RPM-packaged copy of the same binary came back at ~705 KB, unstripped). On this system's rpm version, automatic post-install binary stripping is evidently tied to the same macro plumbing as automatic debuginfo generation, not an independent step — turning one off silently turned off the other, with no error or warning pointing at the connection.
+**Fix:** an explicit `strip --strip-all` in `%install`, after the `install -D` calls. Still comfortably under the §17 size gate at ~536 KB (`fossh-cgi`) either way, but the point was never "still under budget by luck" — it's "match the same, deliberate, already-decided stripped-binary property this project has held since M1's release profile was written," regardless of which rpm macro plumbing happens to be enabled around it.
+
+---

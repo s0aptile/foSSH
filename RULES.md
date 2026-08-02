@@ -28,9 +28,9 @@ Two hard-separated zones. Treat the line between them like a border, not a sugge
 
 **Public** — everything that ships in the git history, the release zip (`fossh-oa.zip`), and built binaries. Governed by the identity-scrubbing rules already locked in from the original spec's authorship addendum: pseudonymous authorship only (`$0aptile` / `github.com/s0aptile`), no real name, email, hostname, or home path anywhere in the repo, git history, or built artifacts. This is enforced mechanically (grep-based identity-hygiene gates, §19.4.12 of the original spec), not just by convention.
 
-**Private** — anything specific to *this* real deployment: the actual machine's hostname, the real user's identity, any enrolled keypair or setup token generated on a real install, actual Cloudflare Tunnel IDs or domain names, `PUBLISH.md`. None of this belongs in the tracked tree at all, public or otherwise gated — it lives in `private/` at the repo root, which is `.gitignore`d outright, or in `PUBLISH.md` (already gitignored). If a file would reveal which specific machine or person is running foSSH, it goes in `private/`, full stop — there is no "public but redacted" middle tier for that category of fact.
+**Private** — anything specific to *this* real deployment: the actual machine's hostname, the real user's identity, any enrolled keypair or setup token generated on a real install, actual Cloudflare Tunnel IDs or domain names, `PUBLISH.md`. None of this belongs in the tracked tree at all, public or otherwise gated — it lives in `private-onlyauthor/` at the repo root, which is `.gitignore`d outright, or in `PUBLISH.md` (already gitignored). If a file would reveal which specific machine or person is running foSSH, it goes in `private-onlyauthor/`, full stop — there is no "public but redacted" middle tier for that category of fact.
 
-The distinction is not "public repo vs. private repo" — it's one repo, with an enforced inner boundary. Nothing in `private/` is ever included in the release zip, the git history, or a support request's paste-in.
+The distinction is not "public repo vs. private repo" — it's one repo, with an enforced inner boundary. Nothing in `private-onlyauthor/` is ever included in the release zip, the git history, or a support request's paste-in.
 
 ## 4. Platform support
 

@@ -78,6 +78,17 @@ semodule_package -o packaging/selinux/fossh.pp -m packaging/selinux/fossh.mod -f
 install -D -m0755 target/release/fossh %{buildroot}%{_bindir}/fossh
 install -D -m0755 target/release/fossh-cgi %{buildroot}%{_bindir}/fossh-cgi
 install -D -m0755 target/release/fossh-tui %{buildroot}%{_bindir}/fossh-tui
+# Explicit, not relied-upon-implicitly: Cargo's own `strip = true`
+# strips these before they're even copied in here, but rpm's automatic
+# post-install stripping is tied to automatic debuginfo generation
+# (%%global debug_package %%{nil}, above) on this rpm version, and
+# turning that off turned off the automatic strip too — observed
+# directly (`file` reported "not stripped" on a build with automatic
+# debuginfo disabled, on binaries `cargo build` itself had *just*
+# stripped moments before `install -D` copied them in), not assumed.
+# Stripping explicitly here means the installed binaries stay stripped
+# regardless of which rpm macro is or isn't wired to do it implicitly.
+strip --strip-all %{buildroot}%{_bindir}/fossh %{buildroot}%{_bindir}/fossh-cgi %{buildroot}%{_bindir}/fossh-tui
 
 install -D -m0644 packaging/systemd/fossh-fcgiwrap.socket %{buildroot}%{_unitdir}/fossh-fcgiwrap.socket
 install -D -m0644 packaging/systemd/fossh-fcgiwrap.service %{buildroot}%{_unitdir}/fossh-fcgiwrap.service
