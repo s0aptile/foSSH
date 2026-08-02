@@ -11,6 +11,17 @@
 # actually appears in the built package's metadata. Kept separate so
 # neither has to deal with the other's separator character.
 %global srcversion 0.1.0-alpha.1
+# Cargo's own release profile (strip = true) already strips every
+# binary before %install even runs; there's no meaningful debug info
+# left for rpm's own automatic debuginfo/debugsource extraction to
+# find. Left enabled, that step started failing outright once
+# scripts/build-release.sh's --remap-path-prefix was added (rpm's
+# find-debuginfo tries to resolve the remapped source paths back to
+# real files on disk to build the debugsource package, and a remapped
+# path like /build/fossh/... isn't a real path during packaging) —
+# disabling it is the correct fix, not a workaround: there was never
+# anything genuine for it to package once Cargo's own strip already ran.
+%global debug_package %{nil}
 
 Name:           fossh
 Version:        0.1.0~alpha.1
