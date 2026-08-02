@@ -1,0 +1,20 @@
+{
+    "name": "s0aptile/fossh-php",
+    "description": "PHP binding for foSSH (privacy-preserving, embeddable telemetry) via the FFI extension.",
+    "type": "library",
+    "license": ["Apache-2.0", "MIT"],
+    "authors": [
+        {"name": "$0aptile", "homepage": "https://github.com/s0aptile"}
+    ],
+    "require": {
+        "php": ">=7.4"
+    },
+    "suggest": {
+        "ext-ffi": "Required for in-process recording; falls back to spawning the fossh-cgi binary, or a documented no-op, without it."
+    },
+    "autoload": {
+        "psr-4": {
+            "FoSSH\\": "src/"
+        }
+    }
+}

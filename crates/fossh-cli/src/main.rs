@@ -43,6 +43,11 @@ COMMANDS:
         Verify permissions, config sanity, and privacy/security invariants
         against the live install.
 
+    glibc-check
+        Fast standalone preflight gate for the Fedora-native systemd unit's
+        ExecStartPre= — checks only the host's glibc floor (§2.5), nothing
+        else. Exit 0 = ok, 1 = below floor or could not determine.
+
     --version, -V   Print the version.
     --help, -h      Print this help.
 ";
@@ -60,6 +65,7 @@ fn run(args: &[String]) -> i32 {
         Some("maintain") => commands::maintain::run(&args[1..]),
         Some("export") => commands::export::run(&args[1..]),
         Some("doctor") => commands::doctor::run(&args[1..]),
+        Some("glibc-check") => commands::glibc_check::run(&args[1..]),
         Some("--version") | Some("-V") => {
             println!("{VERSION_LINE}");
             0

@@ -135,7 +135,10 @@ impl InMemorySalt {
     /// memory at first use" (there's no lazy-init state to thread through
     /// every subsequent call this way).
     pub fn new() -> Result<Self, IngestError> {
-        let mut s = Self { salt: Zeroizing::new([0u8; SALT_LEN]), day: i64::MIN };
+        let mut s = Self {
+            salt: Zeroizing::new([0u8; SALT_LEN]),
+            day: i64::MIN,
+        };
         s.rotate_if_needed(SystemTime::now())?;
         Ok(s)
     }
@@ -270,9 +273,13 @@ mod tests {
     fn in_memory_salt_rotates_across_a_day_boundary() {
         let mut s = InMemorySalt::new().unwrap();
         let day1 = *s.current().unwrap();
-        s.rotate_if_needed(SystemTime::now() + Duration::from_secs(2 * 86_400)).unwrap();
+        s.rotate_if_needed(SystemTime::now() + Duration::from_secs(2 * 86_400))
+            .unwrap();
         let day2 = s.salt;
-        assert_ne!(day1, *day2, "crossing a UTC day boundary must produce a new salt");
+        assert_ne!(
+            day1, *day2,
+            "crossing a UTC day boundary must produce a new salt"
+        );
     }
 
     #[test]

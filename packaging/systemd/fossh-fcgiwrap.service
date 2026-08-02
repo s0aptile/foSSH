@@ -1,0 +1,71 @@
+# foSSH native CGI runner (chapter §3.2): fcgiwrap, socket-activated,
+# bridging FastCGI-from-nginx (see docs/DEPLOY-nginx-cloudflare-tunnel.md)
+# to a per-request CGI exec of fossh-cgi. fcgiwrap itself is the
+# long-lived, systemd-supervised process here; fossh-cgi is still
+# exec'd fresh per request, same as any CGI deployment shape.
+[Unit]
+Description=foSSH native CGI runner (fcgiwrap wrapping fossh-cgi)
+Documentation=https://github.com/s0aptile/fossh
+Requires=fossh-fcgiwrap.socket
+After=fossh-fcgiwrap.socket network.target
+
+[Service]
+Type=simple
+User=fossh-svc
+Group=fossh-svc
+
+# §2.5/§3.1: refuse to start at all on a below-floor host, with a clear
+# error, rather than failing later with an opaque dynamic-linker error.
+# Runs once per service (re)start, not once per request — see
+# DECISIONS.md ADR-0024.
+ExecStartPre=/usr/bin/fossh glibc-check
+ExecStart=/usr/sbin/fcgiwrap -f
+
+Environment=FOSSH_DATA_DIR=/var/lib/fossh
+Environment=FOSSH_SALT_DIR=/run/fossh/salt
+# Off by default — see docs/INTEGRATION-php.md's shared-hosting relay
+# pattern and fossh-cgi/src/forwarded.rs for what this trusts and why
+# it's opt-in. Uncomment only if this instance sits behind something
+# that legitimately relays on a real visitor's behalf (this nginx unit
+# itself is one example — nginx already terminates the real client
+# connection here, so leave this unset unless you're doing something
+# beyond the standard nginx-in-front-of-fcgiwrap shape this unit ships
+# for).
+#Environment=FOSSH_TRUST_FORWARDED_FOR=1
+
+Restart=on-failure
+RestartSec=2s
+
+# --- Kernel-enforced hardening (§3.2): stronger than app-level logic
+# alone. PrivateNetwork gives this unit its own network namespace (just
+# loopback) — fossh-cgi has no legitimate reason to reach the network
+# at all, ever (the "zero outbound" privacy invariant, enforced here
+# independently of the SELinux policy in packaging/selinux/fossh.te,
+# which denies the same thing at a different layer — belt and
+# suspenders, not redundant).
+PrivateNetwork=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/fossh /run/fossh
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

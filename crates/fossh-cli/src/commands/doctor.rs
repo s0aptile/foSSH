@@ -21,6 +21,40 @@ struct Check {
     detail: String,
 }
 
+/// Same check `fossh glibc-check` runs standalone for the systemd
+/// `ExecStartPre=` hook (§2.5/§3.1) — folded into `doctor`'s table too
+/// so a manual run surfaces it alongside everything else. Shares
+/// `detect_glibc_version` with `glibc_check.rs` rather than each
+/// spawning+parsing `ldd` independently — see ADR-0024 (they used to
+/// duplicate this and both missed the same bug as a result).
+fn check_glibc_floor() -> Check {
+    const NAME: &str = "glibc version floor (§2.5)";
+    let floor = fossh_core::glibc_gate::RECOMMENDED_FLOOR;
+
+    match crate::common::detect_glibc_version() {
+        Ok(version) => {
+            let pass = fossh_core::glibc_gate::meets_floor(version, floor);
+            Check {
+                name: NAME,
+                pass,
+                detail: if pass {
+                    format!("{}.{} >= {}.{}", version.0, version.1, floor.0, floor.1)
+                } else {
+                    format!(
+                        "{}.{} is below the required floor {}.{} — this host cannot run foSSH's Fedora-native deployment",
+                        version.0, version.1, floor.0, floor.1
+                    )
+                },
+            }
+        }
+        Err(e) => Check {
+            name: NAME,
+            pass: false,
+            detail: e,
+        },
+    }
+}
+
 fn check_permissions(path: &Path, expected: u32, name: &'static str) -> Check {
     match std::fs::metadata(path) {
         Ok(meta) => {
@@ -55,6 +89,7 @@ fn check_permissions(path: &Path, expected: u32, name: &'static str) -> Check {
 
 pub fn run(_args: &[String]) -> i32 {
     let mut checks = Vec::new();
+    checks.push(check_glibc_floor());
 
     let config = match fossh_core::config::Config::load() {
         Ok(c) => {

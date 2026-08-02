@@ -19,7 +19,7 @@ The core product — CGI + embedded-FFI privacy-preserving telemetry — was bui
 
 267 Rust tests passing across the two workspaces as of the last full run, zero clippy warnings, zero `rustfmt` diffs. Verified against real compiled binaries (CLI, a simulated CGI cycle, an independently-compiled C program linking `libfossh.so`), not just `cargo test`.
 
-**M6 detail:** Go binding (`bindings/go`) written — cgo wrapper + `nofossh` no-op build tag + integration test — but never compiled; no Go toolchain in this environment. PHP binding: `composer.json` and `src/Client.php` (hand-maintained `FFI::cdef()` string, CGI-subprocess fallback, documented no-op if neither is available) done; Laravel/Symfony snippets, the runnable example, and Ruby's binding were not yet written when this chapter's instructions arrived. `docs/INTEGRATION-{go,php,ruby}.md` not yet written.
+**M6 detail:** Go binding (`bindings/go`) written — cgo wrapper + `nofossh` no-op build tag + integration test — but never compiled; no Go toolchain in this environment. PHP binding: `composer.json` and `src/Client.php` done, now with **three** transports tried in order — FFI, then HTTP-remote (bearer-token auth over plain HTTPS, for real shared hosting — see `docs/INTEGRATION-php.md`), then CGI-subprocess, then a documented no-op. Laravel/Symfony middleware snippets, the runnable example, and Ruby's binding are still not written. `docs/INTEGRATION-php.md` done (shared-hosting-focused, per the user's direct request mid-chapter); `docs/INTEGRATION-{go,ruby}.md` not yet written.
 
 **Repository moved** from `/home/REDACTED/fossh` to `/home/REDACTED/Belgeler/fossh-project` at the start of this chapter (plain `mv`, git history intact, nothing recommitted or rewritten).
 
@@ -29,8 +29,8 @@ Status values: **not started**, **in progress**, **written, unverified** (code e
 
 | § | Sub-chapter | Status | Notes |
 |---|---|---|---|
-| 3.1 | glibc gatekeeping | not started | |
-| 3.2 | Native CGI hardening (privilege drop, systemd, SELinux) | not started | `checkmodule`/`semodule_package` present — SELinux module can actually be compiled and loaded here, not just drafted. |
+| 3.1 | glibc gatekeeping | QA-gate passed | Implemented, not yet load-bearing anywhere (see retrospective) — no systemd unit exists yet to call `glibc-check` automatically. |
+| 3.2 | Native CGI hardening (privilege drop, systemd, SELinux) | implemented, adversarial review pending | Privilege-drop code, SELinux module, and systemd units all written and verified as far as this rootless environment allows (see retrospective). |
 | 3.3 | OCaml watchdog | not started | **Blocked on toolchain**: no `ocaml`/`opam`/`dune` installed, and installing needs `sudo dnf install ocaml opam dune`. Per ADR-0023 (never handle the user's password in a command), that command is surfaced for the user to run, not executed here. Source will be written regardless and marked unverified until compiled. |
 | 3.4 | QUIC IPC (quiche via ctypes) | not started | Same OCaml-toolchain blocker as 3.3. `quiche`'s Rust/C side can be built independently of OCaml being present. |
 | 3.5 | Privilege separation enforcement | not started | Creating the real `fossh-svc`/`fossh-watchdog` system users needs `useradd`, i.e. root — same password constraint as above; filesystem-permission tests can still run against simulated ownership where root isn't required, full end-to-end needs the user's `dnf install`/setup. |
@@ -55,3 +55,25 @@ Restated here only so a reader of this file doesn't have to cross-reference the 
 ## Retrospectives
 
 (Appended one entry per sub-chapter as its QA gate closes.)
+
+### §3.1 — glibc gatekeeping
+
+Built: `fossh_core::glibc_gate` (pure `ldd --version` parsing/comparison, 7 tests), `fossh_cli::common::detect_glibc_version` (the one I/O-performing caller both `doctor` and the new `fossh glibc-check` subcommand share), and the floor constant (2.17, per §2.5's candidate). Deliberately not wired into `fossh-cgi`'s per-request path — see ADR-0024 for the full reasoning (subprocess-per-request would tax the sub-5ms p99 budget for no benefit, since the host's glibc can't change request-to-request).
+
+Adversarial pass caught one real, moderate-to-high-severity bug: neither call site checked `ldd`'s exit status before trusting its stdout, so a failing `ldd` (e.g. a half-broken glibc install — precisely the failure mode this check exists to catch) that still printed something version-shaped on stdout parsed as a clean pass. Confirmed empirically against the compiled binary with a shadowed fake `ldd` on `$PATH`, not just by reading the code. Fixed by collapsing both call sites onto one shared helper that checks `status.success()` first — see ADR-0024. Re-ran the adversarial repro against the fix directly; it now correctly refuses.
+
+Also caught and fixed: a doc comment in `glibc_gate.rs` referenced an ADR that didn't exist yet (fixed by writing ADR-0024 for real, not by softening the comment) and a dangling `RULES.md` pointer in the refusal message (RULES.md has no glibc content; the message now points at DURUM.md only).
+
+No deviation from §2.5's locked decision. One thing worth being explicit about, flagged in ADR-0024 too: the check exists but isn't automatically invoked by anything yet — that lands with §3.2's systemd unit (`ExecStartPre=`).
+
+### §3.2 — Native CGI hardening
+
+Built: privilege-drop (`fossh-cgi/src/privdrop.rs`, using `nix`'s safe wrappers, never touching this crate's `#![forbid(unsafe_code)]` — setgid → initgroups → setuid, then verifies the drop actually stuck by attempting to reclaim root); the SELinux module (`packaging/selinux/fossh.{te,fc}`, written from scratch in raw native TE syntax since this environment has `checkmodule`/`semodule_package` but not `selinux-policy-devel`'s M4 interface library — see the file's own header comment); and the systemd units (`packaging/systemd/fossh-fcgiwrap.{socket,service}`, `fossh.tmpfiles.conf`) with the full hardening directive set (`PrivateNetwork`, `ProtectSystem=strict`, `NoNewPrivileges`, capability/syscall restriction, etc.) plus `ExecStartPre=fossh glibc-check`.
+
+Verified as far as this rootless environment allows: `checkmodule`/`semodule_package` both compile and package the policy module cleanly (real compile, re-run against the final file content, not just written-and-hoped); `systemd-analyze verify` parses both units cleanly (only complaining that `/usr/bin/fossh`/`/usr/sbin/fcgiwrap` aren't installed system-wide here, which is expected pre-install). Not verified here, needs root: actually loading the SELinux module (`semodule -i`) and testing real AVC enforcement against a live process; exercising the privilege-drop code's actual-root-successfully-dropped path (this session never runs as root, per ADR-0023); creating the real `fossh-svc`/`fossh-watchdog` system users the units and policy both assume exist (that's §3.5/§3.11's job). Adversarial-review subagent pass launched; retrospective will be updated with findings once it returns.
+
+Also fixed, while working on this: the earlier preview nginx+Cloudflare-Tunnel guide (`docs/DEPLOY-nginx-cloudflare-tunnel.md`) referenced a hand-rolled socket path (`/run/fcgiwrap-fossh.sock`) that no longer matches the real shipped unit (`/run/fossh/fcgiwrap.sock`) — updated that guide to reference the real unit files directly instead of a duplicated hand-rolled copy, and added the `real_ip_header`/`set_real_ip_from` nginx config it was missing (without it, every visitor behind that guide's Cloudflare Tunnel setup would have collapsed to `127.0.0.1` as far as `fossh-cgi` could tell — cloudflared's own loopback hop to nginx, not the actual visitor).
+
+### X-Forwarded-For trust + shared-hosting PHP HTTP-remote mode (user request, mid-chapter)
+
+Not a numbered §3.x sub-chapter — a direct user request to make the write key ("API key") actually usable from real shared hosting, where `ext-ffi` and `proc_open` are both commonly unavailable. Added: `FOSSH_TRUST_FORWARDED_FOR` (opt-in, off by default — `fossh-cgi/src/forwarded.rs`, 5 tests, ADR-0025) so a trusted relay's forwarded IP can be honored without any deployment silently trusting a spoofable header by default; a third transport in `bindings/php/src/Client.php` (HTTP-remote, bearer-token auth over plain HTTPS via `curl` or PHP's stream wrapper, whichever is available, ~2s timeout, never throws); `docs/INTEGRATION-php.md` covering API-key creation, the shared-hosting HTTP mode, why `FOSSH_TRUST_FORWARDED_FOR` matters for correct per-visitor counts in that mode specifically, a WordPress snippet, and a short note that running alongside Google Analytics/GTM needs no special handling (no cookies, no client-side script, nothing to conflict with) — also reflected in `RULES.md` §5. Verified: full Rust suite (250 tests, root workspace) + `fossh-ffi`'s separate workspace (32 tests) all pass, clippy/fmt clean. The PHP client itself could not be run against a real PHP interpreter (none installed in this environment, same limitation as the rest of M6) — reviewed by hand instead; see the file's own comments for the specific `curl`/stream-context/JSON-shape reasoning.

@@ -1,0 +1,109 @@
+# foSSH SELinux policy module (chapter §3.2: "ship an SELinux policy
+# module — do not tell users to disable SELinux").
+#
+# Written in raw, native module-policy syntax rather than the usual
+# reference-policy `.if`-interface style (`policy_module()`,
+# `gen_require`, `domain_type()`, `files_type()`, ...): this build
+# environment has `checkmodule`/`semodule_package` but not
+# `selinux-policy-devel`'s M4 support-macro library, so those
+# convenience macros aren't available to expand. Every rule below is
+# spelled out explicitly instead of relying on an interface to expand
+# to the equivalent set — more verbose, fully self-contained, and
+# compiles with just `checkmodule`/`semodule_package` (both already
+# present), no `m4` support files required. (Note: this language's
+# comments are `#`-line only — no `/* */` block form.)
+#
+# Verified in this environment: compiles cleanly (`checkmodule -m`)
+# and packages cleanly (`semodule_package`) into a loadable `.pp`. NOT
+# yet verified: actually loading it (`semodule -i`, needs root — see
+# DURUM.md) against a real running `fossh-cgi`/`fcgiwrap`, and the
+# `audit2allow`-driven iteration a first real load typically needs to
+# close any gap this from-scratch pass missed. Scoped deliberately to
+# `fossh-cgi` itself (foSSH's own binary, unambiguous to label) rather
+# than also relabeling the shared, distro-packaged `fcgiwrap` binary,
+# which other units on the same host may use unrelated to foSSH.
+module fossh 1.0.0;
+
+require {
+    type httpd_t;
+    type init_t;
+    type var_run_t;
+    type lib_t;
+    type ld_so_t;
+    type ld_so_cache_t;
+
+    role system_r;
+
+    class dir { read search getattr open add_name remove_name write create lock ioctl };
+    class file {
+        read write open getattr create unlink lock ioctl append map
+        execute execute_no_trans entrypoint
+    };
+    class lnk_file { read getattr };
+    class fd use;
+    class fifo_file { read write getattr open ioctl };
+    class process { transition sigchld noatsecure siginh rlimitinh fork signal };
+    class capability { setuid setgid };
+}
+
+# --- Types this module owns ---
+
+type fossh_cgi_exec_t;
+type fossh_cgi_t;
+role system_r types fossh_cgi_t;
+
+type fossh_data_t;
+type fossh_var_run_t;
+
+# Deliberately NOT declared: any network socket class for
+# `fossh_cgi_t` (tcp_socket, udp_socket, netlink_*, ...). SELinux is
+# default-deny — simply never granting these is what enforces "zero
+# outbound" at this layer, independent of and in addition to the
+# systemd unit's kernel-level `PrivateNetwork=yes` (packaging/systemd/
+# fossh-fcgiwrap.service) — belt and suspenders, not redundant: a bug
+# in one layer doesn't undo the other.
+
+# --- Entering fossh_cgi_t: exec of fossh_cgi_exec_t from either the
+# systemd-managed path (init_t, this chapter's target) or the classic
+# Apache mod_cgi path (httpd_t, the original spec's deployment shape)
+# transitions into this confined domain. ---
+
+allow init_t fossh_cgi_exec_t:file { getattr open read execute execute_no_trans map entrypoint };
+allow init_t fossh_cgi_t:process { transition siginh rlimitinh noatsecure };
+allow fossh_cgi_t init_t:fd use;
+allow fossh_cgi_t init_t:process sigchld;
+allow fossh_cgi_t init_t:fifo_file { read write getattr ioctl };
+type_transition init_t fossh_cgi_exec_t:process fossh_cgi_t;
+
+allow httpd_t fossh_cgi_exec_t:file { getattr open read execute execute_no_trans map entrypoint };
+allow httpd_t fossh_cgi_t:process { transition siginh rlimitinh noatsecure };
+allow fossh_cgi_t httpd_t:fd use;
+allow fossh_cgi_t httpd_t:process sigchld;
+allow fossh_cgi_t httpd_t:fifo_file { read write getattr ioctl };
+type_transition httpd_t fossh_cgi_exec_t:process fossh_cgi_t;
+
+# --- What fossh_cgi_t may do once running ---
+
+allow fossh_cgi_t self:process { fork signal };
+allow fossh_cgi_t fossh_cgi_exec_t:file entrypoint;
+
+# Dynamic linking: read the interpreter and shared libraries, use the
+# ld.so cache. No `execmem`/`execstack` — foSSH has no legitimate
+# reason to generate or modify executable memory at runtime.
+allow fossh_cgi_t ld_so_t:file { read getattr open execute map };
+allow fossh_cgi_t ld_so_cache_t:file { read getattr open map };
+allow fossh_cgi_t lib_t:file { read getattr open execute map };
+allow fossh_cgi_t lib_t:lnk_file { read getattr };
+
+# The data directory (SQLite db + its -wal/-shm siblings) and the
+# runtime directory (rotating salt files, per fossh-ingest's
+# salt.rs). Labeled via fossh.fc; see §2.3/§2.5 in DECISIONS.md for why
+# these are the two paths the CGI binary ever touches on disk.
+allow fossh_cgi_t fossh_data_t:dir { read search getattr add_name remove_name write };
+allow fossh_cgi_t fossh_data_t:file { read write open getattr create unlink lock ioctl append map };
+allow fossh_cgi_t fossh_var_run_t:dir { read search getattr add_name remove_name write };
+allow fossh_cgi_t fossh_var_run_t:file { read write open getattr create unlink lock ioctl append map };
+
+# Ancestor directories: search-only, never write, on the way down to
+# the two paths above.
+allow fossh_cgi_t var_run_t:dir { read search getattr };

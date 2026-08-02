@@ -1,0 +1,16 @@
+# foSSH's dedicated fcgiwrap socket (chapter §3.2). A distro-wide
+# default fcgiwrap.socket, if one is also installed, is untouched by
+# this — this is its own named unit so foSSH's hardening directives
+# never depend on (or clobber) how anything else on the host uses
+# fcgiwrap.
+[Unit]
+Description=foSSH fcgiwrap socket
+
+[Socket]
+ListenStream=/run/fossh/fcgiwrap.sock
+SocketUser=fossh-svc
+SocketGroup=fossh-svc
+SocketMode=0660
+
+[Install]
+WantedBy=sockets.target

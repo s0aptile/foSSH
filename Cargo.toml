@@ -34,6 +34,7 @@ toml = "0.8"
 memmap2 = "0.9"
 libc = "0.2"
 proptest = "1"
+nix = "0.29"
 
 [profile.release]
 opt-level = "z"

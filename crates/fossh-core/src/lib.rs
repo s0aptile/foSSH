@@ -7,10 +7,13 @@
 //! No I/O except `config::Config::load`, which reads a TOML file from disk;
 //! see ADR-0004 in `DECISIONS.md` for why that lives here rather than in a
 //! dedicated crate. Everything else is deterministic, allocation-bounded,
-//! 100% unit-testable logic with no side effects.
+//! 100% unit-testable logic with no side effects — including
+//! `glibc_gate`, which parses/compares version strings the caller
+//! obtained elsewhere but never runs a subprocess itself.
 
 pub mod base32;
 pub mod config;
+pub mod glibc_gate;
 pub mod hist;
 pub mod hll;
 pub mod sanitize_path;

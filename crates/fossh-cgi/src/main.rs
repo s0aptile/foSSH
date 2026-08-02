@@ -23,7 +23,9 @@
 //! search + TOML parse is real, if small, work — needless on a path
 //! §7.1 explicitly budgets at < 5 ms p99.
 
+mod forwarded;
 mod handler;
+mod privdrop;
 
 use std::io::{self, Read, Write};
 
@@ -33,12 +35,17 @@ fn env_var(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|s| !s.is_empty())
 }
 
-fn read_cgi_env() -> CgiEnv {
+fn read_cgi_env(trust_forwarded_for: bool) -> CgiEnv {
+    let remote_addr = forwarded::resolve_client_ip(
+        &env_var("REMOTE_ADDR").unwrap_or_default(),
+        env_var("HTTP_X_FORWARDED_FOR").as_deref(),
+        trust_forwarded_for,
+    );
     CgiEnv {
         method: env_var("REQUEST_METHOD").unwrap_or_default(),
         path_info: env_var("PATH_INFO").unwrap_or_default(),
         query_string: env_var("QUERY_STRING").unwrap_or_default(),
-        remote_addr: env_var("REMOTE_ADDR").unwrap_or_default(),
+        remote_addr,
         user_agent: env_var("HTTP_USER_AGENT").unwrap_or_default(),
         referer: env_var("HTTP_REFERER"),
         dnt: env_var("HTTP_DNT").as_deref() == Some("1"),
@@ -119,7 +126,26 @@ fn write_response(status: u16, allow_origin: Option<&str>) {
 }
 
 fn main() {
-    let env = read_cgi_env();
+    // §3.2: drop privileges before doing anything else — before reading
+    // a single CGI env var or touching the data/salt directories. Not
+    // being root at all is the common case and not an error; any other
+    // outcome means the drop was attempted and failed, which is fatal —
+    // this process must never continue running as root.
+    if let Err(e) = privdrop::drop_to_service_user()
+        && e != privdrop::PrivDropError::NotRoot
+    {
+        eprintln!("fossh-cgi: refusing to start: {e}");
+        std::process::exit(1);
+    }
+
+    // Off by default (see forwarded.rs's module doc comment) — an
+    // operator opts in only when this instance genuinely sits behind
+    // something that relays on a real visitor's behalf.
+    let trust_forwarded_for = matches!(
+        env_var("FOSSH_TRUST_FORWARDED_FOR").as_deref(),
+        Some("1") | Some("true")
+    );
+    let env = read_cgi_env(trust_forwarded_for);
     let data_dir = std::env::var_os("FOSSH_DATA_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/var/lib/fossh"));

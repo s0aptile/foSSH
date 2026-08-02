@@ -36,38 +36,35 @@ Only `fossh-cgi`'s two public ingest routes (`/e`, `/e.gif`, per §7/§8 of the 
 sudo dnf install nginx fcgiwrap
 ```
 
-`/etc/systemd/system/fcgiwrap.socket` (Fedora's fcgiwrap package normally ships this; check with `systemctl list-unit-files | grep fcgiwrap` first):
+Use the actual hardened units this project ships (chapter §3.2) rather than a hand-rolled socket/service — copy them in and enable:
 
-```ini
-[Unit]
-Description=fcgiwrap socket for foSSH
-
-[Socket]
-ListenStream=/run/fcgiwrap-fossh.sock
-
-[Install]
-WantedBy=sockets.target
+```
+sudo cp packaging/systemd/fossh-fcgiwrap.socket packaging/systemd/fossh-fcgiwrap.service /etc/systemd/system/
+sudo cp packaging/systemd/fossh.tmpfiles.conf /usr/lib/tmpfiles.d/fossh.conf
+sudo systemd-tmpfiles --create
+sudo systemctl enable --now fossh-fcgiwrap.socket
 ```
 
-`/etc/systemd/system/fcgiwrap.service` needs `Environment=` lines for the `FOSSH_*` variables `fossh-cgi` reads directly (see `crates/fossh-cgi/src/main.rs` — it never calls the shared `Config::load()` path, by design):
-
-```ini
-[Service]
-Environment=FOSSH_DATA_DIR=/var/lib/fossh
-Environment=FOSSH_SALT_DIR=/var/lib/fossh/salt
-ExecStart=/usr/sbin/fcgiwrap -f
-```
-
-nginx site config, loopback-only:
+These listen on `/run/fossh/fcgiwrap.sock` (not a bare TCP port) and run under `PrivateNetwork=yes`/`ProtectSystem=strict`/SELinux confinement — see the unit files themselves and `packaging/selinux/fossh.te` for what that actually grants. nginx talks to that same socket:
 
 ```nginx
 server {
     listen 127.0.0.1:8080;
     server_name _;
 
+    # Cloudflare Tunnel terminates the real visitor connection at its edge
+    # and forwards to nginx over loopback — from nginx's point of view the
+    # peer is cloudflared (127.0.0.1), not the visitor. Without this,
+    # REMOTE_ADDR would be 127.0.0.1 for every single visitor, collapsing
+    # everyone into one "visitor" for foSSH's hashing. This tells nginx to
+    # trust cloudflared's own CF-Connecting-IP header instead, for
+    # connections that actually come from loopback.
+    set_real_ip_from 127.0.0.1;
+    real_ip_header CF-Connecting-IP;
+
     location ~ ^/(e|e\.gif)$ {
         include fastcgi_params;
-        fastcgi_pass unix:/run/fcgiwrap-fossh.sock;
+        fastcgi_pass unix:/run/fossh/fcgiwrap.sock;
         fastcgi_param SCRIPT_FILENAME /usr/bin/fossh-cgi;
     }
 
@@ -76,6 +73,8 @@ server {
     }
 }
 ```
+
+With `real_ip_header` handling this at the nginx layer, `fossh-cgi` sees the correct `REMOTE_ADDR` directly and does **not** need `FOSSH_TRUST_FORWARDED_FOR` for this deployment shape specifically — that setting exists for a different case (a shared-hosting PHP script relaying server-side with no nginx/real-ip-module equivalent in front of it; see `docs/INTEGRATION-php.md`), not this one. Don't enable it here on top of `real_ip_header` — one visitor-IP-trust mechanism at a time is enough, and stacking both just means whichever runs first wins with no benefit.
 
 Note the `listen 127.0.0.1:8080` — nginx itself never binds a public interface here either. The only thing that ever touches the public internet is Cloudflare's edge.
 

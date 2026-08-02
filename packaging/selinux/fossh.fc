@@ -1,0 +1,11 @@
+#
+# foSSH file contexts. Applied with `restorecon -Rv /usr/bin/fossh-cgi
+# /var/lib/fossh /run/fossh` (or a fresh `restorecon -R /` picks these
+# up too) after `semodule -i fossh.pp`. The RPM's %post (chapter §3.11)
+# runs this automatically — see packaging/rpm/fossh.spec.
+#
+/usr/bin/fossh-cgi		--	gen_context(system_u:object_r:fossh_cgi_exec_t,s0)
+
+/var/lib/fossh(/.*)?			gen_context(system_u:object_r:fossh_data_t,s0)
+
+/run/fossh(/.*)?			gen_context(system_u:object_r:fossh_var_run_t,s0)

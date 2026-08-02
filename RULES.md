@@ -44,6 +44,8 @@ foSSH exists because the default answer to "how do I get basic site analytics" i
 
 foSSH's answer is to not make that trade: self-hosted, no third party in the data path, k-anonymity and salted hashing instead of raw visitor identifiers, no cross-site tracking because there's no central service to correlate across sites in the first place. The cost is real too — you run it, you're responsible for it — which is exactly what the Fedora-native packaging, the watchdog, and the TUI setup wizard exist to make less painful, not to pretend away.
 
+This isn't framed as "instead of Google" in the sense of requiring you to rip anything out. foSSH doesn't set cookies, doesn't touch any client-side global GA/GTM would also use, and doesn't load a client-side script at all in its server-relay integrations (see `docs/INTEGRATION-php.md` §3) — there's nothing to conflict with. Running foSSH for your own privacy-preserving numbers alongside Google Analytics or Tag Manager for ad attribution is a normal, supported combination, not a contradiction — they answer different questions.
+
 ## 6. New in this phase
 
 - A local TUI admin console (`fossh-tui`, `ratatui`) for status, tamper-detection state, telemetry summary, and the first-run setup wizard — see chapter §3.9/§3.11.
