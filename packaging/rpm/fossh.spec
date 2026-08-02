@@ -39,8 +39,20 @@ BuildRequires:  checkpolicy
 BuildRequires:  policycoreutils
 BuildRequires:  systemd-rpm-macros
 %selinux_requires
+# fossh-watchdog (§3.3): Fedora's own native ocaml-dune RPM, not opam
+# — confirmed with a real, clean build+full-test-run using only these
+# system packages (no opam switch involved at all, env explicitly
+# stripped of every opam-related variable to prove it). gnupg2 is both
+# a build- and run-time dependency: the watchdog shells out to real
+# gpg/gpgv for every OpenPGP operation (§3.3's own "keep this
+# component's dependency tree minimal" design, see ADR-0040) rather
+# than linking an OCaml crypto library.
+BuildRequires:  ocaml
+BuildRequires:  ocaml-dune
+BuildRequires:  gnupg2
 
 Requires:       fcgiwrap
+Requires:       gnupg2
 Requires(pre):  shadow-utils
 %{?systemd_requires}
 
@@ -76,6 +88,15 @@ This is an open-alpha release (%{srcversion}). See
 ./scripts/build-release.sh
 checkmodule -m -o packaging/selinux/fossh.mod packaging/selinux/fossh.te
 semodule_package -o packaging/selinux/fossh.pp -m packaging/selinux/fossh.mod -f packaging/selinux/fossh.fc
+# Deliberately NOT `eval $(opam env)` or anything opam-related — dune
+# resolves ocaml/ocaml-dune from the system findlib database installed
+# by the ocaml-dune BuildRequires above. The watchdog project doesn't
+# depend on anything beyond the OCaml standard distribution yet
+# (Unix, Threads) — §3.4's ctypes-based QUIC binding, once built,
+# will need ocaml-ctypes-devel added here too (already confirmed
+# available as a native Fedora RPM, just not needed by anything that
+# compiles yet).
+(cd watchdog && dune build --profile release)
 
 %check
 # Dev-profile, not %%build's release profile — a second, separate
@@ -85,12 +106,14 @@ semodule_package -o packaging/selinux/fossh.pp -m packaging/selinux/fossh.mod -f
 # build (§3.10).
 cargo test --workspace
 (cd crates/fossh-ffi && cargo test)
+(cd watchdog && dune test)
 
 %install
 install -D -m0755 target/release/fossh %{buildroot}%{_bindir}/fossh
 install -D -m0755 target/release/fossh-cgi %{buildroot}%{_bindir}/fossh-cgi
 install -D -m0755 target/release/fossh-fcgi %{buildroot}%{_bindir}/fossh-fcgi
 install -D -m0755 target/release/fossh-tui %{buildroot}%{_bindir}/fossh-tui
+install -D -m0755 watchdog/_build/default/bin/main.exe %{buildroot}%{_bindir}/fossh-watchdog
 # Explicit, not relied-upon-implicitly: Cargo's own `strip = true`
 # strips these before they're even copied in here, but rpm's automatic
 # post-install stripping is tied to automatic debuginfo generation
@@ -101,7 +124,15 @@ install -D -m0755 target/release/fossh-tui %{buildroot}%{_bindir}/fossh-tui
 # stripped moments before `install -D` copied them in), not assumed.
 # Stripping explicitly here means the installed binaries stay stripped
 # regardless of which rpm macro is or isn't wired to do it implicitly.
-strip --strip-all %{buildroot}%{_bindir}/fossh %{buildroot}%{_bindir}/fossh-cgi %{buildroot}%{_bindir}/fossh-fcgi %{buildroot}%{_bindir}/fossh-tui
+# fossh-watchdog included here too: unlike the Cargo-built binaries
+# above (already stripped by `strip = true` before this line even
+# runs — confirmed, not assumed, see the comment above), dune's
+# release profile does *not* strip by default (`file` reported
+# "with debug_info, not stripped" on a real release-profile build) —
+# so for this one binary, this line is the only place stripping
+# actually happens, not a belt-and-suspenders reinforcement of
+# something Cargo already did.
+strip --strip-all %{buildroot}%{_bindir}/fossh %{buildroot}%{_bindir}/fossh-cgi %{buildroot}%{_bindir}/fossh-fcgi %{buildroot}%{_bindir}/fossh-tui %{buildroot}%{_bindir}/fossh-watchdog
 
 install -D -m0644 packaging/systemd/fossh-fcgiwrap.socket %{buildroot}%{_unitdir}/fossh-fcgiwrap.socket
 install -D -m0644 packaging/systemd/fossh-fcgiwrap.service %{buildroot}%{_unitdir}/fossh-fcgiwrap.service
@@ -169,6 +200,7 @@ fi
 %{_bindir}/fossh-cgi
 %{_bindir}/fossh-fcgi
 %{_bindir}/fossh-tui
+%{_bindir}/fossh-watchdog
 %{_unitdir}/fossh-fcgiwrap.socket
 %{_unitdir}/fossh-fcgiwrap.service
 %{_unitdir}/fossh-fcgi.service
