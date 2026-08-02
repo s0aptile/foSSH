@@ -1,0 +1,41 @@
+[workspace]
+members = ["."]
+
+[package]
+name = "fossh-ffi"
+version = "0.1.0-alpha.1"
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+authors = ["$0aptile <https://github.com/s0aptile>"]
+repository = "https://github.com/s0aptile/fossh"
+homepage = "https://github.com/s0aptile/fossh"
+rust-version = "1.97"
+description = "foSSH C ABI: cdylib/staticlib for embedding foSSH directly into a host process (Go, PHP, Ruby, C, Zig, Python, ...) — no process, no socket, no port. See DECISIONS.md ADR-0002 for why this is its own Cargo workspace."
+
+[lib]
+name = "fossh"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+fossh-core = { path = "../fossh-core" }
+fossh-store = { path = "../fossh-store" }
+fossh-ingest = { path = "../fossh-ingest" }
+blake3 = "1.5"
+serde_json = "1"
+
+[dev-dependencies]
+toml = "0.8"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = true
+# NOT panic = "abort" (unlike the root workspace's release profile) — S2 and
+# §11 both require every entry point to `catch_unwind`, which only works
+# under panic = "unwind". This is exactly why this crate is a separate
+# workspace; see DECISIONS.md ADR-0002.
+panic = "unwind"
+
+[profile.dev]
+opt-level = 0

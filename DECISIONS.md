@@ -161,7 +161,29 @@ The database and the spool get different treatment on purpose: `Store::open` is 
 
 ---
 
-## ADR-0019 — Credential handling for local privileged commands
+## ADR-0019 — `fossh-ffi` authenticates once at `fossh_set_key`, not per call
+
+**Decision:** `fossh_set_key` looks the presented key up against the database directly (parse the `fossh_<slug>_<base32>` token, hash the decoded key, compare to `sites.key_hash`) and caches the resolved site (id + allowlist) in the context. `fossh_pageview`/`fossh_event`/`fossh_timing`/`fossh_record_env` all trust that cached identity — none of them re-derive an HMAC signature the way `fossh-cgi` does per request (§8).
+**Alternatives rejected:** Requiring every recording call to carry (or the context to re-verify) a signature, mirroring the network-facing CGI auth flow.
+**Reason:** §8's signed-request flow exists to prove, over a network, that whoever is calling `/e` actually possesses a site's write key — a real adversary model for a CGI endpoint anything on the internet can reach. An FFI call has no network hop: the host process *is* the caller, in the same address space, and if it's malicious or compromised, the extra HMAC math wouldn't have stopped it — it can already call `fossh_set_key` with any key it wants, same as it can call any other function in the process linking against it. Re-verifying a signature on every call would add cost and complexity against a threat this deployment shape doesn't have.
+
+---
+
+## ADR-0020 — `fossh_record_env` picks JSON-body vs. query-string by presence of a body, not a route
+
+**Decision:** `fossh_record_env` parses the body as a JSON event/batch (`pipeline::from_json_body`) whenever `body_len > 0`, and falls back to `QUERY_STRING` (`pipeline::from_query_string`) otherwise — mirroring `POST /e` vs. `GET /e.gif`, but selected by data present rather than by matching `PATH_INFO` against `/e`/`/e.gif` the way `fossh-cgi` does.
+**Reason:** §11 gives this one function to cover what `fossh-cgi` splits across two routes; there's no second entry point to distinguish by name. Presence-of-body is the natural signal the two existing paths already imply (a beacon-style `GET` has no body by construction; a JSON POST does), and it means a host application handing foSSH a raw CGI-shaped environment doesn't also have to get `PATH_INFO` conventions exactly right for this to work.
+
+---
+
+## ADR-0021 — Miri coverage is scoped to `opt_str`/`write_c_string_truncated`, not the full `fossh-ffi` test suite
+
+**Decision:** `cargo +nightly miri test` only targets the `miri_safe` module (`opt_str`, `write_c_string_truncated` — pulled out as standalone functions specifically so they don't need a live `fossh_ctx`). The other 23 tests, which exercise the full `fossh_init`/`fossh_set_key`/recording flow, are not run under Miri.
+**Reason:** Every one of those 23 tests goes through `Store::open`, which calls into `rusqlite`'s `bundled` feature — real, compiled SQLite C source, linked in and called via FFI. Miri interprets Rust MIR; it has no way to execute arbitrary compiled C, and fails immediately on the first SQLite call (`can't call foreign function 'sqlite3_threadsafe'`), even with `MIRIFLAGS=-Zmiri-disable-isolation` set. This is a documented, fundamental Miri limitation, not a gap in this project's code. It also isn't a meaningful gap in *coverage* of what S1 actually asks Miri to check: `opt_str` and `write_c_string_truncated` are the only two functions in the entire codebase — across every crate, since `fossh-ffi` is the only one `unsafe` is permitted in at all — that dereference a raw pointer without first going through `fossh_ctx`/`Store`. Every other `unsafe` block in `lib.rs` is a thin `CStr::from_ptr`/`&*ctx`/slice-from-raw-parts conversion at a function boundary, immediately handed off to ordinary safe Rust; there is no unsafe logic anywhere in the project that Miri could exercise by going deeper into the `Store`-backed tests than it already does before hitting the SQLite wall.
+
+---
+
+## ADR-0022 — Credential handling for local privileged commands
 
 **Decision:** No password is ever placed in a shell command, file, or log from this session. Where a build step genuinely needs `sudo` (installing a missing system package), the exact command is surfaced for the user to run themselves via their own shell, rather than piping a credential through a tool call.
 **Reason:** A plaintext password embedded in a command is retained wherever that command is recorded. Standard toolchain setup (rustup, cargo, musl target) needed no elevated privileges at all; `cc`/`gcc` were already present on this machine.

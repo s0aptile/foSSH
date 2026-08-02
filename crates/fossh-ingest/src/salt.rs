@@ -118,6 +118,46 @@ impl SaltManager {
     }
 }
 
+/// P2's other case: "generated in memory at first use, rotated at 00:00
+/// UTC" with no further qualification — the tmpfs file dance is *only*
+/// for CGI mode, called out explicitly as compensating for CGI having
+/// "no persistent process" to hold the salt in. `fossh-ffi` and (M7)
+/// `fossh-fcgi` *are* persistent processes, so they use this instead:
+/// the salt lives in the process's own memory, no filesystem involved at
+/// all, regenerated in place whenever the UTC day rolls over.
+pub struct InMemorySalt {
+    salt: Zeroizing<[u8; SALT_LEN]>,
+    day: i64,
+}
+
+impl InMemorySalt {
+    /// Generates the first salt immediately — matches P2's "generated in
+    /// memory at first use" (there's no lazy-init state to thread through
+    /// every subsequent call this way).
+    pub fn new() -> Result<Self, IngestError> {
+        let mut s = Self { salt: Zeroizing::new([0u8; SALT_LEN]), day: i64::MIN };
+        s.rotate_if_needed(SystemTime::now())?;
+        Ok(s)
+    }
+
+    fn rotate_if_needed(&mut self, now: SystemTime) -> Result<(), IngestError> {
+        let today = utc_day(now)?;
+        if today != self.day {
+            let random = crate::random::read_random_bytes(SALT_LEN)?;
+            self.salt.copy_from_slice(&random);
+            self.day = today;
+        }
+        Ok(())
+    }
+
+    /// Returns today's salt, rotating first if the UTC day has changed
+    /// since the last call.
+    pub fn current(&mut self) -> Result<&[u8; SALT_LEN], IngestError> {
+        self.rotate_if_needed(SystemTime::now())?;
+        Ok(&self.salt)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +249,36 @@ mod tests {
         assert_ne!(*a, *b);
         fs::remove_dir_all(&dir_a).ok();
         fs::remove_dir_all(&dir_b).ok();
+    }
+
+    #[test]
+    fn in_memory_salt_generates_on_construction() {
+        let mut s = InMemorySalt::new().unwrap();
+        let salt = *s.current().unwrap();
+        assert!(!salt.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn in_memory_salt_is_stable_within_the_same_day() {
+        let mut s = InMemorySalt::new().unwrap();
+        let a = *s.current().unwrap();
+        let b = *s.current().unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn in_memory_salt_rotates_across_a_day_boundary() {
+        let mut s = InMemorySalt::new().unwrap();
+        let day1 = *s.current().unwrap();
+        s.rotate_if_needed(SystemTime::now() + Duration::from_secs(2 * 86_400)).unwrap();
+        let day2 = s.salt;
+        assert_ne!(day1, *day2, "crossing a UTC day boundary must produce a new salt");
+    }
+
+    #[test]
+    fn two_in_memory_salts_are_independent() {
+        let mut a = InMemorySalt::new().unwrap();
+        let mut b = InMemorySalt::new().unwrap();
+        assert_ne!(*a.current().unwrap(), *b.current().unwrap());
     }
 }

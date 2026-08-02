@@ -90,8 +90,37 @@ fn parse_kind(s: Option<&str>) -> Result<EventKind, PipelineError> {
     }
 }
 
-fn assemble_event(w: WireEvent, ctx: &RequestContext) -> Result<Event, PipelineError> {
-    let name = Name::parse(&w.name).map_err(|e| PipelineError::Invalid(e.to_string()))?;
+/// The already-typed shape both wire parsers (`from_json_body`,
+/// `from_query_string`) and `fossh-ffi`'s direct calls
+/// (`fossh_pageview`/`fossh_event`/`fossh_timing`, §11) build before
+/// handing an event to `assemble_event` — the one place allowlist
+/// membership, grammar/bound validation, UA bucketing, and visitor
+/// hashing actually happen, so there's exactly one code path that can
+/// produce a validated `Event`, no matter which transport it came from.
+pub struct EventFields {
+    pub name: String,
+    pub kind: Option<String>,
+    pub path: Option<String>,
+    pub referrer: Option<String>,
+    pub value: Option<i64>,
+    pub props: HashMap<String, String>,
+}
+
+impl From<WireEvent> for EventFields {
+    fn from(w: WireEvent) -> Self {
+        Self {
+            name: w.name,
+            kind: w.kind,
+            path: w.path,
+            referrer: w.referrer,
+            value: w.value,
+            props: w.props,
+        }
+    }
+}
+
+pub fn assemble_event(fields: EventFields, ctx: &RequestContext) -> Result<Event, PipelineError> {
+    let name = Name::parse(&fields.name).map_err(|e| PipelineError::Invalid(e.to_string()))?;
     if !ctx
         .site_allowlist
         .iter()
@@ -102,11 +131,11 @@ fn assemble_event(w: WireEvent, ctx: &RequestContext) -> Result<Event, PipelineE
         ));
     }
 
-    if w.props.len() > validate::MAX_PROPS {
+    if fields.props.len() > validate::MAX_PROPS {
         return Err(PipelineError::Invalid("too many properties".to_string()));
     }
-    let mut props = Vec::with_capacity(w.props.len());
-    for (k, v) in w.props {
+    let mut props = Vec::with_capacity(fields.props.len());
+    for (k, v) in fields.props {
         if !ctx.site_allowlist.iter().any(|allowed| allowed == &k) {
             return Err(PipelineError::Invalid(
                 "property key not on this site's allowlist".to_string(),
@@ -117,9 +146,9 @@ fn assemble_event(w: WireEvent, ctx: &RequestContext) -> Result<Event, PipelineE
         props.push((key, val));
     }
 
-    let kind = parse_kind(w.kind.as_deref())?;
-    let path = w.path.as_deref().map(SanitizedPath::from_raw);
-    let referrer = w
+    let kind = parse_kind(fields.kind.as_deref())?;
+    let path = fields.path.as_deref().map(SanitizedPath::from_raw);
+    let referrer = fields
         .referrer
         .as_deref()
         .or(ctx.referrer_header)
@@ -149,7 +178,7 @@ fn assemble_event(w: WireEvent, ctx: &RequestContext) -> Result<Event, PipelineE
         os: ua.os,
         device: ua.device,
         visitor,
-        value: w.value,
+        value: fields.value,
         props,
     };
     event
@@ -183,7 +212,7 @@ pub fn from_json_body(
 
     let events = wire_events
         .into_iter()
-        .map(|w| assemble_event(w, ctx))
+        .map(|w| assemble_event(w.into(), ctx))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(PipelineOutcome::Accepted(events))
 }
@@ -227,7 +256,7 @@ pub fn from_query_string(
         }
     }
 
-    let wire = WireEvent {
+    let fields = EventFields {
         name: name.ok_or_else(|| PipelineError::Invalid("missing name".to_string()))?,
         kind,
         path,
@@ -235,7 +264,7 @@ pub fn from_query_string(
         value,
         props,
     };
-    let event = assemble_event(wire, ctx)?;
+    let event = assemble_event(fields, ctx)?;
     Ok(PipelineOutcome::Accepted(vec![event]))
 }
 

@@ -85,12 +85,32 @@ pub fn timestamp_in_window(ts: i64, now: i64) -> bool {
 /// included) would hash something else entirely and never match what
 /// `fossh site create` computed. Callers holding the wire token need to
 /// strip the `fossh_<slug>_` prefix and base32-decode the remainder
-/// first — see `fossh-cgi`'s `handler::parse_bearer_token`.
+/// first — see `parse_write_key_token` below.
 pub fn verify_bearer_key(presented_key: &[u8; 32], stored_key_hash: &[u8; 32]) -> bool {
     blake3::hash(presented_key)
         .as_bytes()
         .ct_eq(stored_key_hash)
         .into()
+}
+
+/// Splits a write-key token shaped `fossh_<slug>_<base32>` (§8) into the
+/// slug and the raw 32-byte key — decoding the base32 portion, *not*
+/// returning it as text. Shared by `fossh-cgi` (bearer-mode `Authorization`
+/// header) and `fossh-ffi` (`fossh_set_key`, §11) — both need the exact
+/// same parse, and getting it wrong (comparing `BLAKE3` of the base32
+/// string, or of the whole token, instead of the decoded bytes) means
+/// authentication can never match what `fossh site create` stored (see
+/// `verify_bearer_key`'s doc comment). Slugs may themselves contain `_`,
+/// so this splits on the *last* `_` rather than the first.
+pub fn parse_write_key_token(token: &str) -> Option<(&str, [u8; 32])> {
+    let rest = token.strip_prefix("fossh_")?;
+    let (slug, key_b32) = rest.rsplit_once('_')?;
+    if slug.is_empty() {
+        return None;
+    }
+    let key_bytes = fossh_core::base32::decode(key_b32)?;
+    let key: [u8; 32] = key_bytes.try_into().ok()?;
+    Some((slug, key))
 }
 
 const NONCE_CACHE_SLOTS: u64 = 65_536;
@@ -253,6 +273,50 @@ mod tests {
         let hash = *blake3::hash(&write_key).as_bytes();
         assert!(verify_bearer_key(&write_key, &hash));
         assert!(!verify_bearer_key(&[8u8; 32], &hash));
+    }
+
+    #[test]
+    fn parse_write_key_token_round_trips() {
+        let raw_key = [0x42u8; 32];
+        let token = format!("fossh_blog_{}", fossh_core::base32::encode(&raw_key));
+        assert_eq!(parse_write_key_token(&token), Some(("blog", raw_key)));
+    }
+
+    #[test]
+    fn parse_write_key_token_handles_underscores_in_slug() {
+        let raw_key = [0x42u8; 32];
+        let token = format!(
+            "fossh_my_long_slug_{}",
+            fossh_core::base32::encode(&raw_key)
+        );
+        assert_eq!(
+            parse_write_key_token(&token),
+            Some(("my_long_slug", raw_key))
+        );
+    }
+
+    #[test]
+    fn parse_write_key_token_rejects_malformed_tokens() {
+        assert_eq!(parse_write_key_token("not-a-fossh-key"), None);
+        assert_eq!(parse_write_key_token("fossh_"), None);
+        assert_eq!(parse_write_key_token("fossh_onlyoneseg"), None);
+        assert_eq!(parse_write_key_token("fossh_blog_notbase32!!!"), None);
+        assert_eq!(
+            parse_write_key_token("fossh_blog_MY"),
+            None,
+            "valid base32 but wrong decoded length"
+        );
+    }
+
+    #[test]
+    fn full_round_trip_matches_what_verify_bearer_key_expects() {
+        let raw_key = [0xABu8; 32];
+        let stored_hash = *blake3::hash(&raw_key).as_bytes();
+        let token = format!("fossh_blog_{}", fossh_core::base32::encode(&raw_key));
+
+        let (slug, presented_key) = parse_write_key_token(&token).unwrap();
+        assert_eq!(slug, "blog");
+        assert!(verify_bearer_key(&presented_key, &stored_hash));
     }
 
     fn scratch_path(name: &str) -> PathBuf {

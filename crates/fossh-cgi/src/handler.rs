@@ -87,26 +87,6 @@ fn nonce_cache_path(data_dir: &Path, site_id: SiteId) -> PathBuf {
     site_dir(data_dir, site_id).join("nonces.bin")
 }
 
-/// Splits a bearer token shaped `fossh_<slug>_<base32>` (§8) into the
-/// slug and the raw 32-byte write key — decoding the base32 portion,
-/// *not* returning it as text. Getting this step wrong (comparing
-/// `BLAKE3` of the base32 string, or of the whole token, instead of the
-/// decoded bytes) means it can never match what `fossh site create`
-/// stored, since that hashes the raw key bytes (§8: "Only `BLAKE3(key)`
-/// is stored" — see `auth::verify_bearer_key`'s doc comment). Slugs may
-/// themselves contain `_`, so this splits on the *last* `_` rather than
-/// the first.
-fn parse_bearer_token(token: &str) -> Option<(&str, [u8; 32])> {
-    let rest = token.strip_prefix("fossh_")?;
-    let (slug, key_b32) = rest.rsplit_once('_')?;
-    if slug.is_empty() {
-        return None;
-    }
-    let key_bytes = fossh_core::base32::decode(key_b32)?;
-    let key: [u8; 32] = key_bytes.try_into().ok()?;
-    Some((slug, key))
-}
-
 enum AuthOutcome {
     Ok(CachedSite),
     Unauthorized,
@@ -117,7 +97,7 @@ fn authenticate(env: &CgiEnv, body: &[u8], data_dir: &Path, now: i64) -> AuthOut
         let Some(token) = header.strip_prefix("Bearer ") else {
             return AuthOutcome::Unauthorized;
         };
-        let Some((slug, presented_key)) = parse_bearer_token(token) else {
+        let Some((slug, presented_key)) = auth::parse_write_key_token(token) else {
             return AuthOutcome::Unauthorized;
         };
         let site = match site_cache::read(data_dir, slug) {
@@ -633,30 +613,8 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
-    #[test]
-    fn parse_bearer_token_round_trips_slug_and_raw_key() {
-        let raw_key = [0x42u8; 32];
-        let token = bearer_token_for("blog", &raw_key);
-        assert_eq!(parse_bearer_token(&token), Some(("blog", raw_key)));
-    }
-
-    #[test]
-    fn parse_bearer_token_handles_underscores_in_the_slug() {
-        let raw_key = [0x42u8; 32];
-        let token = bearer_token_for("my_long_slug", &raw_key);
-        assert_eq!(parse_bearer_token(&token), Some(("my_long_slug", raw_key)));
-    }
-
-    #[test]
-    fn parse_bearer_token_rejects_malformed_tokens() {
-        assert_eq!(parse_bearer_token("not-a-fossh-key"), None);
-        assert_eq!(parse_bearer_token("fossh_"), None);
-        assert_eq!(parse_bearer_token("fossh_onlyoneseg"), None);
-        assert_eq!(parse_bearer_token("fossh_blog_notbase32!!!"), None);
-        assert_eq!(
-            parse_bearer_token("fossh_blog_MY"),
-            None,
-            "valid base32 but wrong decoded length"
-        );
-    }
+    // Token parsing itself (`parse_write_key_token`) is tested where it
+    // now lives, in `fossh_ingest::auth`. `bearer_token_for` above and
+    // the auth-flow tests earlier in this module already exercise it
+    // end to end through `authenticate`.
 }
