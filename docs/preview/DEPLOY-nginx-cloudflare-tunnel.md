@@ -4,6 +4,8 @@
 
 This guide covers self-hosting foSSH on a single Fedora Server box, reachable from the public internet with **zero inbound ports opened** — no port forwarding, no firewall rule for 80/443, nothing listening on a public interface at all. Cloudflare Tunnel makes only outbound connections from your box to Cloudflare's edge; the edge terminates public TLS and forwards over that outbound tunnel.
 
+One install set up this way is a management point for as many sites as you want, not just one — `fossh site create` per site, each with its own write key, all sharing the same box, the same tunnel, and the same `/e`/`/e.gif` endpoints underneath. If you're tracking exactly one site and it's on shared hosting with no shell access, this guide isn't the one you need at all — see the shared-hosting drop-in (`docs/fossh-config.php`, linked from the root `README.md`) instead, which needs *some* foSSH instance to point at (this one, or anyone else's) but not this setup itself.
+
 ```
 visitor's browser
       |

@@ -16,7 +16,11 @@ The usual way to get basic site analytics is a hosted service that sees every vi
 - **Shared hosting** — no shell, no compiled extensions available? The PHP binding's HTTP-remote transport talks to a foSSH instance running elsewhere over plain HTTPS. See `docs/INTEGRATION-php.md`.
 - **Fedora-native** — `sudo dnf install fossh` (in progress — see `dev/DURUM.md`'s current chapter): an OCaml watchdog, hardened systemd units, SELinux confinement, and a local TUI admin console/setup wizard (`fossh-tui`).
 
-## Quick start (building from source)
+## Quick start — pick your path
+
+**On shared hosting (cPanel, FTP/File Manager only, no shell)?** Skip everything below. Grab [`docs/fossh-config.php`](docs/fossh-config.php), fill in the two blanks (a write key from someone/somewhere already running foSSH, and its address), upload it, add one `require_once` line to your site. No build, no Composer, no server access needed — the file's own header comment walks through the three steps. That's the whole install.
+
+**Self-hosting foSSH itself** — your own server, one install that can hold as many sites as you want (each `site create` below is a separate site with its own write key and its own numbers; nothing about the install is per-site):
 
 ```
 cargo build --release --workspace
@@ -24,7 +28,7 @@ cargo build --release --workspace
 ./target/release/fossh site create my-site --allow pageview,signup
 ```
 
-That last command prints a write key once — it's the credential every binding/transport uses to authenticate. See `docs/` for the integration guide matching how you're actually deploying (`INTEGRATION-php.md`, `DEPLOY-apache.md`, `docs/preview/DEPLOY-nginx-cloudflare-tunnel.md`, and more as they land).
+That last command prints a write key once — it's the credential every binding/transport uses to authenticate, including any shared-hosting sites (above) that point at this install as their endpoint. Reachable from the public internet with zero inbound ports opened (Cloudflare Tunnel) is the documented way to expose it: `docs/preview/DEPLOY-nginx-cloudflare-tunnel.md`. See `docs/` for the integration guide matching how you're actually deploying (`INTEGRATION-php.md`, `DEPLOY-apache.md`, and more as they land).
 
 ## Privacy and security
 
