@@ -21,9 +21,14 @@ pub fn db_path(data_dir: &Path) -> PathBuf {
 
 /// One day back from `now` — matches how "today" is defined for a
 /// quick dashboard glance; not meant to replace `fossh query`'s
-/// explicit `--from`/`--to` for real reporting.
+/// explicit `--from`/`--to` for real reporting. `rem_euclid`, not `%`:
+/// Rust's `%` takes the sign of the dividend, so a negative `now`
+/// (unreachable today — `unix_now()`'s only fallback is exactly `0`,
+/// never negative — but not `pub`, so nothing enforces that at this
+/// function's own boundary) would overshoot past the day start instead
+/// of rounding down to it.
 fn start_of_today(now: i64) -> i64 {
-    now - (now % 86_400)
+    now - now.rem_euclid(86_400)
 }
 
 pub fn load_summary(
@@ -66,6 +71,23 @@ pub fn load_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn start_of_today_rounds_down_to_the_day_boundary() {
+        assert_eq!(start_of_today(1_700_000_000), 1_699_920_000);
+        assert_eq!(start_of_today(86_400), 86_400);
+        assert_eq!(start_of_today(86_399), 0);
+    }
+
+    #[test]
+    fn start_of_today_handles_a_negative_timestamp_without_overshooting() {
+        // Unreachable via `unix_now()` today (its only fallback is
+        // exactly `0`), but `start_of_today` isn't `pub` specifically
+        // so nothing outside this module can rely on that — this
+        // function's own contract must hold regardless.
+        assert_eq!(start_of_today(-1), -86_400);
+        assert_eq!(start_of_today(-86_400), -86_400);
+    }
 
     fn scratch_dir(name: &str) -> PathBuf {
         let dir =

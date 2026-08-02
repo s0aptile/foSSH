@@ -86,6 +86,17 @@ pub fn verify(submitted: &str, stored: TokenHash) -> bool {
     submitted_hash.ct_eq(&stored.0).into()
 }
 
+/// Hashes a plaintext this caller already holds by some other means —
+/// for a standalone TUI reloading a token file it didn't just generate
+/// in this process (a real install's watchdog holds the hash directly
+/// instead and never needs this; see `fossh-tui`'s module docs on
+/// standalone/demo mode). Same primitive `generate()` uses internally,
+/// exposed so a second, independent `sha256` implementation doesn't
+/// need to exist anywhere just to re-derive the same hash.
+pub fn hash_of(plaintext: &str) -> TokenHash {
+    TokenHash(sha256(plaintext.as_bytes()))
+}
+
 /// Writes `plaintext` to `path` (0600, create-new) — the one time the
 /// plaintext ever touches disk. Fails if a file already exists at
 /// `path`, rather than silently overwriting a token a previous
@@ -150,6 +161,13 @@ mod tests {
     fn wrong_token_does_not_verify() {
         let generated = generate().unwrap();
         assert!(!verify("not-the-right-token", generated.hash));
+    }
+
+    #[test]
+    fn hash_of_reproduces_the_same_hash_generate_computed() {
+        let generated = generate().unwrap();
+        assert_eq!(hash_of(&generated.plaintext), generated.hash);
+        assert!(verify(&generated.plaintext, hash_of(&generated.plaintext)));
     }
 
     #[test]

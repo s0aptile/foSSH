@@ -609,6 +609,7 @@ dependencies = [
  "fossh-core",
  "fossh-store",
  "ratatui",
+ "zeroize",
 ]
 
 [[package]]

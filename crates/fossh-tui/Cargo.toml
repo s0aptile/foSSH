@@ -17,5 +17,6 @@ path = "src/main.rs"
 fossh-core.workspace = true
 fossh-store.workspace = true
 fossh-admin.workspace = true
+zeroize.workspace = true
 ratatui = "0.30"
 crossterm = "0.29"

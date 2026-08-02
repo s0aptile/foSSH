@@ -4,7 +4,7 @@
 //! **Standalone/demo mode note**: in the finished architecture, the
 //! watchdog generates the setup token on first start and is the only
 //! thing that ever holds the live hash (chapter §3.3, not yet built —
-//! see DURUM.md). Until that exists, this screen can drive the whole
+//! see dev/DURUM.md). Until that exists, this screen can drive the whole
 //! flow itself for testing: generate a token, write it to disk once,
 //! hold the hash in memory standing in for "the watchdog's stored
 //! state", and verify/burn against that. Once §3.3 lands, the
@@ -14,13 +14,16 @@
 //! match that eventual shape (`fossh_admin::setup_token` is the same
 //! call either way).
 
+use std::fs;
 use std::path::PathBuf;
+
+use zeroize::{Zeroize, Zeroizing};
 
 use fossh_admin::setup_token::{self, TokenHash};
 
 pub enum Step {
     NoTokenFound,
-    TokenJustGenerated { plaintext: String },
+    TokenJustGenerated { plaintext: Zeroizing<String> },
     AwaitingInput,
     Verified,
     Failed(String),
@@ -29,23 +32,43 @@ pub enum Step {
 pub struct Wizard {
     pub step: Step,
     pub token_path: PathBuf,
-    pub input: String,
+    pub input: Zeroizing<String>,
     /// Stands in for "the watchdog's stored hash" — see module doc.
     pending_hash: Option<TokenHash>,
 }
 
 impl Wizard {
     pub fn new(token_path: PathBuf) -> Self {
-        let step = if token_path.exists() {
-            Step::AwaitingInput
-        } else {
-            Step::NoTokenFound
+        // Reading the file (not just `Path::exists()`) does two things
+        // at once: distinguishes "genuinely absent" from "exists but
+        // this process can't read it" (a bare `exists()` check reports
+        // `false` for both, silently misreporting a real permission
+        // problem as "no token yet"), and — the more important reason —
+        // recovers `pending_hash` for a token file this process didn't
+        // just generate itself. Without this, reopening the TUI between
+        // generating a token and verifying it (exactly the shape this
+        // becomes once §3.3's watchdog exists and always writes the
+        // file in a separate process from this one) left `pending_hash`
+        // permanently `None`, so `submit()` could never succeed no
+        // matter what was typed — caught by adversarial review, not
+        // exercised by the original test suite, which only asserted the
+        // starting `Step`, never a full generate-restart-verify cycle.
+        let (step, pending_hash) = match fs::read_to_string(&token_path) {
+            Ok(plaintext) => (
+                Step::AwaitingInput,
+                Some(setup_token::hash_of(plaintext.trim())),
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Step::NoTokenFound, None),
+            Err(e) => (
+                Step::Failed(format!("reading the setup token file: {e}")),
+                None,
+            ),
         };
         Self {
             step,
             token_path,
-            input: String::new(),
-            pending_hash: None,
+            input: Zeroizing::new(String::new()),
+            pending_hash,
         }
     }
 
@@ -56,7 +79,7 @@ impl Wizard {
                     Ok(()) => {
                         self.pending_hash = Some(generated.hash);
                         self.step = Step::TokenJustGenerated {
-                            plaintext: generated.plaintext.to_string(),
+                            plaintext: generated.plaintext,
                         };
                     }
                     Err(e) => self.step = Step::Failed(format!("writing token file: {e}")),
@@ -78,6 +101,26 @@ impl Wizard {
         self.input.pop();
     }
 
+    /// Discards whatever has been typed so far without attempting to
+    /// verify it — used both by a failed guess and by canceling out of
+    /// input entirely (`app.rs`'s Esc handling). `String::clear()` only
+    /// resets length, it does not overwrite the freed heap bytes;
+    /// `Zeroize::zeroize()` actually does, and does so proactively
+    /// rather than waiting for this `Wizard` to eventually drop — the
+    /// workspace's release profile sets `panic = "abort"` (root
+    /// `Cargo.toml`), which skips unwinding entirely, so a `Drop` impl
+    /// (what a bare `Zeroizing<String>` would otherwise rely on) is not
+    /// guaranteed to run if the process panics while this is still
+    /// live. Clearing it the moment it's no longer needed closes that
+    /// window instead of hoping a clean shutdown always happens.
+    fn clear_input(&mut self) {
+        self.input.zeroize();
+    }
+
+    pub fn cancel_input(&mut self) {
+        self.clear_input();
+    }
+
     pub fn submit(&mut self) {
         let Some(hash) = self.pending_hash else {
             self.step = Step::Failed(
@@ -90,7 +133,7 @@ impl Wizard {
 
         if !setup_token::verify(&self.input, hash) {
             self.step = Step::Failed("token did not match".to_string());
-            self.input.clear();
+            self.clear_input();
             return;
         }
 
@@ -99,6 +142,7 @@ impl Wizard {
             self.pending_hash = None;
             Ok(())
         });
+        self.clear_input();
         match result {
             Ok(()) => self.step = Step::Verified,
             Err(e) => self.step = Step::Failed(format!("verified, but burn failed: {e}")),
@@ -185,17 +229,99 @@ mod tests {
     }
 
     #[test]
-    fn submit_before_generating_fails_cleanly_instead_of_panicking() {
+    fn submit_with_no_token_ever_generated_fails_cleanly_instead_of_panicking() {
+        // Genuinely no `pending_hash` anywhere: no file on disk at all,
+        // so `Wizard::new` starts at `NoTokenFound` and never recovers a
+        // hash from anything. Distinct from the pre-existing-file case
+        // below, which does now recover one — see that test.
         let path = scratch_path("submit-before-generate");
         let _ = std::fs::remove_file(&path);
-        setup_token::write_token_file(&path, "sometoken").unwrap();
         let mut wizard = Wizard::new(path.clone());
-        assert!(matches!(wizard.step, Step::AwaitingInput));
+        assert!(matches!(wizard.step, Step::NoTokenFound));
 
         wizard.push_char('x');
         wizard.submit();
 
         assert!(matches!(wizard.step, Step::Failed(_)));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn verifying_a_preexisting_token_file_succeeds_without_generating_in_this_process() {
+        // Regression test for the adversarial-review finding: a token
+        // file written by an *earlier* process (simulating a TUI
+        // restart between generate and verify, or — the shape this
+        // becomes once §3.3 lands — the watchdog always being the one
+        // that wrote it) must still be verifiable. Before the fix,
+        // `Wizard::new` always started with `pending_hash: None`
+        // regardless of an existing file, so `submit()` could never
+        // succeed here no matter what was typed.
+        let path = scratch_path("preexisting-verify");
+        let _ = std::fs::remove_file(&path);
+        setup_token::write_token_file(&path, "the-real-token").unwrap();
+
+        let mut wizard = Wizard::new(path.clone());
+        assert!(matches!(wizard.step, Step::AwaitingInput));
+
+        for c in "the-real-token".chars() {
+            wizard.push_char(c);
+        }
+        wizard.submit();
+
+        assert!(
+            matches!(wizard.step, Step::Verified),
+            "a pre-existing file's real token must verify"
+        );
+        assert!(
+            !path.exists(),
+            "a successful verify must still burn the file"
+        );
+    }
+
+    #[test]
+    fn wrong_input_against_a_preexisting_token_file_fails_without_burning() {
+        let path = scratch_path("preexisting-wrong");
+        let _ = std::fs::remove_file(&path);
+        setup_token::write_token_file(&path, "the-real-token").unwrap();
+
+        let mut wizard = Wizard::new(path.clone());
+        for c in "not-the-real-token".chars() {
+            wizard.push_char(c);
+        }
+        wizard.submit();
+
+        assert!(matches!(wizard.step, Step::Failed(_)));
+        assert!(
+            path.exists(),
+            "a failed verify must not burn a still-valid file"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn unreadable_token_file_fails_cleanly_instead_of_being_mistaken_for_absent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = scratch_path("unreadable");
+        let _ = std::fs::remove_file(&path);
+        setup_token::write_token_file(&path, "irrelevant").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Root (or a test runner with CAP_DAC_OVERRIDE) can read a
+        // 0-permission file anyway — skip rather than false-fail there.
+        if fs::read_to_string(&path).is_ok() {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            std::fs::remove_file(&path).ok();
+            return;
+        }
+
+        let wizard = Wizard::new(path.clone());
+        assert!(
+            matches!(wizard.step, Step::Failed(_)),
+            "a real read error must not be mistaken for 'no token file yet'"
+        );
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         std::fs::remove_file(&path).ok();
     }
 
@@ -206,6 +332,16 @@ mod tests {
         wizard.push_char('a');
         wizard.push_char('b');
         wizard.backspace();
-        assert_eq!(wizard.input, "a");
+        assert_eq!(wizard.input.as_str(), "a");
+    }
+
+    #[test]
+    fn cancel_input_clears_whatever_was_typed() {
+        let path = scratch_path("cancel");
+        let mut wizard = Wizard::new(path);
+        wizard.push_char('a');
+        wizard.push_char('b');
+        wizard.cancel_input();
+        assert_eq!(wizard.input.as_str(), "");
     }
 }
