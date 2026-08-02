@@ -124,6 +124,14 @@ getent passwd fossh-watchdog >/dev/null || useradd -r -g fossh-watchdog -d %{_sh
 exit 0
 
 %post
+# /run/fossh{,/salt} (packaging/systemd/fossh.tmpfiles.conf) are
+# tmpfiles.d entries — normally only materialized by
+# systemd-tmpfiles-setup.service at boot. Without this, `dnf install`
+# on an already-running system leaves them missing until the next
+# reboot; a setup wizard or manual service start in between would find
+# the salt directory absent. rpmlint's `post-without-tmpfile-creation`
+# caught this — a real gap, not noise.
+systemd-tmpfiles --create %{_tmpfilesdir}/fossh.conf
 %selinux_modules_install -p 200 %{_datadir}/selinux/packages/fossh/fossh.pp
 chown fossh-svc:fossh-svc %{_sharedstatedir}/fossh
 restorecon -R %{_bindir}/fossh-cgi %{_bindir}/fossh-fcgi %{_sharedstatedir}/fossh >/dev/null 2>&1 || :
