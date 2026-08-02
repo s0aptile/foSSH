@@ -183,7 +183,14 @@ The database and the spool get different treatment on purpose: `Store::open` is 
 
 ---
 
-## ADR-0022 — Credential handling for local privileged commands
+## ADR-0022 — `FosshError` is `pub` and exported as `fossh_err_t`
+
+**Decision:** The error-code enum (previously private, returned to C only as bare `int32_t`) is now `pub`, individually documented per variant, and explicitly included in `cbindgen.toml` so the generated header gets a real `fossh_err_t` C11 enum (`FOSSH_ERR_T_REJECTED`, etc.) instead of C callers writing magic numbers like `-5`.
+**Reason:** Exposing the enum *definition* — fixed variant names known at compile time — is not the "never leak a dynamic message" constraint S2/§11 actually care about (that's about runtime strings built from caller-controlled input, e.g. echoing back a rejected event name). Named constants are free ergonomics for every binding built on top of this header; verified end to end with a real, independently-compiled C program linking `libfossh.so` (`gcc -Wall -Wextra`, zero warnings) that checks `FOSSH_ERR_T_REJECTED` by name — see the M6 commit.
+
+---
+
+## ADR-0023 — Credential handling for local privileged commands
 
 **Decision:** No password is ever placed in a shell command, file, or log from this session. Where a build step genuinely needs `sudo` (installing a missing system package), the exact command is surfaced for the user to run themselves via their own shell, rather than piping a credential through a tool call.
 **Reason:** A plaintext password embedded in a command is retained wherever that command is recorded. Standard toolchain setup (rustup, cargo, musl target) needed no elevated privileges at all; `cc`/`gcc` were already present on this machine.

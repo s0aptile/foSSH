@@ -49,23 +49,40 @@ pub extern "C" fn fossh_abi_version() -> u32 {
     FOSSH_ABI_VERSION
 }
 
-/// Stable, versioned error codes (§11). Negative on every rejection path;
-/// `0` is success. Never carries a dynamic message — `fossh_last_error`
-/// maps each variant to one of a fixed set of strings, on purpose: S2
-/// forbids leaking anything caller-controlled (a name, a path, a JSON
-/// parse error naming a byte offset into the caller's own data) back
-/// across a boundary whose whole point is not to have a body/message
-/// channel for the ingest path.
+/// Stable, versioned error codes (§11), exported as `fossh_err_t` in the
+/// generated header so C callers get symbolic names instead of bare
+/// magic numbers. Negative on every rejection path; `0` is success.
+/// Never carries a dynamic message — `fossh_last_error` maps each
+/// variant to one of a fixed set of strings, on purpose: S2 forbids
+/// leaking anything caller-controlled (a name, a path, a JSON parse
+/// error naming a byte offset into the caller's own data) back across a
+/// boundary whose whole point is not to have a body/message channel for
+/// the ingest path. The enum *definition* — fixed, compile-time-known
+/// variant names — is not that; only a dynamic runtime string built from
+/// caller input would be.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FosshError {
+pub enum FosshError {
+    /// A panic was caught at the FFI boundary, or another truly
+    /// unexpected internal failure (a poisoned mutex, a clock error).
     Internal = -1,
+    /// A required pointer was null, not valid UTF-8, or otherwise
+    /// malformed (oversized `props_json`, a `key` that doesn't parse as
+    /// `fossh_<slug>_<base32>`, ...).
     InvalidArgument = -2,
+    /// A recording function was called before `fossh_set_key` succeeded.
     NoKeySet = -3,
+    /// `fossh_set_key`: the presented key doesn't match any known,
+    /// enabled site.
     Unauthorized = -4,
+    /// The event name or a property key isn't on the site's allowlist,
+    /// or a field failed its grammar/bound validation (P8, S4).
     Rejected = -5,
+    /// The event (or batch) exceeds S4's size caps.
     TooLarge = -6,
+    /// S10's per-site token bucket is empty.
     RateLimited = -7,
+    /// The spool or database write itself failed.
     WriteFailed = -8,
 }
 
