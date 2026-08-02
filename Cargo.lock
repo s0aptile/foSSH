@@ -578,6 +578,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fossh-fcgi"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "blake3",
+ "fossh-admin",
+ "fossh-core",
+ "fossh-ingest",
+ "fossh-store",
+ "nix",
+]
+
+[[package]]
 name = "fossh-ingest"
 version = "0.1.0-alpha.1"
 dependencies = [

@@ -23,12 +23,12 @@
 //! search + TOML parse is real, if small, work — needless on a path
 //! §7.1 explicitly budgets at < 5 ms p99.
 
-mod forwarded;
 mod handler;
 mod privdrop;
 
 use std::io::{self, Read, Write};
 
+use fossh_ingest::forwarded;
 use handler::{CgiEnv, HandleParams};
 
 fn env_var(key: &str) -> Option<String> {
@@ -138,7 +138,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    // Off by default (see forwarded.rs's module doc comment) — an
+    // Off by default (see fossh_ingest::forwarded's module doc comment) — an
     // operator opts in only when this instance genuinely sits behind
     // something that relays on a real visitor's behalf.
     let trust_forwarded_for = matches!(

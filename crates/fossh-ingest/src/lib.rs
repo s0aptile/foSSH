@@ -16,6 +16,7 @@
 pub mod auth;
 pub mod compact;
 pub mod crypto;
+pub mod forwarded;
 pub mod ingest;
 pub mod pipeline;
 pub mod random;

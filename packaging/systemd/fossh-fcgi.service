@@ -1,0 +1,80 @@
+# foSSH persistent FastCGI listener (M7, chapter §7.2): unlike
+# fossh-fcgiwrap.service (fcgiwrap wrapping a fresh fossh-cgi exec per
+# request), fossh-fcgi is itself the long-lived process — no fcgiwrap,
+# no per-request exec. It binds its own Unix socket directly (no
+# systemd socket activation in this pass — a later integration, not
+# this one; see dev/DURUM.md) and writes accepted events straight to
+# SQLite through its own batching writer thread instead of spooling.
+#
+# No dedicated SELinux domain yet, unlike fossh-cgi (packaging/selinux/
+# fossh.te): that policy's own `fossh_cgi_t` grants deliberately never
+# covered the SQLite database at all ("fossh-cgi never opens the
+# actual SQLite database itself" — see that file's own comment), since
+# fossh-cgi genuinely never touches it. fossh-fcgi's whole design is
+# the opposite: it opens fossh.db directly, on every batch flush. With
+# no `type_transition` targeting this executable, it runs in whatever
+# domain execs it (typically `unconfined_service_t` on Fedora's
+# targeted policy for a unit with no `SELinuxContext=` of its own) —
+# functional, not broken, but without the same kernel-enforced
+# confinement fossh-cgi has. Tracked as an open gap in dev/DURUM.md,
+# not silently assumed equivalent.
+[Unit]
+Description=foSSH persistent FastCGI listener
+Documentation=https://github.com/s0aptile/foSSH
+After=network.target
+
+[Service]
+Type=simple
+User=fossh-svc
+Group=fossh-svc
+
+# §2.5/§3.1: refuse to start at all on a below-floor host, with a clear
+# error, rather than failing later with an opaque dynamic-linker error.
+# Runs once per service (re)start, not once per request — see
+# DECISIONS.md ADR-0024.
+ExecStartPre=/usr/bin/fossh glibc-check
+ExecStart=/usr/bin/fossh-fcgi
+
+Environment=FOSSH_CONFIG=/etc/fossh/fossh.toml
+Environment=FOSSH_FCGI_SOCKET=/run/fossh/fcgi.sock
+Environment=FOSSH_FCGI_WORKERS=8
+# Off by default — see docs/INTEGRATION-php.md's shared-hosting relay
+# pattern and fossh_ingest::forwarded for what this trusts and why it's
+# opt-in. Uncomment only if this instance sits behind something that
+# legitimately relays on a real visitor's behalf.
+#Environment=FOSSH_TRUST_FORWARDED_FOR=1
+
+Restart=on-failure
+RestartSec=2s
+
+# --- Kernel-enforced hardening (§3.2's directives, applied here too —
+# this process's actual filesystem/network footprint is a strict
+# subset of fossh-cgi's: one Unix socket, one SQLite database, no
+# spool, no data-encryption key file at all (see ADR-0035 — this write
+# path never touches the §3.8 spool-encryption layer).
+PrivateNetwork=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/fossh /run/fossh
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

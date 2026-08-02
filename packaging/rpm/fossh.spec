@@ -29,7 +29,7 @@ Release:        1%{?dist}
 Summary:        Privacy-preserving, embeddable telemetry (self-hosted analytics)
 
 License:        MIT
-URL:            https://github.com/s0aptile/fossh
+URL:            https://github.com/s0aptile/foSSH
 Source0:        %{name}-%{srcversion}.tar.gz
 
 BuildRequires:  cargo
@@ -48,9 +48,12 @@ Requires(pre):  shadow-utils
 foSSH is a privacy-preserving, embeddable telemetry service:
 k-anonymity and rotating-salt visitor hashing instead of raw visitor
 identifiers, no third-party data path, self-hosted. This package
-provides the Fedora-native deployment: the fossh-cgi ingest binary,
-the fossh CLI, the fossh-tui local admin console and first-run setup
-wizard, hardened systemd units, and an SELinux policy module.
+provides the Fedora-native deployment: two ingest transports
+(fossh-cgi, a fresh process per request via fcgiwrap; fossh-fcgi, a
+persistent FastCGI process writing to SQLite directly), the fossh CLI,
+the fossh-tui local admin console and first-run setup wizard, hardened
+systemd units, and an SELinux policy module (currently covering
+fossh-cgi only — see fossh-fcgi.service's own header comment).
 
 This is an open-alpha release (%{srcversion}). See
 /usr/share/doc/%{name}/README.md.
@@ -77,6 +80,7 @@ semodule_package -o packaging/selinux/fossh.pp -m packaging/selinux/fossh.mod -f
 %install
 install -D -m0755 target/release/fossh %{buildroot}%{_bindir}/fossh
 install -D -m0755 target/release/fossh-cgi %{buildroot}%{_bindir}/fossh-cgi
+install -D -m0755 target/release/fossh-fcgi %{buildroot}%{_bindir}/fossh-fcgi
 install -D -m0755 target/release/fossh-tui %{buildroot}%{_bindir}/fossh-tui
 # Explicit, not relied-upon-implicitly: Cargo's own `strip = true`
 # strips these before they're even copied in here, but rpm's automatic
@@ -88,10 +92,11 @@ install -D -m0755 target/release/fossh-tui %{buildroot}%{_bindir}/fossh-tui
 # stripped moments before `install -D` copied them in), not assumed.
 # Stripping explicitly here means the installed binaries stay stripped
 # regardless of which rpm macro is or isn't wired to do it implicitly.
-strip --strip-all %{buildroot}%{_bindir}/fossh %{buildroot}%{_bindir}/fossh-cgi %{buildroot}%{_bindir}/fossh-tui
+strip --strip-all %{buildroot}%{_bindir}/fossh %{buildroot}%{_bindir}/fossh-cgi %{buildroot}%{_bindir}/fossh-fcgi %{buildroot}%{_bindir}/fossh-tui
 
 install -D -m0644 packaging/systemd/fossh-fcgiwrap.socket %{buildroot}%{_unitdir}/fossh-fcgiwrap.socket
 install -D -m0644 packaging/systemd/fossh-fcgiwrap.service %{buildroot}%{_unitdir}/fossh-fcgiwrap.service
+install -D -m0644 packaging/systemd/fossh-fcgi.service %{buildroot}%{_unitdir}/fossh-fcgi.service
 install -D -m0644 packaging/systemd/fossh.tmpfiles.conf %{buildroot}%{_tmpfilesdir}/fossh.conf
 
 install -D -m0644 packaging/selinux/fossh.pp %{buildroot}%{_datadir}/selinux/packages/fossh/fossh.pp
@@ -112,20 +117,27 @@ exit 0
 %post
 %selinux_modules_install -p 200 %{_datadir}/selinux/packages/fossh/fossh.pp
 chown fossh-svc:fossh-svc %{_sharedstatedir}/fossh
-restorecon -R %{_bindir}/fossh-cgi %{_sharedstatedir}/fossh >/dev/null 2>&1 || :
+restorecon -R %{_bindir}/fossh-cgi %{_bindir}/fossh-fcgi %{_sharedstatedir}/fossh >/dev/null 2>&1 || :
 %systemd_post fossh-fcgiwrap.socket
-# dnf install fossh leaves the service enabled but not started — the
-# watchdog's auth gate (chapter §3.3/§2.1, not yet built) has no
-# enrolled key yet, and the service should not answer application
+%systemd_post fossh-fcgi.service
+# dnf install fossh leaves both ingest transports enabled but not
+# started — the watchdog's auth gate (chapter §3.3/§2.1, not yet built)
+# has no enrolled key yet, and neither should answer application
 # requests until the setup wizard (fossh-tui) completes. This package
-# does not start the socket/service on its own; that's the setup
-# wizard's job once §3.11's full flow lands.
+# does not start either on its own, and does not choose between them:
+# fossh-fcgiwrap.socket (CGI, via fcgiwrap) and fossh-fcgi.service
+# (persistent FastCGI, §7.2) are two transports for the same pipeline,
+# not a default-plus-alternative — enabling both costs nothing since
+# neither starts on its own, and the operator picks which to actually
+# run once the setup wizard's full flow lands (§3.11).
 
 %preun
 %systemd_preun fossh-fcgiwrap.socket fossh-fcgiwrap.service
+%systemd_preun fossh-fcgi.service
 
 %postun
 %systemd_postun_with_restart fossh-fcgiwrap.socket
+%systemd_postun_with_restart fossh-fcgi.service
 if [ $1 -eq 0 ]; then
   %selinux_modules_uninstall -p 200 fossh
 fi
@@ -138,9 +150,11 @@ fi
 %doc README.md
 %{_bindir}/fossh
 %{_bindir}/fossh-cgi
+%{_bindir}/fossh-fcgi
 %{_bindir}/fossh-tui
 %{_unitdir}/fossh-fcgiwrap.socket
 %{_unitdir}/fossh-fcgiwrap.service
+%{_unitdir}/fossh-fcgi.service
 %{_tmpfilesdir}/fossh.conf
 %{_datadir}/selinux/packages/fossh/fossh.pp
 %attr(0700,fossh-svc,fossh-svc) %dir %{_sharedstatedir}/fossh

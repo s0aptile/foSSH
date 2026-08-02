@@ -5,6 +5,7 @@ members = [
     "crates/fossh-store",
     "crates/fossh-ingest",
     "crates/fossh-cgi",
+    "crates/fossh-fcgi",
     "crates/fossh-cli",
     "crates/fossh-admin",
     "crates/fossh-tui",

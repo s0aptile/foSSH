@@ -11,6 +11,7 @@ Temel site analitiği almanın alışıldık yolu, gösterge paneli sunabilmek i
 ## Dağıtım şekilleri
 
 - **CGI** — `fossh-cgi`, RFC 3875 CGI konuşan tek bir ikili (binary). Apache `mod_cgi` veya nginx üzerinde `fcgiwrap` ile çalışır.
+- **FastCGI** — `fossh-fcgi`, bir Unix soketi üzerinden doğrudan FastCGI konuşan kalıcı (persistent) bir süreç; her istek için yeni bir süreçten daha yüksek verim gereken dağıtımlar için. Havuzlamak (spool) yerine SQLite'a doğrudan toplu (batch) yazar, ve cron'a güvenmek yerine kendi saklama/vacuum bakımını kendi yürütür. Bkz. `packaging/systemd/fossh-fcgi.service`.
 - **Gömülü (FFI)** — `libfossh`, bir C ABI (`cdylib`/`staticlib`); Go, PHP, Ruby veya bir C fonksiyonunu çağırabilen herhangi bir şeyin doğrudan içine bağlanır. Süreç yok, soket yok, açık port yok. Bkz. `bindings/`.
 - **Paylaşımlı barındırma (shared hosting)** — kabuk (shell) erişimi yok, derlenmiş eklenti yok mu? PHP bağlamasının (binding) HTTP-uzak (remote) taşıyıcısı, düz HTTPS üzerinden başka bir yerde çalıştırdığınız bir foSSH örneğiyle konuşur. Bkz. `docs/INTEGRATION-php.md`.
 - **Fedora-yerel (native)** — `sudo dnf install fossh` (sürmekte — bkz. `dev/DURUM.md`'nin şu anki bölümü): bir OCaml bekçi (watchdog) süreci, sertleştirilmiş systemd birimleri, SELinux sınırlaması ve yerel bir TUI yönetim/kurulum sihirbazı (`fossh-tui`).

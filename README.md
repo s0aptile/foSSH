@@ -11,6 +11,7 @@ The usual way to get basic site analytics is a hosted service that sees every vi
 ## Deployment shapes
 
 - **CGI** — `fossh-cgi`, a single static-leaning binary speaking RFC 3875 CGI. Works under Apache `mod_cgi`, or nginx via `fcgiwrap`.
+- **FastCGI** — `fossh-fcgi`, a persistent process speaking FastCGI directly over a Unix socket, for higher-throughput deployments than a fresh process per request. Writes straight to SQLite in batches instead of spooling, and runs its own retention/vacuum maintenance instead of relying on cron. See `packaging/systemd/fossh-fcgi.service`.
 - **Embedded (FFI)** — `libfossh`, a C ABI (`cdylib`/`staticlib`) linked directly into Go, PHP, Ruby, or anything else that can call a C function. No process, no socket, no open port. See `bindings/`.
 - **Shared hosting** — no shell, no compiled extensions available? The PHP binding's HTTP-remote transport talks to a foSSH instance running elsewhere over plain HTTPS. See `docs/INTEGRATION-php.md`.
 - **Fedora-native** — `sudo dnf install fossh` (in progress — see `dev/DURUM.md`'s current chapter): an OCaml watchdog, hardened systemd units, SELinux confinement, and a local TUI admin console/setup wizard (`fossh-tui`).

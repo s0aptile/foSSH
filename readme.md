@@ -38,6 +38,7 @@ Point your webserver's CGI config at `fossh-cgi` (see `docs/DEPLOY-*.md` inside 
 | Shape | What it is | Fits |
 |---|---|---|
 | CGI | `fossh-cgi`, RFC 3875 | Apache `mod_cgi`, nginx via `fcgiwrap` |
+| FastCGI | `fossh-fcgi`, persistent, direct-to-SQLite | Higher-throughput deployments — one process, a Unix socket, its own retention/vacuum maintenance instead of cron |
 | Embedded (FFI) | `libfossh` — `cdylib`/`staticlib` | Go, PHP, Ruby, C, anything with a C ABI — no process, no socket, no open port |
 | Shared hosting | PHP binding's HTTP-remote transport | No shell, no compiled extensions available — plain HTTPS to a foSSH instance you run elsewhere |
 | Fedora-native | `dnf install fossh` (in progress) | Self-hosted Fedora Server, with a watchdog, hardened systemd units, SELinux confinement, and a local TUI setup wizard |

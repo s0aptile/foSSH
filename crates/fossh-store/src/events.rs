@@ -1,10 +1,15 @@
-//! Raw event storage. `Store::record_event` is the only way in: it
-//! interns name/path/referrer, inserts the raw row + its props, and folds
-//! the event into its hourly rollup bucket, all inside one transaction —
-//! matching the compactor's job of turning one drained spool frame into
-//! both a durable raw row and an up-to-date aggregate.
+//! Raw event storage. `Store::record_event` is the only way in for a
+//! single event: it interns name/path/referrer, inserts the raw row +
+//! its props, and folds the event into its hourly rollup bucket, all
+//! inside one transaction — matching the compactor's job of turning
+//! one drained spool frame into both a durable raw row and an
+//! up-to-date aggregate. `record_events_batch` (M7) does the same
+//! per-event work but shares *one* transaction across the whole slice
+//! — §7.2's "batched transaction" for `fossh-fcgi`'s direct-write
+//! mode, where committing after every single event would give up
+//! exactly the throughput a persistent, batching writer exists for.
 
-use rusqlite::params;
+use rusqlite::{Connection, params};
 
 use fossh_core::types::{Event, SiteId};
 #[cfg(test)]
@@ -21,59 +26,106 @@ use crate::{Store, StoreError};
 /// from `1`, so `0` is never assigned to a real interned path.
 pub(crate) const NO_PATH_SENTINEL: i64 = 0;
 
+/// The actual insert-plus-rollup-fold work for one event, against
+/// anything connection-like the caller already owns (a bare
+/// `Connection`, a `Transaction`, or a `Savepoint` — the latter two
+/// both `Deref<Target = Connection>`) — shared by `record_event` (one
+/// event, one transaction) and `record_events_batch` (many events, one
+/// shared transaction, one savepoint per event within it). Validates
+/// `event` first, same as `record_event` always has.
+fn insert_one(conn: &Connection, event: &Event) -> Result<i64, StoreError> {
+    event.validate().map_err(StoreError::Validation)?;
+
+    let name_id = intern_name(conn, event.name.as_str())?;
+    let path_id = match &event.path {
+        Some(p) => Some(intern_path(conn, p.as_str())?),
+        None => None,
+    };
+    let ref_id = match &event.referrer {
+        Some(h) => Some(intern_ref(conn, h.as_str())?),
+        None => None,
+    };
+
+    conn.execute(
+        "INSERT INTO events (site_id, ts, kind, name_id, path_id, ref_id, country, browser, os, device, visitor, value)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![
+            event.site_id.get(),
+            event.ts,
+            event.kind.as_i64(),
+            name_id,
+            path_id,
+            ref_id,
+            event.country.as_str(),
+            event.browser.as_u8(),
+            event.os.as_u8(),
+            event.device.as_u8(),
+            event.visitor.map(|v| v as i64),
+            event.value,
+        ],
+    )?;
+    let event_id = conn.last_insert_rowid();
+
+    for (k, v) in &event.props {
+        let key_id = intern_name(conn, k.as_str())?;
+        conn.execute(
+            "INSERT INTO props (event_id, k, v) VALUES (?1, ?2, ?3)",
+            params![event_id, key_id, v.as_str()],
+        )?;
+    }
+
+    let rollup_path_id = path_id.unwrap_or(NO_PATH_SENTINEL);
+    let bucket = event.ts.div_euclid(3600) * 3600;
+    upsert_rollup(conn, event, bucket, name_id, rollup_path_id)?;
+
+    Ok(event_id)
+}
+
 impl Store {
     /// Records one event: interns name/path/referrer, inserts the raw row
     /// and its properties, and folds it into the matching hourly rollup —
     /// all atomically. Returns the new `events.id`.
     pub fn record_event(&mut self, event: &Event) -> Result<i64, StoreError> {
-        event.validate().map_err(StoreError::Validation)?;
-
         let tx = self.conn.transaction()?;
-
-        let name_id = intern_name(&tx, event.name.as_str())?;
-        let path_id = match &event.path {
-            Some(p) => Some(intern_path(&tx, p.as_str())?),
-            None => None,
-        };
-        let ref_id = match &event.referrer {
-            Some(h) => Some(intern_ref(&tx, h.as_str())?),
-            None => None,
-        };
-
-        tx.execute(
-            "INSERT INTO events (site_id, ts, kind, name_id, path_id, ref_id, country, browser, os, device, visitor, value)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![
-                event.site_id.get(),
-                event.ts,
-                event.kind.as_i64(),
-                name_id,
-                path_id,
-                ref_id,
-                event.country.as_str(),
-                event.browser.as_u8(),
-                event.os.as_u8(),
-                event.device.as_u8(),
-                event.visitor.map(|v| v as i64),
-                event.value,
-            ],
-        )?;
-        let event_id = tx.last_insert_rowid();
-
-        for (k, v) in &event.props {
-            let key_id = intern_name(&tx, k.as_str())?;
-            tx.execute(
-                "INSERT INTO props (event_id, k, v) VALUES (?1, ?2, ?3)",
-                params![event_id, key_id, v.as_str()],
-            )?;
-        }
-
-        let rollup_path_id = path_id.unwrap_or(NO_PATH_SENTINEL);
-        let bucket = event.ts.div_euclid(3600) * 3600;
-        upsert_rollup(&tx, event, bucket, name_id, rollup_path_id)?;
-
+        let event_id = insert_one(&tx, event)?;
         tx.commit()?;
         Ok(event_id)
+    }
+
+    /// Records every event in `events` inside one shared transaction —
+    /// `fossh-fcgi`'s batched-flush write path (§7.2), so a persistent
+    /// writer flushing 100 events at once commits once, not 100 times.
+    /// S2 still applies per event, not to the batch as a whole: each
+    /// event gets its own `SAVEPOINT` nested inside the shared
+    /// transaction, so one event failing validation (or any other
+    /// per-event `StoreError`) rolls back *only that event's* partial
+    /// writes — via the savepoint's own `Drop`, never committed — while
+    /// every already-committed savepoint before it, and every one
+    /// after it, is unaffected. Sharing one bare transaction across the
+    /// whole slice without this would have been wrong: a mid-event
+    /// failure (e.g. after the raw row insert but before the rollup
+    /// fold) would otherwise leave that one event's partial writes
+    /// sitting uncommitted-but-not-rolled-back inside the outer
+    /// transaction, to be silently committed anyway at the end. Returns
+    /// the number actually recorded.
+    pub fn record_events_batch(&mut self, events: &[Event]) -> Result<u64, StoreError> {
+        if events.is_empty() {
+            return Ok(0);
+        }
+        let mut tx = self.conn.transaction()?;
+        let mut recorded = 0u64;
+        for event in events {
+            let sp = tx.savepoint()?;
+            if insert_one(&sp, event).is_ok() {
+                sp.commit()?;
+                recorded += 1;
+            }
+            // else: `sp` drops here uncommitted, rolling back only
+            // this event's partial writes (default `DropBehavior` is
+            // `Rollback` — see rusqlite's `Savepoint`).
+        }
+        tx.commit()?;
+        Ok(recorded)
     }
 
     /// Raw row count for a site — test/debug helper, also handy for
@@ -213,5 +265,57 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM props", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn record_events_batch_records_all_of_them_in_one_shared_transaction() {
+        let mut store = Store::open_in_memory().unwrap();
+        let events = vec![
+            sample_event(1, 1_700_000_000, "pageview"),
+            sample_event(1, 1_700_000_100, "pageview"),
+            sample_event(2, 1_700_000_200, "pageview"),
+        ];
+        let recorded = store.record_events_batch(&events).unwrap();
+        assert_eq!(recorded, 3);
+        assert_eq!(store.count_events(SiteId::new(1)).unwrap(), 2);
+        assert_eq!(store.count_events(SiteId::new(2)).unwrap(), 1);
+    }
+
+    #[test]
+    fn record_events_batch_empty_slice_is_a_no_op_not_an_error() {
+        let mut store = Store::open_in_memory().unwrap();
+        assert_eq!(store.record_events_batch(&[]).unwrap(), 0);
+    }
+
+    #[test]
+    fn record_events_batch_one_invalid_event_is_skipped_without_affecting_the_others() {
+        // The middle event fails validation (too many props, same
+        // trigger `record_event_rejects_too_many_props` uses) — its own
+        // savepoint must roll back without taking the whole shared
+        // transaction, and therefore the other two events, down with it.
+        let mut store = Store::open_in_memory().unwrap();
+        let mut invalid = sample_event(1, 1_700_000_100, "pageview");
+        invalid.props = (0..17)
+            .map(|i| {
+                (
+                    Key::parse(format!("k{i}")).unwrap(),
+                    Val::parse("v").unwrap(),
+                )
+            })
+            .collect();
+        let events = vec![
+            sample_event(1, 1_700_000_000, "pageview"),
+            invalid,
+            sample_event(1, 1_700_000_200, "pageview"),
+        ];
+
+        let recorded = store.record_events_batch(&events).unwrap();
+        assert_eq!(recorded, 2, "only the two valid events");
+        assert_eq!(
+            store.count_events(SiteId::new(1)).unwrap(),
+            2,
+            "the invalid event's savepoint must have rolled back cleanly, \
+             leaving the two valid events (before and after it) committed"
+        );
     }
 }
