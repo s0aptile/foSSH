@@ -11,19 +11,35 @@
    plus real tamper detection on every restart *and* on the initial
    launch, and nothing else.
 
-   Usage: fossh-watchdog <program> <gnupghome> <expected-key-fingerprint>
-                          <manifest-path> [args...]
+   Usage:
+     fossh-watchdog <program> <gnupghome> <expected-key-fingerprint>
+                     <manifest-path> [args...]
+     fossh-watchdog bootstrap-send <socket-path> <fingerprint>
+
+   The second form is §2.4's bootstrap handoff — sends this
+   installation's fingerprint to core's listener
+   (`fossh_admin::watchdog_pin::run_bootstrap_listener`, the Rust
+   side) exactly once, with a bounded retry since the two processes
+   have no guaranteed startup ordering. Still not wired into the first
+   form's own startup sequence yet — see dev/DURUM.md for exactly
+   what's connected versus still separate pieces (in particular: this
+   binary does not yet generate its own keypair, so nothing calls
+   `bootstrap-send` automatically today; it exists as a real,
+   independently-usable operation, exercised by a real cross-language
+   test against the actual Rust listener, not just scaffolding).
 
    Exit codes (distinct on purpose — §3.6 requires being able to tell
    "refused, needs attention" apart from "exited cleanly", and a
    restart-storm refusal apart from a tamper-detected one, so an
    eventual systemd unit/alerting hook has something to key off):
-     0 - supervised program exited 0 (clean, intentional shutdown)
+     0 - supervised program exited 0 (clean, intentional shutdown);
+         or bootstrap-send succeeded
      2 - usage error
      3 - tamper detected; restart or initial launch refused
      4 - restart-storm guard tripped
      5 - could not even read the manifest file (fails closed the same
-         as a tamper detection, distinguished for diagnosability) *)
+         as a tamper detection, distinguished for diagnosability)
+     6 - bootstrap-send failed (exhausted retries) *)
 
 open Fossh_watchdog_lib
 
@@ -98,6 +114,14 @@ let spawn_or_refuse (supervisor : Supervisor.t) ~gnupghome ~expected_key_fingerp
 
 let () =
   match Array.to_list Sys.argv with
+  | _ :: "bootstrap-send" :: socket_path :: fingerprint :: _ -> (
+      match Bootstrap.send_fingerprint_with_retry ~socket_path fingerprint with
+      | Ok () ->
+          log "bootstrap handoff sent to %s" socket_path;
+          exit 0
+      | Error e ->
+          log "BOOTSTRAP HANDOFF FAILED: %s" (Bootstrap.describe_error e);
+          exit 6)
   | _ :: program :: gnupghome :: expected_key_fingerprint :: manifest_path :: rest
     ->
       let args = Array.of_list (program :: rest) in
@@ -144,5 +168,6 @@ let () =
   | _ ->
       prerr_endline
         "usage: fossh-watchdog <program> <gnupghome> <expected-key-fingerprint> \
-         <manifest-path> [args...]";
+         <manifest-path> [args...]\n\
+        \       fossh-watchdog bootstrap-send <socket-path> <fingerprint>";
       exit 2

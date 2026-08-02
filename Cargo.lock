@@ -536,6 +536,7 @@ version = "0.1.0-alpha.1"
 dependencies = [
  "fossh-core",
  "fossh-ingest",
+ "nix",
  "sha2",
  "subtle",
  "zeroize",
