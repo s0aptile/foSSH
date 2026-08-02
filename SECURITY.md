@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Use [GitHub's private vulnerability reporting](https://github.com/s0aptile/fossh/security/advisories/new) on this repository. Do not open a public issue for a security report.
+Use [GitHub's private vulnerability reporting](https://github.com/s0aptile/foSSH/security/advisories/new) on this repository. Do not open a public issue for a security report.
 
 There is no email address, no postal address, no phone number for this project — GitHub private vulnerability reporting and public GitHub issues are the only contact surface, and that's intentional (see `tos.md`).
 

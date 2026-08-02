@@ -4,13 +4,14 @@ Internal reference for how this project is named, written about, split into publ
 
 ## 1. Name
 
-The product name is **foSSH** — lowercase `f`, uppercase `SSH`. Not "FoSSH", not "FOSSH", not "Fossh". Exceptions where casing is forced by the platform, not stylistic choice:
+The product name is **foSSH** — lowercase `f`, uppercase `SSH`. Not "FoSSH", not "FOSSH", not "Fossh". Officially a backronym: **F**ree **O**pen **S**ource **S**oftware **H**itcounter — the same five letters read two ways at once, the casing doubling as a nod to the well-known `SSH` acronym even though this project has nothing to do with the Secure Shell protocol. "Hitcounter" is deliberate, not a hedge: it names the actual scope (self-hosted visit/event counting) rather than reaching for a grander label. Exceptions where casing is forced by the platform, not stylistic choice:
 
 - Rust crate/package names: `fossh-core`, `fossh-cgi`, etc. (Cargo requires lowercase).
+- The Composer package name `s0aptile/fossh-php` (Packagist requires lowercase, same reasoning as Cargo above).
 - The PHP namespace `FoSSH\` (PSR-4 top-level namespaces are conventionally capitalized; this is the one deliberate exception, already shipped in `bindings/php`).
 - C symbols (`fossh_ctx`, `fossh_init`, ...) — all lowercase, per the C ABI convention in `include/fossh.h`.
 
-Everywhere else — prose, headings, READMEs, commit messages, the TUI, log output a human reads — it is **foSSH**.
+Everywhere else — prose, headings, READMEs, commit messages, the TUI, log output a human reads — it is **foSSH**. The real repository is `https://github.com/s0aptile/foSSH` (capital `SSH`, matching the product name) — not to be confused with the separate, lowercase `s0aptile/fossh-go` repository the Go binding lives in (`bindings/go/go.mod`), which is its own thing per Go's one-module-per-repository convention and was never part of this correction.
 
 ## 2. Writing tone
 

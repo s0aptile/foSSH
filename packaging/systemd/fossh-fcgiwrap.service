@@ -5,7 +5,7 @@
 # exec'd fresh per request, same as any CGI deployment shape.
 [Unit]
 Description=foSSH native CGI runner (fcgiwrap wrapping fossh-cgi)
-Documentation=https://github.com/s0aptile/fossh
+Documentation=https://github.com/s0aptile/foSSH
 Requires=fossh-fcgiwrap.socket
 After=fossh-fcgiwrap.socket network.target
 

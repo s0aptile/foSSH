@@ -18,8 +18,8 @@ version = "0.1.0-alpha.1"
 edition = "2024"
 license = "MIT"
 authors = ["$0aptile <https://github.com/s0aptile>"]
-repository = "https://github.com/s0aptile/fossh"
-homepage = "https://github.com/s0aptile/fossh"
+repository = "https://github.com/s0aptile/foSSH"
+homepage = "https://github.com/s0aptile/foSSH"
 rust-version = "1.97"
 
 [workspace.dependencies]

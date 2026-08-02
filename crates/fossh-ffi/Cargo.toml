@@ -7,8 +7,8 @@ version = "0.1.0-alpha.1"
 edition = "2024"
 license = "MIT"
 authors = ["$0aptile <https://github.com/s0aptile>"]
-repository = "https://github.com/s0aptile/fossh"
-homepage = "https://github.com/s0aptile/fossh"
+repository = "https://github.com/s0aptile/foSSH"
+homepage = "https://github.com/s0aptile/foSSH"
 rust-version = "1.97"
 description = "foSSH C ABI: cdylib/staticlib for embedding foSSH directly into a host process (Go, PHP, Ruby, C, Zig, Python, ...) — no process, no socket, no port. See DECISIONS.md ADR-0002 for why this is its own Cargo workspace."
 
