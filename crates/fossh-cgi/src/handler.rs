@@ -69,9 +69,15 @@ fn spool_dir(data_dir: &Path, site_id: SiteId) -> PathBuf {
     site_dir(data_dir, site_id).join("spool")
 }
 
-fn salt_dir(data_dir: &Path, site_id: SiteId) -> PathBuf {
-    site_dir(data_dir, site_id).join("salt")
-}
+// Note there is no per-site salt path here, unlike spool/ratelimit/nonces
+// below. `daily_salt` is deliberately *one* directory shared by every
+// site on the install (`Config.salt_dir`, §10) — P2's hash formula
+// already mixes `site_id` into `visitor_id` itself
+// (`BLAKE3(daily_salt ‖ client_ip ‖ ua_string ‖ site_id)`), so sharing the
+// salt does not make visitors linkable across sites; the site separation
+// comes from `site_id` being part of the hash input, not from the salt.
+// A separate salt file per site would just be an unshared duplicate of
+// the same rotation, and would leave `Config.salt_dir` unused.
 
 fn ratelimit_path(data_dir: &Path, site_id: SiteId) -> PathBuf {
     site_dir(data_dir, site_id).join("ratelimit.bin")
@@ -81,13 +87,24 @@ fn nonce_cache_path(data_dir: &Path, site_id: SiteId) -> PathBuf {
     site_dir(data_dir, site_id).join("nonces.bin")
 }
 
-/// Extracts the slug from a bearer token shaped `fossh_<slug>_<base32>`
-/// (§8). Slugs may themselves contain `_`, so this splits on the *last*
-/// `_` rather than the first.
-fn bearer_slug(token: &str) -> Option<&str> {
+/// Splits a bearer token shaped `fossh_<slug>_<base32>` (§8) into the
+/// slug and the raw 32-byte write key — decoding the base32 portion,
+/// *not* returning it as text. Getting this step wrong (comparing
+/// `BLAKE3` of the base32 string, or of the whole token, instead of the
+/// decoded bytes) means it can never match what `fossh site create`
+/// stored, since that hashes the raw key bytes (§8: "Only `BLAKE3(key)`
+/// is stored" — see `auth::verify_bearer_key`'s doc comment). Slugs may
+/// themselves contain `_`, so this splits on the *last* `_` rather than
+/// the first.
+fn parse_bearer_token(token: &str) -> Option<(&str, [u8; 32])> {
     let rest = token.strip_prefix("fossh_")?;
-    let (slug, _key_material) = rest.rsplit_once('_')?;
-    if slug.is_empty() { None } else { Some(slug) }
+    let (slug, key_b32) = rest.rsplit_once('_')?;
+    if slug.is_empty() {
+        return None;
+    }
+    let key_bytes = fossh_core::base32::decode(key_b32)?;
+    let key: [u8; 32] = key_bytes.try_into().ok()?;
+    Some((slug, key))
 }
 
 enum AuthOutcome {
@@ -100,7 +117,7 @@ fn authenticate(env: &CgiEnv, body: &[u8], data_dir: &Path, now: i64) -> AuthOut
         let Some(token) = header.strip_prefix("Bearer ") else {
             return AuthOutcome::Unauthorized;
         };
-        let Some(slug) = bearer_slug(token) else {
+        let Some((slug, presented_key)) = parse_bearer_token(token) else {
             return AuthOutcome::Unauthorized;
         };
         let site = match site_cache::read(data_dir, slug) {
@@ -110,7 +127,7 @@ fn authenticate(env: &CgiEnv, body: &[u8], data_dir: &Path, now: i64) -> AuthOut
         let Some(stored_hash) = site.key_hash() else {
             return AuthOutcome::Unauthorized;
         };
-        return if auth::verify_bearer_key(token, &stored_hash) {
+        return if auth::verify_bearer_key(&presented_key, &stored_hash) {
             AuthOutcome::Ok(site)
         } else {
             AuthOutcome::Unauthorized
@@ -175,6 +192,9 @@ pub struct HandleParams<'a> {
     pub env: &'a CgiEnv,
     pub body: &'a [u8],
     pub data_dir: &'a Path,
+    /// One directory shared by every site — see the comment above on why
+    /// this isn't `site_dir`-scoped like spool/ratelimit/nonces.
+    pub salt_dir: &'a Path,
     pub rate_limit_per_sec: u32,
     pub rate_limit_burst: u32,
     pub respect_optout_signals: bool,
@@ -206,7 +226,7 @@ pub fn handle_ingest(params: &HandleParams) -> CgiResponse {
         Err(_) => return CgiResponse::plain(500),
     }
 
-    let salt_mgr = SaltManager::new(salt_dir(params.data_dir, site.site_id()));
+    let salt_mgr = SaltManager::new(params.salt_dir.to_path_buf());
     let salt = match salt_mgr.current() {
         Ok(s) => s,
         Err(_) => return CgiResponse::plain(500),
@@ -306,6 +326,14 @@ mod tests {
         site_cache::write(data_dir, &site).unwrap();
     }
 
+    /// Builds a bearer token the same way `fossh site create` does:
+    /// `fossh_<slug>_<base32(raw_key)>`. Using this (instead of a
+    /// hand-typed literal token string) is what makes these tests catch
+    /// the raw-key-vs-string-hashing bug this file used to have.
+    fn bearer_token_for(slug: &str, raw_key: &[u8; 32]) -> String {
+        format!("fossh_{slug}_{}", base32::encode(raw_key))
+    }
+
     fn base_env() -> CgiEnv {
         CgiEnv {
             method: "POST".to_string(),
@@ -326,6 +354,7 @@ mod tests {
             },
             body: b"",
             data_dir: Path::new("/nonexistent/path/that/does/not/exist"),
+            salt_dir: Path::new("/nonexistent/path/that/does/not/exist"),
             rate_limit_per_sec: 60,
             rate_limit_burst: 600,
             respect_optout_signals: true,
@@ -341,6 +370,7 @@ mod tests {
             env: &base_env(),
             body: br#"{"name":"pageview"}"#,
             data_dir: &dir,
+            salt_dir: &dir,
             rate_limit_per_sec: 60,
             rate_limit_burst: 600,
             respect_optout_signals: true,
@@ -353,9 +383,10 @@ mod tests {
     #[test]
     fn bearer_auth_happy_path_is_204_and_spools_a_frame() {
         let dir = scratch_dir("bearer-happy");
-        let token = "fossh_blog_ABCDEFGHIJKLMNOP";
-        let key_hash = *blake3::hash(token.as_bytes()).as_bytes();
+        let raw_key = [0xABu8; 32];
+        let key_hash = *blake3::hash(&raw_key).as_bytes();
         seed_site(&dir, "blog", key_hash, &["pageview"], true);
+        let token = bearer_token_for("blog", &raw_key);
 
         let mut env = base_env();
         env.authorization = Some(format!("Bearer {token}"));
@@ -365,6 +396,7 @@ mod tests {
             env: &env,
             body: br#"{"name":"pageview","path":"/hello"}"#,
             data_dir: &dir,
+            salt_dir: &dir,
             rate_limit_per_sec: 60,
             rate_limit_burst: 600,
             respect_optout_signals: true,
@@ -387,15 +419,21 @@ mod tests {
     #[test]
     fn bearer_auth_wrong_key_is_401() {
         let dir = scratch_dir("bearer-wrong");
-        let real_key_hash = *blake3::hash(b"fossh_blog_REALKEY").as_bytes();
+        let real_key = [0xABu8; 32];
+        let real_key_hash = *blake3::hash(&real_key).as_bytes();
         seed_site(&dir, "blog", real_key_hash, &["pageview"], true);
 
+        // Correctly *shaped* (32 raw bytes, properly base32-encoded) but a
+        // different key entirely — exercises the hash-mismatch path
+        // specifically, not "token fails to even parse".
+        let wrong_key = [0xCDu8; 32];
         let mut env = base_env();
-        env.authorization = Some("Bearer fossh_blog_WRONGKEY".to_string());
+        env.authorization = Some(format!("Bearer {}", bearer_token_for("blog", &wrong_key)));
         let resp = handle_ingest(&HandleParams {
             env: &env,
             body: br#"{"name":"pageview"}"#,
             data_dir: &dir,
+            salt_dir: &dir,
             rate_limit_per_sec: 60,
             rate_limit_burst: 600,
             respect_optout_signals: true,
@@ -423,6 +461,7 @@ mod tests {
             env: &env,
             body,
             data_dir: &dir,
+            salt_dir: &dir,
             rate_limit_per_sec: 60,
             rate_limit_burst: 600,
             respect_optout_signals: true,
@@ -454,6 +493,7 @@ mod tests {
             env: &env,
             body,
             data_dir: &dir,
+            salt_dir: &dir,
             rate_limit_per_sec: 60,
             rate_limit_burst: 600,
             respect_optout_signals: true,
@@ -486,6 +526,7 @@ mod tests {
             env: &env,
             body,
             data_dir: &dir,
+            salt_dir: &dir,
             rate_limit_per_sec: 60,
             rate_limit_burst: 600,
             respect_optout_signals: true,
@@ -522,6 +563,7 @@ mod tests {
             env: &env,
             body,
             data_dir: &dir,
+            salt_dir: &dir,
             rate_limit_per_sec: 60,
             rate_limit_burst: 600,
             respect_optout_signals: true,
@@ -534,9 +576,10 @@ mod tests {
     #[test]
     fn unknown_route_under_valid_auth_is_422() {
         let dir = scratch_dir("unknown-route");
-        let token = "fossh_blog_ABCDEFGHIJKLMNOP";
-        let key_hash = *blake3::hash(token.as_bytes()).as_bytes();
+        let raw_key = [0xABu8; 32];
+        let key_hash = *blake3::hash(&raw_key).as_bytes();
         seed_site(&dir, "blog", key_hash, &["pageview"], true);
+        let token = bearer_token_for("blog", &raw_key);
 
         let mut env = base_env();
         env.method = "DELETE".to_string();
@@ -546,6 +589,7 @@ mod tests {
             env: &env,
             body: b"",
             data_dir: &dir,
+            salt_dir: &dir,
             rate_limit_per_sec: 60,
             rate_limit_burst: 600,
             respect_optout_signals: true,
@@ -558,9 +602,10 @@ mod tests {
     #[test]
     fn public_site_gets_halved_rate_limit() {
         let dir = scratch_dir("public-ratelimit");
-        let token = "fossh_blog_ABCDEFGHIJKLMNOP";
-        let key_hash = *blake3::hash(token.as_bytes()).as_bytes();
+        let raw_key = [0xABu8; 32];
+        let key_hash = *blake3::hash(&raw_key).as_bytes();
         seed_site(&dir, "blog", key_hash, &["pageview"], true);
+        let token = bearer_token_for("blog", &raw_key);
 
         let mut env = base_env();
         env.authorization = Some(format!("Bearer {token}"));
@@ -569,6 +614,7 @@ mod tests {
             env: &env,
             body: br#"{"name":"pageview"}"#,
             data_dir: &dir,
+            salt_dir: &dir,
             rate_limit_per_sec: 60,
             rate_limit_burst: 2, // configured burst 2 -> public sites get floor(2/2)=1
             respect_optout_signals: true,
@@ -588,14 +634,29 @@ mod tests {
     }
 
     #[test]
-    fn bearer_slug_extraction() {
-        assert_eq!(bearer_slug("fossh_blog_ABCDEF"), Some("blog"));
+    fn parse_bearer_token_round_trips_slug_and_raw_key() {
+        let raw_key = [0x42u8; 32];
+        let token = bearer_token_for("blog", &raw_key);
+        assert_eq!(parse_bearer_token(&token), Some(("blog", raw_key)));
+    }
+
+    #[test]
+    fn parse_bearer_token_handles_underscores_in_the_slug() {
+        let raw_key = [0x42u8; 32];
+        let token = bearer_token_for("my_long_slug", &raw_key);
+        assert_eq!(parse_bearer_token(&token), Some(("my_long_slug", raw_key)));
+    }
+
+    #[test]
+    fn parse_bearer_token_rejects_malformed_tokens() {
+        assert_eq!(parse_bearer_token("not-a-fossh-key"), None);
+        assert_eq!(parse_bearer_token("fossh_"), None);
+        assert_eq!(parse_bearer_token("fossh_onlyoneseg"), None);
+        assert_eq!(parse_bearer_token("fossh_blog_notbase32!!!"), None);
         assert_eq!(
-            bearer_slug("fossh_my_long_slug_ABCDEF"),
-            Some("my_long_slug")
+            parse_bearer_token("fossh_blog_MY"),
+            None,
+            "valid base32 but wrong decoded length"
         );
-        assert_eq!(bearer_slug("not-a-fossh-key"), None);
-        assert_eq!(bearer_slug("fossh_"), None);
-        assert_eq!(bearer_slug("fossh_onlyoneseg"), None);
     }
 }

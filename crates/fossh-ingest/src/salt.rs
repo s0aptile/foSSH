@@ -15,13 +15,7 @@ use zeroize::Zeroizing;
 use fossh_core::visitor::SALT_LEN;
 
 use crate::IngestError;
-
-fn read_random_bytes(n: usize) -> Result<Zeroizing<Vec<u8>>, IngestError> {
-    let mut f = File::open("/dev/urandom").map_err(IngestError::Random)?;
-    let mut buf = Zeroizing::new(vec![0u8; n]);
-    f.read_exact(&mut buf).map_err(IngestError::Random)?;
-    Ok(buf)
-}
+use crate::random::read_random_bytes;
 
 fn utc_day(t: SystemTime) -> Result<i64, IngestError> {
     let secs = t

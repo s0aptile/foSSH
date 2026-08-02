@@ -5,6 +5,7 @@ members = [
     "crates/fossh-store",
     "crates/fossh-ingest",
     "crates/fossh-cgi",
+    "crates/fossh-cli",
 ]
 # Crates join `members` as each milestone lands (M2 adds fossh-store, etc.) — see DECISIONS.md.
 # fossh-ffi is deliberately NEVER a member — see DECISIONS.md "FFI crate split".

@@ -78,8 +78,16 @@ pub fn timestamp_in_window(ts: i64, now: i64) -> bool {
 /// Bearer-mode key check (§8's "Bearer-only mode... permitted for browser-
 /// beacon usage where signing is impossible"): the presented key's
 /// `BLAKE3` hash must match the site's stored `key_hash`, in constant time.
-pub fn verify_bearer_key(presented_key: &str, stored_key_hash: &[u8; 32]) -> bool {
-    blake3::hash(presented_key.as_bytes())
+///
+/// Takes the raw 32-byte write key, *not* the `fossh_<slug>_<base32>`
+/// wire token — §8 stores `BLAKE3(key)` where `key` is those 32 bytes;
+/// hashing the formatted token string (prefix and base32 encoding
+/// included) would hash something else entirely and never match what
+/// `fossh site create` computed. Callers holding the wire token need to
+/// strip the `fossh_<slug>_` prefix and base32-decode the remainder
+/// first — see `fossh-cgi`'s `handler::parse_bearer_token`.
+pub fn verify_bearer_key(presented_key: &[u8; 32], stored_key_hash: &[u8; 32]) -> bool {
+    blake3::hash(presented_key)
         .as_bytes()
         .ct_eq(stored_key_hash)
         .into()
@@ -241,10 +249,10 @@ mod tests {
 
     #[test]
     fn bearer_key_verification() {
-        let key = "fossh_blog_ABCDEFGH";
-        let hash = *blake3::hash(key.as_bytes()).as_bytes();
-        assert!(verify_bearer_key(key, &hash));
-        assert!(!verify_bearer_key("wrong-key", &hash));
+        let write_key = [7u8; 32];
+        let hash = *blake3::hash(&write_key).as_bytes();
+        assert!(verify_bearer_key(&write_key, &hash));
+        assert!(!verify_bearer_key(&[8u8; 32], &hash));
     }
 
     fn scratch_path(name: &str) -> PathBuf {

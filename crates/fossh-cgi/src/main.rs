@@ -10,6 +10,18 @@
 //! one buffered write, so a panic before that point produces no output
 //! at all — never a partial or malformed response — and nothing panics
 //! prints goes anywhere but stderr, which the client never sees.
+//!
+//! **No `fossh.toml` here, on purpose** (see DECISIONS.md). This binary
+//! reads a handful of `FOSSH_*` environment variables directly — the
+//! same names `fossh_core::config::Config`'s env-override pass
+//! recognizes, with the same defaults `Config::default()` would give —
+//! rather than calling `Config::load()`. `fossh-cli` (the long-running,
+//! not-per-request commands) parses the actual TOML file; the operator
+//! points their webserver's CGI directives at the same values via env
+//! vars (`SetEnv`, `fastcgi_param`, etc.), which is the native way CGI
+//! processes receive configuration anyway. `Config::load()`'s file
+//! search + TOML parse is real, if small, work — needless on a path
+//! §7.1 explicitly budgets at < 5 ms p99.
 
 mod handler;
 
@@ -111,6 +123,21 @@ fn main() {
     let data_dir = std::env::var_os("FOSSH_DATA_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/var/lib/fossh"));
+    let salt_dir = std::env::var_os("FOSSH_SALT_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/run/fossh"));
+    // Same env var names and defaults as `Config`'s override pass and
+    // `Config::default()` — see the module doc comment.
+    let rate_limit_per_sec = env_var("FOSSH_RATE_LIMIT_PER_SEC")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
+    let rate_limit_burst = env_var("FOSSH_RATE_LIMIT_BURST")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(600);
+    let respect_optout_signals = !matches!(
+        env_var("FOSSH_RESPECT_OPTOUT_SIGNALS").as_deref(),
+        Some("false") | Some("0")
+    );
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -141,12 +168,10 @@ fn main() {
         env: &env,
         body: &body,
         data_dir: &data_dir,
-        // §10 defaults; a config-driven override lands with `fossh-cli`
-        // (M4), which is what actually parses `fossh.toml` for the
-        // long-running commands. The CGI hot path stays argument-free.
-        rate_limit_per_sec: 60,
-        rate_limit_burst: 600,
-        respect_optout_signals: true,
+        salt_dir: &salt_dir,
+        rate_limit_per_sec,
+        rate_limit_burst,
+        respect_optout_signals,
         now,
     };
 

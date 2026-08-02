@@ -155,6 +155,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fossh-cli"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "blake3",
+ "fossh-core",
+ "fossh-ingest",
+ "fossh-store",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "fossh-core"
 version = "0.1.0-alpha.1"
 dependencies = [

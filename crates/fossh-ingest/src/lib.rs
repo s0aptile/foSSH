@@ -14,7 +14,9 @@
 //! under concurrent CGI processes, without needing `unsafe` anywhere here.
 
 pub mod auth;
+pub mod compact;
 pub mod pipeline;
+pub mod random;
 pub mod ratelimit;
 pub mod salt;
 pub mod site_cache;

@@ -1,0 +1,22 @@
+[package]
+name = "fossh-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "foSSH operator CLI: init, site, query, maintain, export, doctor."
+
+[[bin]]
+name = "fossh"
+path = "src/main.rs"
+
+[dependencies]
+fossh-core.workspace = true
+fossh-store.workspace = true
+fossh-ingest.workspace = true
+blake3.workspace = true
+serde_json.workspace = true
+toml.workspace = true

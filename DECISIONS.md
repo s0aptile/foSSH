@@ -142,7 +142,26 @@ One entry per non-obvious choice. Newest at the bottom. Format: decision, altern
 
 ---
 
-## ADR-0017 — Credential handling for local privileged commands
+## ADR-0017 — `fossh-cgi` reads `FOSSH_*` env vars directly; it never calls `Config::load()`
+
+**Decision:** The CGI binary reads `FOSSH_DATA_DIR`, `FOSSH_SALT_DIR`, `FOSSH_RATE_LIMIT_PER_SEC`, `FOSSH_RATE_LIMIT_BURST`, `FOSSH_RESPECT_OPTOUT_SIGNALS` straight from the process environment — same names and defaults as `Config`'s own env-override pass — instead of parsing `fossh.toml`. `fossh-cli`'s long-running commands (`maintain`, `query`, ...) use `Config::load()` as normal.
+**Alternatives rejected:** Having `fossh-cgi` call `Config::load()` too, for consistency with `fossh-cli`.
+**Reason:** §7.1 sets a < 5 ms p99 budget for the CGI hot path and says outright "startup cost matters." `Config::load()` searches up to three candidate paths and parses TOML on every single invocation — a real, if small, cost that buys nothing a webserver's own `SetEnv`/`fastcgi_param` directives don't already solve, which is the standard way CGI processes receive configuration in the first place. Operators who want one source of truth can have their webserver config reference the same values `fossh.toml` holds; `fossh-cgi` doesn't need to be the one parsing it.
+
+**Follow-on catch, while integration-testing this end to end:** `fossh-cgi`'s salt-directory resolution had drifted from `Config.salt_dir` — `handler.rs` was computing a *per-site* salt path (`data_dir/sites/<id>/salt`) instead of using one shared directory, unlike spool/ratelimit/nonces, which genuinely are per-site. Fixed to share one salt directory across all sites, which is sound because P2's hash formula already mixes `site_id` into `visitor_id` (`BLAKE3(daily_salt ‖ client_ip ‖ ua_string ‖ site_id)`) — site separation comes from that, not from an unshared salt. A per-site salt would've been a pointless duplication that left `Config.salt_dir` dead code. Caught by actually running `init` → `site create` → a live CGI request end to end, not by any unit test — none of them exercised both halves (M1's `Config` and M3's `handler.rs`) against each other.
+
+---
+
+## ADR-0018 — S8 file-permission enforcement: refuse for the database, tighten for the spool
+
+**Decision:** `fossh_store::Store::open` actively enforces `0600` on the database file: a brand-new file is created with `0600` before SQLite ever opens it (closing the umask-default-permissions race window), and an *existing* file found with wider permissions makes `open` return `Err(StoreError::PermissionsTooOpen)` with the exact `chmod` command in the message — it does not silently rewrite the file's permissions. `fossh_ingest::spool::append_frame` also enforces `0600`, but tightens a wider-permission file in place rather than refusing.
+**Reason:** S8 says plainly: "DB and spool files `0600`... Refuse to start if permissions are wider; print the exact `chmod` to run" — an invariant that was simply unimplemented until `fossh doctor` (M4) was run against a real installation and reported the database file at `644`. Caught by actually running `init` → `site create` → a live CGI request → `maintain` → `query` → `doctor` end to end, the same way the `key_hash` bearer-auth bug (ADR-0015's implementation) and the salt-directory drift (ADR-0017) were — none of the three showed up in unit tests, because each one only breaks when two components that were tested in isolation are wired together for real.
+
+The database and the spool get different treatment on purpose: `Store::open` is called by `fossh-cli`'s long-running, operator-invoked commands, where refusing to start and asking a human to run one `chmod` command is the right level of friction for a file meant to persist and hold everything the retention window covers. `append_frame` runs on the `fossh-cgi` hot path, where §7.1's "never block the request" outweighs strict refusal — a spool file is transient (drained and deleted by the next `maintain`/compactor pass within, at most, a rotation cycle), so silently tightening its permissions and moving on is the safer choice for availability without meaningfully weakening S8's intent.
+
+---
+
+## ADR-0019 — Credential handling for local privileged commands
 
 **Decision:** No password is ever placed in a shell command, file, or log from this session. Where a build step genuinely needs `sudo` (installing a missing system package), the exact command is surfaced for the user to run themselves via their own shell, rather than piping a credential through a tool call.
 **Reason:** A plaintext password embedded in a command is retained wherever that command is recorded. Standard toolchain setup (rustup, cargo, musl target) needed no elevated privileges at all; `cc`/`gcc` were already present on this machine.

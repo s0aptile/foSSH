@@ -26,6 +26,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 use fossh_core::types::{Country, Event, EventKind, Host, Path as SanitizedPath, SiteId};
@@ -269,10 +270,22 @@ pub fn append_frame(dir: &Path, event: &Event) -> Result<(), IngestError> {
     frame.extend_from_slice(&crc32(&payload).to_le_bytes());
     frame.extend_from_slice(&payload);
 
+    // S8: spool files are 0600. Unlike `fossh-store::Store::open`
+    // (M4, refuses to start on a pre-existing wide-permission DB file),
+    // this *tightens* rather than refuses — §7.1's "never block the
+    // request" wins for the per-request hot path; a permissions drift
+    // here doesn't carry the same stakes as the long-term database, and
+    // `fossh doctor` (M4) already reports on-disk permission drift for
+    // an operator to notice out-of-band.
+    let is_new = !current.exists();
     let mut file = OpenOptions::new()
         .append(true)
         .create(true)
+        .mode(0o600)
         .open(&current)?;
+    if !is_new {
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
     let written = file.write(&frame)?;
     if written != frame.len() {
         return Err(IngestError::Io(std::io::Error::other(format!(
@@ -447,6 +460,37 @@ mod tests {
                 DrainedFrame::Corrupt => panic!("unexpected corrupt frame"),
             }
         }
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn spool_file_is_0600() {
+        let dir = scratch_dir("perms-fresh");
+        append_frame(&dir, &sample_event()).unwrap();
+        let mode = fs::metadata(dir.join("current.bin"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn spool_file_permissions_are_tightened_if_found_wider() {
+        let dir = scratch_dir("perms-tighten");
+        fs::create_dir_all(&dir).unwrap();
+        let current = dir.join("current.bin");
+        fs::write(&current, b"").unwrap();
+        fs::set_permissions(&current, fs::Permissions::from_mode(0o644)).unwrap();
+
+        append_frame(&dir, &sample_event()).unwrap();
+
+        let mode = fs::metadata(&current).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "an existing, wider-permission spool file must be tightened, not refused"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 
