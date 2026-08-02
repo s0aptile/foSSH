@@ -4,10 +4,7 @@
    request by fcgiwrap and has no persistent instance for a supervisor
    to watch or restart. *)
 
-type restart_policy = {
-  max_restarts : int;
-  window_seconds : float;
-}
+type restart_policy = { max_restarts : int; window_seconds : float }
 
 (* Not asked for explicitly by §3.3, but "restart on crash" with no
    bound at all turns one crash-looping binary into a self-inflicted
@@ -43,10 +40,7 @@ let record_restart_and_check_storm (t : t) : bool =
   t.restart_times <- recent;
   List.length recent <= t.policy.max_restarts
 
-type wait_outcome =
-  | Exited of int
-  | Signaled of int
-  | Stopped of int
+type wait_outcome = Exited of int | Signaled of int | Stopped of int
 
 (* Blocks until the currently-supervised child exits. Callers loop:
    wait, decide whether to restart (tamper check + storm guard), spawn
@@ -62,23 +56,43 @@ let wait_for_exit (t : t) : wait_outcome =
       | Unix.WSIGNALED n -> Signaled n
       | Unix.WSTOPPED n -> Stopped n)
 
+(* The tamper-check gate shared by both the initial spawn and every
+   restart — adversarial review found the *initial* spawn bypassing
+   this check entirely in an earlier version, so a binary tampered
+   with before the watchdog's own launch would run at least once no
+   matter what, and indefinitely if it never happened to crash. There
+   is now exactly one path into `spawn`, from either caller. See
+   ADR-0041. *)
+let tamper_check (t : t) ~(gnupghome : string) ~(expected_key_fingerprint : string)
+    ~(clearsigned_manifest : string) : (unit, Manifest.check_result) result =
+  match
+    Manifest.check ~gnupghome ~expected_key_fingerprint ~program:t.program
+      ~clearsigned_manifest
+  with
+  | Ok_manifest _ -> Ok ()
+  | (Signature_invalid _ | Hash_mismatch _ | Program_not_covered _ | Io_error _)
+    as result ->
+      Error result
+
+type spawn_decision =
+  | Spawned of int
+  | Spawn_refused_tamper of Manifest.check_result
+
+let spawn_if_safe (t : t) ~(gnupghome : string) ~(expected_key_fingerprint : string)
+    ~(clearsigned_manifest : string) : spawn_decision =
+  match tamper_check t ~gnupghome ~expected_key_fingerprint ~clearsigned_manifest with
+  | Error result -> Spawn_refused_tamper result
+  | Ok () -> Spawned (spawn t)
+
 type restart_decision =
   | Restarted of int
-  | Refused_tamper_detected of Manifest.check_result
-  | Refused_restart_storm
+  | Restart_refused_tamper of Manifest.check_result
+  | Restart_refused_storm
 
-(* The single gate every restart goes through: tamper check first
-   (fail closed — a Signature_invalid, Hash_mismatch, or Io_error all
-   refuse equally, since "the manifest itself won't verify" and "a
-   file doesn't match" are both reasons not to trust what's about to
-   run), then the storm guard. Order matters: a storm of *tampered*
-   restarts should be reported as tamper detection, not miscounted as
-   an ordinary restart storm. *)
-let restart_if_safe (t : t) ~(gnupghome : string) ~(clearsigned_manifest : string)
-    : restart_decision =
-  match Manifest.check ~gnupghome ~clearsigned_manifest with
-  | (Signature_invalid _ | Hash_mismatch _ | Io_error _) as result ->
-      Refused_tamper_detected result
-  | Ok_manifest _ ->
+let restart_if_safe (t : t) ~(gnupghome : string) ~(expected_key_fingerprint : string)
+    ~(clearsigned_manifest : string) : restart_decision =
+  match tamper_check t ~gnupghome ~expected_key_fingerprint ~clearsigned_manifest with
+  | Error result -> Restart_refused_tamper result
+  | Ok () ->
       if record_restart_and_check_storm t then Restarted (spawn t)
-      else Refused_restart_storm
+      else Restart_refused_storm

@@ -25,8 +25,9 @@ let () =
   check "first max_restarts (3) attempts are allowed"
     (results = [ true; true; true; false; false ]);
 
-  (* restart_if_safe: real end-to-end gate against a real signed
-     manifest, using generate_key/detach helpers from Test_helpers *)
+  (* spawn_if_safe / restart_if_safe: real end-to-end gate against a
+     real signed manifest that actually covers the supervised
+     program's own path, since ADR-0041's fix requires that. *)
   let k = generate_key () in
   let watched_dir = mkdtemp () in
   Fun.protect
@@ -36,37 +37,70 @@ let () =
     (fun () ->
       let watched_file = Filename.concat watched_dir "core.bin" in
       write_file watched_file "core binary contents (stand-in)";
-      let good_manifest =
-        match Manifest.hash_all [ watched_file ] with
+      let sign_manifest_for paths =
+        match Manifest.hash_all paths with
         | Error e -> failwith e
         | Ok entries -> (
             match
-              Manifest.sign ~gnupghome:k.gnupghome ~key_id:k.key_id
+              Manifest.sign ~gnupghome:k.gnupghome ~key_id:k.fingerprint
                 (Manifest.render entries)
             with
             | Error e -> failwith e
             | Ok s -> s)
       in
-      let t3 =
-        Supervisor.create ~program:"/bin/true" [| "/bin/true" |]
-      in
+      let t3 = Supervisor.create ~program:"/bin/true" [| "/bin/true" |] in
+
+      (* Initial spawn now goes through the same gate restarts do
+         (ADR-0041, finding #1) — a manifest that doesn't cover
+         t3.program at all must refuse even the FIRST spawn. *)
+      let manifest_missing_program = sign_manifest_for [ watched_file ] in
+      (match
+         Supervisor.spawn_if_safe t3 ~gnupghome:k.gnupghome
+           ~expected_key_fingerprint:k.fingerprint
+           ~clearsigned_manifest:manifest_missing_program
+       with
+      | Spawn_refused_tamper (Program_not_covered _) ->
+          check
+            "spawn_if_safe refuses the INITIAL spawn when the manifest doesn't cover \
+             the program"
+            true
+      | _ ->
+          check
+            "spawn_if_safe refuses the INITIAL spawn when the manifest doesn't cover \
+             the program"
+            false);
+
+      let manifest_covering_program = sign_manifest_for [ watched_file; "/bin/true" ] in
+      (match
+         Supervisor.spawn_if_safe t3 ~gnupghome:k.gnupghome
+           ~expected_key_fingerprint:k.fingerprint
+           ~clearsigned_manifest:manifest_covering_program
+       with
+      | Spawned _ ->
+          check "spawn_if_safe spawns when the manifest covers the program and is clean"
+            true
+      | Spawn_refused_tamper _ ->
+          check "spawn_if_safe spawns when the manifest covers the program and is clean"
+            false);
+      (match Supervisor.wait_for_exit t3 with Exited 0 -> () | _ -> ());
+
       (match
          Supervisor.restart_if_safe t3 ~gnupghome:k.gnupghome
-           ~clearsigned_manifest:good_manifest
+           ~expected_key_fingerprint:k.fingerprint
+           ~clearsigned_manifest:manifest_covering_program
        with
-      | Restarted _ -> check "restart_if_safe restarts on a clean manifest" true
-      | _ -> check "restart_if_safe restarts on a clean manifest" false);
+      | Restarted _ -> check "restart_if_safe restarts on a clean, covering manifest" true
+      | _ -> check "restart_if_safe restarts on a clean, covering manifest" false);
+      (match Supervisor.wait_for_exit t3 with Exited 0 -> () | _ -> ());
 
       write_file watched_file "TAMPERED";
       (match
          Supervisor.restart_if_safe t3 ~gnupghome:k.gnupghome
-           ~clearsigned_manifest:good_manifest
+           ~expected_key_fingerprint:k.fingerprint
+           ~clearsigned_manifest:manifest_covering_program
        with
-      | Refused_tamper_detected (Hash_mismatch _) ->
-          check "restart_if_safe refuses a restart when a watched file changed"
-            true
-      | _ ->
-          check "restart_if_safe refuses a restart when a watched file changed"
-            false);
+      | Restart_refused_tamper (Hash_mismatch _) ->
+          check "restart_if_safe refuses a restart when a watched file changed" true
+      | _ -> check "restart_if_safe refuses a restart when a watched file changed" false);
 
       summarize ())

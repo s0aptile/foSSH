@@ -8,29 +8,103 @@
    connection and calls them yet. That's the next pass; see
    DECISIONS.md and dev/DURUM.md for exactly what's built versus
    still open. Running this binary today gives you real crash-restart
-   plus real tamper detection on every restart, and nothing else.
+   plus real tamper detection on every restart *and* on the initial
+   launch, and nothing else.
 
-   Usage: fossh-watchdog <program> <gnupghome> <manifest-path> [args...] *)
+   Usage: fossh-watchdog <program> <gnupghome> <expected-key-fingerprint>
+                          <manifest-path> [args...]
+
+   Exit codes (distinct on purpose — §3.6 requires being able to tell
+   "refused, needs attention" apart from "exited cleanly", and a
+   restart-storm refusal apart from a tamper-detected one, so an
+   eventual systemd unit/alerting hook has something to key off):
+     0 - supervised program exited 0 (clean, intentional shutdown)
+     2 - usage error
+     3 - tamper detected; restart or initial launch refused
+     4 - restart-storm guard tripped
+     5 - could not even read the manifest file (fails closed the same
+         as a tamper detection, distinguished for diagnosability) *)
 
 open Fossh_watchdog_lib
 
 let log fmt = Printf.eprintf ("fossh-watchdog: " ^^ fmt ^^ "\n%!")
 
-let read_file path =
-  let ic = open_in_bin path in
-  let len = in_channel_length ic in
-  let content = really_input_string ic len in
-  close_in ic;
-  content
+(* 1 MiB is generous for any real manifest — even several thousand
+   watched files at ~70 bytes/entry stays well under it — while still
+   bounding the worst case an oversized or misconfigured
+   `manifest_path` could do to this process, which is the only thing
+   standing between a core-process crash and a restart. *)
+let max_manifest_bytes = 1 * 1024 * 1024
+
+type manifest_read_error = Missing | Not_a_file | Too_large of int | Unreadable of string
+
+let read_manifest (path : string) : (string, manifest_read_error) result =
+  match Unix.stat path with
+  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Error Missing
+  | exception Unix.Unix_error (e, _, _) -> Error (Unreadable (Unix.error_message e))
+  | { Unix.st_kind = Unix.S_REG; st_size; _ } when st_size > max_manifest_bytes ->
+      Error (Too_large st_size)
+  | { Unix.st_kind = Unix.S_REG; _ } -> (
+      try Ok (Fileutil.read_all_bytes path)
+      with Sys_error msg -> Error (Unreadable msg))
+  | _ -> Error Not_a_file
+
+let describe_manifest_error = function
+  | Missing -> "manifest file does not exist"
+  | Not_a_file -> "manifest path is not a regular file"
+  | Too_large n -> Printf.sprintf "manifest file too large (%d bytes, cap %d)" n max_manifest_bytes
+  | Unreadable msg -> Printf.sprintf "could not read manifest: %s" msg
+
+let describe_check_result = function
+  | Manifest.Signature_invalid e -> Printf.sprintf "manifest signature invalid: %s" e
+  | Manifest.Hash_mismatch { path; expected; actual } ->
+      Printf.sprintf "tamper detected in %s (expected %s, got %s)" path expected actual
+  | Manifest.Program_not_covered p ->
+      Printf.sprintf "manifest does not cover the program about to run (%s)" p
+  | Manifest.Io_error e -> Printf.sprintf "could not verify manifest: %s" e
+  | Manifest.Ok_manifest _ -> assert false (* never passed to this function *)
+
+(* Every real filesystem/process operation on this hot path is
+   wrapped so an exception here becomes a refuse-and-exit, not an
+   uncaught crash — adversarial review found a missing manifest file,
+   a manifest path that's a directory, a nonexistent `program`, and a
+   non-executable `program` all took down the whole watchdog process
+   with `Fatal error: exception ...`, which is a worse outcome than
+   any single refused restart: the trust anchor itself disappears,
+   not just one restart decision. See ADR-0041. *)
+let spawn_or_refuse (supervisor : Supervisor.t) ~gnupghome ~expected_key_fingerprint
+    ~manifest_path : int option =
+  match read_manifest manifest_path with
+  | Error e ->
+      log "REFUSING TO LAUNCH: %s" (describe_manifest_error e);
+      exit 5
+  | Ok clearsigned_manifest -> (
+      match
+        try
+          Ok
+            (Supervisor.spawn_if_safe supervisor ~gnupghome ~expected_key_fingerprint
+               ~clearsigned_manifest)
+        with Unix.Unix_error (e, fn, _) -> Error (Printf.sprintf "%s: %s" fn (Unix.error_message e))
+      with
+      | Error e ->
+          log "REFUSING TO LAUNCH: could not spawn %s: %s" supervisor.program e;
+          exit 3
+      | Ok (Spawned pid) ->
+          log "spawned %s (pid %d)" supervisor.program pid;
+          Some pid
+      | Ok (Spawn_refused_tamper result) ->
+          log "REFUSING TO LAUNCH: %s" (describe_check_result result);
+          exit 3)
 
 let () =
   match Array.to_list Sys.argv with
-  | _ :: program :: gnupghome :: manifest_path :: rest ->
+  | _ :: program :: gnupghome :: expected_key_fingerprint :: manifest_path :: rest
+    ->
       let args = Array.of_list (program :: rest) in
       let supervisor = Supervisor.create ~program args in
-      let read_manifest () = read_file manifest_path in
-      let pid = Supervisor.spawn supervisor in
-      log "spawned %s (pid %d)" program pid;
+      let (_ : int option) =
+        spawn_or_refuse supervisor ~gnupghome ~expected_key_fingerprint ~manifest_path
+      in
       let running = ref true in
       while !running do
         (match Supervisor.wait_for_exit supervisor with
@@ -41,35 +115,34 @@ let () =
         | Signaled n -> log "%s killed by signal %d" program n
         | Stopped n -> log "%s stopped by signal %d" program n);
         if !running then
-          match
-            Supervisor.restart_if_safe supervisor ~gnupghome
-              ~clearsigned_manifest:(read_manifest ())
-          with
-          | Restarted pid -> log "restarted %s (pid %d)" program pid
-          | Refused_tamper_detected (Signature_invalid e) ->
-              log "REFUSING RESTART: manifest signature invalid: %s" e;
-              running := false
-          | Refused_tamper_detected (Hash_mismatch { path; expected; actual })
-            ->
-              log
-                "REFUSING RESTART: tamper detected in %s (expected %s, got \
-                 %s)"
-                path expected actual;
-              running := false
-          | Refused_tamper_detected (Io_error e) ->
-              log "REFUSING RESTART: could not verify manifest: %s" e;
-              running := false
-          | Refused_tamper_detected (Ok_manifest _) ->
-              (* Unreachable: restart_if_safe only wraps the failing
-                 constructors in Refused_tamper_detected. *)
-              assert false
-          | Refused_restart_storm ->
-              log "REFUSING RESTART: too many restarts too fast (policy: %d/%.0fs)"
-                supervisor.policy.max_restarts supervisor.policy.window_seconds;
-              running := false
+          match read_manifest manifest_path with
+          | Error e ->
+              log "REFUSING RESTART: %s" (describe_manifest_error e);
+              exit 5
+          | Ok clearsigned_manifest -> (
+              match
+                try
+                  Ok
+                    (Supervisor.restart_if_safe supervisor ~gnupghome
+                       ~expected_key_fingerprint ~clearsigned_manifest)
+                with
+                | Unix.Unix_error (e, fn, _) ->
+                    Error (Printf.sprintf "%s: %s" fn (Unix.error_message e))
+              with
+              | Error e ->
+                  log "REFUSING RESTART: could not spawn %s: %s" program e;
+                  exit 3
+              | Ok (Restarted pid) -> log "restarted %s (pid %d)" program pid
+              | Ok (Restart_refused_tamper result) ->
+                  log "REFUSING RESTART: %s" (describe_check_result result);
+                  exit 3
+              | Ok Restart_refused_storm ->
+                  log "REFUSING RESTART: too many restarts too fast (policy: %d/%.0fs)"
+                    supervisor.policy.max_restarts supervisor.policy.window_seconds;
+                  exit 4)
       done
   | _ ->
       prerr_endline
-        "usage: fossh-watchdog <program> <gnupghome> <manifest-path> \
-         [args...]";
+        "usage: fossh-watchdog <program> <gnupghome> <expected-key-fingerprint> \
+         <manifest-path> [args...]";
       exit 2

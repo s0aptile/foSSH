@@ -1,32 +1,54 @@
 (* Challenge-response verification (§2.1): the watchdog issues a
    nonce (Nonce.generate), a client signs it with their enrolled
    private key, and this module verifies that signature against the
-   pinned public key enrolled at setup (§3.11). Shells out to `gpgv`
-   rather than depending on an OCaml OpenPGP library — gpgv is
-   exactly the tool suite's own lightweight, keyring-only verifier (no
-   web-of-trust, no gpg-agent, no ambient keyring), which both matches
-   §3.3's "keep this component's dependency tree minimal" requirement
-   and is real, standards-compliant OpenPGP verification rather than a
-   hand-rolled signature scheme reviewed by nobody but this project. *)
+   pinned public key enrolled at setup (§3.11).
 
-let gpgv_path = "/usr/bin/gpgv"
+   Uses full `gpg --verify` against a persistent `gnupghome` (where
+   the enrolled key was already imported), not `gpgv` against a raw
+   keyring — an earlier version of this module used `gpgv` for its
+   minimalism, but `gpgv` was found (adversarial review) not to check
+   key revocation or expiry at all: a signature made by a since-
+   revoked key still exits 0 with "Good signature", silently
+   defeating the standard incident-response action of revoking a
+   compromised key. `gpg --verify` plus its `--status-file` output
+   (Gpg_status) gives the same cryptographic check *and* a real
+   revocation/expiry veto. See ADR-0041.
 
-(* [pubkey_binary] must already be in gpgv's binary keyring format
-   (concatenated OpenPGP public-key packets — `gpg --dearmor` an
-   ASCII-armored key once, at enrollment time, §3.11), not on every
-   verification call. *)
-let verify_signature ~(pubkey_binary : string) ~(data : string)
-    ~(signature_binary : string) : bool =
-  Tempfile.with_contents pubkey_binary (fun keyring_path ->
-      Tempfile.with_contents data (fun data_path ->
-          Tempfile.with_contents signature_binary (fun sig_path ->
+   `expected_key_fingerprint` pins to exactly the enrolled key, not
+   "any key gpg's keyring happens to trust" — §2.1's whole model is a
+   *pinned* public key, and a homedir could in principle hold more
+   than one imported key. *)
+
+let gpg_path = "/usr/bin/gpg"
+
+let verify_signature ~(gnupghome : string) ~(expected_key_fingerprint : string)
+    ~(data : string) ~(signature_binary : string) : bool =
+  Tempfile.with_contents data (fun data_path ->
+      Tempfile.with_contents signature_binary (fun sig_path ->
+          Tempfile.with_contents "" (fun status_path ->
               match
-                Subprocess.run ~prog:gpgv_path
+                Subprocess.run ~prog:gpg_path
                   ~argv:
                     [|
-                      "gpgv"; "--keyring"; keyring_path; sig_path; data_path;
+                      "gpg";
+                      "--batch";
+                      "--homedir";
+                      gnupghome;
+                      "--status-file";
+                      status_path;
+                      "--verify";
+                      "--";
+                      sig_path;
+                      data_path;
                     |]
                   ~stdin_content:""
               with
-              | Ok _ -> true
-              | Error _ -> false)))
+              | Error _ -> false
+              | Ok _ -> (
+                  match
+                    Gpg_status.parse (Fileutil.read_all_bytes status_path)
+                  with
+                  | Good_signature_by key_id ->
+                      Gpg_status.key_id_matches_fingerprint ~key_id
+                        ~fingerprint:expected_key_fingerprint
+                  | Revoked_key | Expired_key | No_good_signature -> false))))

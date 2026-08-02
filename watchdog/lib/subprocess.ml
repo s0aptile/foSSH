@@ -5,29 +5,69 @@
    metacharacter injection surface, matching the same discipline the
    Rust side of this project holds itself to for SQL/shell contexts. *)
 
-(* Bounded content only (a manifest or a nonce is at most a few KB) —
-   sequential write-then-read cannot deadlock against the OS pipe
-   buffer at this size. A general-purpose subprocess helper would need
-   concurrent read/write via [select]; this one deliberately doesn't,
-   because nothing in this codebase ever calls it with large input. *)
-let run ~(prog : string) ~(argv : string array) ~(stdin_content : string) :
-    (string, string) result =
-  (* [~cloexec:true] on every pipe fd matters here specifically
-     because `gpg` (this module's only real caller) spawns
-     `gpg-agent`, a lingering background daemon, as a side effect of
-     some operations. Without close-on-exec, `gpg-agent` inherits our
-     `out_write`/`err_write` fds across gpg's own exec and keeps them
-     open indefinitely (`Unix.create_process` still gets a correctly
-     open, non-cloexec fd 0/1/2 in the child either way, since dup2'd
-     descriptors never inherit CLOEXEC from their source) — the read
-     loop below then blocks forever waiting for an EOF that only
-     happens once *every* holder of the write end has closed it, not
-     just the gpg process we actually waited for. Confirmed by
-     reproducing the hang with this set to [false] before fixing it,
-     not assumed. *)
-  let in_read, in_write = Unix.pipe ~cloexec:true () in
-  let out_read, out_write = Unix.pipe ~cloexec:true () in
-  let err_read, err_write = Unix.pipe ~cloexec:true () in
+(* Every pipe end not explicitly handed to the child is close-on-exec.
+   `gpg` spawns `gpg-agent`, a lingering background daemon, as a side
+   effect of some operations; without this, `gpg-agent` inherits our
+   pipe fds across `gpg`'s own exec and holds them open indefinitely
+   even after `gpg` itself exits, hanging any read loop waiting for
+   EOF on that pipe. `Unix.create_process` still gets a correctly
+   open, non-cloexec fd 0/1/2 in the child either way, since a
+   `dup2`'d descriptor never inherits `CLOEXEC` from its source fd.
+   Reproduced this exact hang (and confirmed the fix with `pgrep`)
+   while building this module — see DECISIONS.md's ADR-0040. *)
+let pipe () = Unix.pipe ~cloexec:true ()
+
+(* stdin is written from a dedicated thread rather than sequentially
+   before reading stdout/stderr — writing everything first and only
+   then reading, as an earlier version of this function did, is an
+   unconditional deadlock risk for any input near or past the OS pipe
+   buffer size (traditionally 64KiB on Linux) once the child starts
+   producing output before it has fully drained stdin, which `gpg
+   --decrypt`/`--verify` genuinely does on real, plausibly-sized
+   manifests. Reproduced the hang for real (a few hundred KB against
+   `/bin/cat`, and again against real `gpg --decrypt` on a
+   several-hundred-KB clearsigned manifest) before switching to this
+   shape — see ADR-0041. *)
+let write_stdin_in_background (fd : Unix.file_descr) (content : string) : unit
+    =
+  let oc = Unix.out_channel_of_descr fd in
+  let (_ : Thread.t) =
+    Thread.create
+      (fun () ->
+        try
+          output_string oc content;
+          close_out oc
+        with Sys_error _ ->
+          (* The child may exit (bad args, etc.) before reading all of
+             stdin — a broken pipe here is not this function's error
+             to report; the child's exit status is. *)
+          ())
+      ()
+  in
+  ()
+
+let read_all (fd : Unix.file_descr) : string =
+  let ic = Unix.in_channel_of_descr fd in
+  let bufsize = 4096 in
+  let chunk = Bytes.create bufsize in
+  let buf = Buffer.create bufsize in
+  let rec loop () =
+    let n = input ic chunk 0 bufsize in
+    if n > 0 then (
+      Buffer.add_subbytes buf chunk 0 n;
+      loop ())
+  in
+  loop ();
+  close_in ic;
+  Buffer.contents buf
+
+type outcome = { stdout : string; stderr : string; exit_status : Unix.process_status }
+
+let run_raw ~(prog : string) ~(argv : string array) ~(stdin_content : string) :
+    outcome =
+  let in_read, in_write = pipe () in
+  let out_read, out_write = pipe () in
+  let err_read, err_write = pipe () in
   let pid =
     try Unix.create_process prog argv in_read out_write err_write
     with e ->
@@ -39,39 +79,23 @@ let run ~(prog : string) ~(argv : string array) ~(stdin_content : string) :
   Unix.close in_read;
   Unix.close out_write;
   Unix.close err_write;
-  let oc = Unix.out_channel_of_descr in_write in
-  (try
-     output_string oc stdin_content;
-     close_out oc
-   with Sys_error _ ->
-     (* The child may have exited (e.g. bad args) before reading all
-        of stdin — a broken pipe here is not this function's error to
-        report; the exit status below is. *)
-     ());
-  let read_all fd =
-    let ic = Unix.in_channel_of_descr fd in
-    let bufsize = 4096 in
-    let chunk = Bytes.create bufsize in
-    let buf = Buffer.create bufsize in
-    let rec loop () =
-      let n = input ic chunk 0 bufsize in
-      if n > 0 then (
-        Buffer.add_subbytes buf chunk 0 n;
-        loop ())
-    in
-    loop ();
-    close_in ic;
-    Buffer.contents buf
-  in
-  let stdout_content = read_all out_read in
-  let stderr_content = read_all err_read in
-  let _, status = Unix.waitpid [] pid in
-  match status with
-  | Unix.WEXITED 0 -> Ok stdout_content
+  write_stdin_in_background in_write stdin_content;
+  let stdout = read_all out_read in
+  let stderr = read_all err_read in
+  let _, exit_status = Unix.waitpid [] pid in
+  { stdout; stderr; exit_status }
+
+(* Convenience wrapper for the common "I just want stdout on success,
+   an error message otherwise" case (`sha256sum`, plain signing). *)
+let run ~(prog : string) ~(argv : string array) ~(stdin_content : string) :
+    (string, string) result =
+  let o = run_raw ~prog ~argv ~stdin_content in
+  match o.exit_status with
+  | Unix.WEXITED 0 -> Ok o.stdout
   | Unix.WEXITED code ->
       Error
         (Printf.sprintf "%s exited %d: %s" (Filename.basename prog) code
-           (String.trim stderr_content))
+           (String.trim o.stderr))
   | Unix.WSIGNALED n ->
       Error (Printf.sprintf "%s killed by signal %d" (Filename.basename prog) n)
   | Unix.WSTOPPED n ->
