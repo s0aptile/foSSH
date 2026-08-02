@@ -2,7 +2,7 @@
 
 Chapter-tracking file mandated by the "Fedora Native Deployment, Watchdog & Local Admin Hardening" chapter, created before any implementation work in that chapter, per its own instructions. Updated after every sub-chapter's QA gate, not just at the end. This file describes what is actually true right now; if something below turns out to be wrong, fix the code or fix this file, not the reader's expectations.
 
-Last updated: 2026-08-02 (§3.10/§3.11 RPM/rpmlint/reproducible-build entries).
+Last updated: 2026-08-02 (§3.3 OCaml watchdog, first slice).
 
 ## Baseline (prior session, not re-implemented here)
 
@@ -31,7 +31,7 @@ Status values: **not started**, **in progress**, **written, unverified** (code e
 |---|---|---|---|
 | 3.1 | glibc gatekeeping | QA-gate passed | Implemented, not yet load-bearing anywhere (see retrospective) — no systemd unit exists yet to call `glibc-check` automatically. |
 | 3.2 | Native CGI hardening (privilege drop, systemd, SELinux) | QA-gate passed | Privilege-drop code and systemd units held up under adversarial review with only theoretical/cosmetic nits. The SELinux module had three concrete missing-grant bugs, all fixed and re-verified to compile/package; one architectural question (which domain `fcgiwrap` actually execs from) remains open pending a live, rooted load — see retrospective. |
-| 3.3 | OCaml watchdog | not started | **Blocked on toolchain**: no `ocaml`/`opam`/`dune` installed, and installing needs `sudo dnf install ocaml opam dune`. Per ADR-0023 (never handle the user's password in a command), that command is surfaced for the user to run, not executed here. Source will be written regardless and marked unverified until compiled. |
+| 3.3 | OCaml watchdog | in progress (logic layer implemented, verified; transport layer not started) | No longer toolchain-blocked — `ocaml`/`opam`/`dune`/`gcc-c++`/`selinux-policy`/`rpmlint` all installed (see environment facts). New `watchdog/` dune project: `Nonce` (CSPRNG via `/dev/urandom`), `Auth` (challenge-response verification via `gpgv`), `Session` (short-lived in-memory tokens), `Manifest` (clearsigned tamper-detection manifest, `sha256sum`-based), `Supervisor` (spawn/waitpid `fossh-fcgi`, restart-storm guard, fail-closed tamper gate before every restart). 31 real tests across 5 binaries, all passing, 4 consecutive clean runs, zero lingering `gpg-agent` processes confirmed after a real cloexec bug caused (and got fixed for) exactly that. See ADR-0040 for the full design + two real bugs found. **Not built yet**: the QUIC/mTLS IPC channel (§3.4) and Unix-socket bootstrap handoff (§2.4) — `bin/main.ml` today is a real supervision+tamper-detection loop with no network listener at all. Adversarial QA gate (prrr.md §4) for this slice: pending, next step. |
 | 3.4 | QUIC IPC (quiche via ctypes) | not started | Same OCaml-toolchain blocker as 3.3. `quiche`'s Rust/C side can be built independently of OCaml being present. |
 | 3.5 | Privilege separation enforcement | not started | Creating the real `fossh-svc`/`fossh-watchdog` system users needs `useradd`, i.e. root — same password constraint as above; filesystem-permission tests can still run against simulated ownership where root isn't required, full end-to-end needs the user's `dnf install`/setup. |
 | 3.6 | Tamper detection | not started | Depends on the shared Rust crypto crate from 3.3's design. |

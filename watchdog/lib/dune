@@ -1,0 +1,3 @@
+(library
+ (name fossh_watchdog_lib)
+ (libraries unix))
