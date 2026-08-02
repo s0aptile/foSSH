@@ -20,7 +20,7 @@ By downloading, building, installing, linking, or running foSSH, you accept this
 
 ## 4. The license controls; this document adds no restrictions
 
-foSSH is dual-licensed under the Apache License 2.0 and the MIT License, your choice — see `LICENSE-APACHE` and `LICENSE-MIT`. Nothing in this document restricts, conditions, or adds to the rights granted by the Apache-2.0 or MIT license. Where this document and the license appear to conflict, the license controls.
+foSSH is licensed under the MIT License — see `LICENSE`. Nothing in this document restricts, conditions, or adds to the rights granted by that license. Where this document and the license appear to conflict, the license controls.
 
 ## 5. Open Alpha
 
@@ -48,7 +48,7 @@ Running foSSH does not make you compliant with GDPR, KVKK, ePrivacy, CCPA, or an
 
 ## 11. Intended use (non-binding)
 
-The following is a statement of intent, not a license condition, not a field-of-use restriction, and not enforceable as a term of this document: foSSH is built to measure less, and is not intended for surveillance, deanonymization, or re-identification of individuals. This paragraph does not appear in, and does not modify, `LICENSE-APACHE` or `LICENSE-MIT`.
+The following is a statement of intent, not a license condition, not a field-of-use restriction, and not enforceable as a term of this document: foSSH is built to measure less, and is not intended for surveillance, deanonymization, or re-identification of individuals. This paragraph does not appear in, and does not modify, `LICENSE`.
 
 ## 12. Third-party components
 

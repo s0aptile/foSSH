@@ -1,5 +1,5 @@
 # foSSH native CGI runner (chapter §3.2): fcgiwrap, socket-activated,
-# bridging FastCGI-from-nginx (see docs/DEPLOY-nginx-cloudflare-tunnel.md)
+# bridging FastCGI-from-nginx (see docs/preview/DEPLOY-nginx-cloudflare-tunnel.md)
 # to a per-request CGI exec of fossh-cgi. fcgiwrap itself is the
 # long-lived, systemd-supervised process here; fossh-cgi is still
 # exec'd fresh per request, same as any CGI deployment shape.

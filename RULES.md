@@ -49,5 +49,5 @@ This isn't framed as "instead of Google" in the sense of requiring you to rip an
 ## 6. New in this phase
 
 - A local TUI admin console (`fossh-tui`, `ratatui`) for status, tamper-detection state, telemetry summary, and the first-run setup wizard — see chapter §3.9/§3.11.
-- Fedora-native hardened deployment: an OCaml watchdog supervising the core process over a locally-pinned mTLS/QUIC channel, challenge-response auth (no static credentials anywhere), SELinux policy, and RPM packaging. See `DURUM.md` for what's implemented versus still in progress.
-- A local-nginx-plus-Cloudflare-Tunnel self-hosting guide is planned (`docs/DEPLOY-nginx-cloudflare-tunnel.md`) but is explicitly **preview/deferred** — it documents a future deployment tier, not one that's been built and adversarially reviewed yet. Don't treat it as a supported path until `DURUM.md` says otherwise.
+- Fedora-native hardened deployment: an OCaml watchdog supervising the core process over a locally-pinned mTLS/QUIC channel, challenge-response auth (no static credentials anywhere), SELinux policy, and RPM packaging. See `dev/DURUM.md` for what's implemented versus still in progress.
+- A local-nginx-plus-Cloudflare-Tunnel self-hosting guide lives at `docs/preview/DEPLOY-nginx-cloudflare-tunnel.md` — the `preview/` location is the signal: a future deployment tier, not one that's been built and adversarially reviewed yet. Don't treat it as a supported path until `dev/DURUM.md` says otherwise.

@@ -21,7 +21,7 @@
 # `urandom_device_t`), not assumed from memory. What compiling can
 # never catch, because `require{}` isn't resolved against a real base
 # policy until load time: a *missing* `allow` rule. An adversarial
-# review pass (see DURUM.md's §3.2 retrospective) found three
+# review pass (see dev/DURUM.md's §3.2 retrospective) found three
 # concretely missing grants this way — ancestor-directory `search`
 # permissions for `/etc`, `/usr`, `/var`, `/var/lib` (SELinux checks
 # `dir:search` at every path component the dynamic linker and this
@@ -93,7 +93,7 @@ type fossh_var_run_t;
 # this module's best guess at closing that gap without root access to
 # confirm it; the actual confirmation (`ps -eZ | grep fcgiwrap` after a
 # real `semodule -i` + service start) is still an open item — see
-# DURUM.md. ---
+# dev/DURUM.md. ---
 
 allow init_t fossh_cgi_exec_t:file { getattr open read execute execute_no_trans map };
 allow init_t fossh_cgi_t:process { transition siginh rlimitinh noatsecure };

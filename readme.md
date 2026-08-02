@@ -44,7 +44,7 @@ Point your webserver's CGI config at `fossh-cgi` (see `docs/DEPLOY-*.md` inside 
 
 ## Where the real docs are
 
-Inside `fossh/`: `README.md` (repository overview), `PRIVACY.md` (paste-able privacy page), `THREAT_MODEL.md`, `docs/INTEGRATION-*.md` (per language), `docs/DEPLOY-*.md` (per webserver), `DECISIONS.md` (every non-obvious choice, with the reason), `DURUM.md` (current development status).
+Inside `fossh/`: `README.md` (repository overview), `PRIVACY.md` (paste-able privacy page), `THREAT_MODEL.md`, `docs/INTEGRATION-*.md` (per language), `docs/DEPLOY-*.md` (per webserver, `docs/preview/` for tiers not yet through adversarial review), `DECISIONS.md` (every non-obvious choice, with the reason), `dev/DURUM.md` (current development status).
 
 ## Sizes and performance, as actually built
 
@@ -59,7 +59,7 @@ Measured against this release's own build, glibc `x86_64-unknown-linux-gnu` (the
 
 ## License
 
-Apache-2.0 OR MIT, your choice. See `tos.md` for the full terms and disclaimer.
+MIT. See `tos.md` for the full terms and disclaimer.
 
 ## Author
 

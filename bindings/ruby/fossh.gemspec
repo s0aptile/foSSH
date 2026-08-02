@@ -10,7 +10,7 @@ Gem::Specification.new do |spec|
                       "middleware. No native gem compilation, no mkmf."
   spec.authors = ["$0aptile"]
   spec.homepage = "https://github.com/s0aptile/fossh"
-  spec.licenses = %w[Apache-2.0 MIT]
+  spec.license = "MIT"
   spec.required_ruby_version = ">= 2.7"
 
   spec.files = Dir["lib/**/*.rb"]

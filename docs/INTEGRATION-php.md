@@ -92,4 +92,4 @@ With `ext-ffi` enabled and `libfossh.so` on the library path (`FOSSH_LIB_PATH` t
 
 Methods: `pageview()`, `event(string $name, int $value = 1, ?array $props = null)`, `timing(string $name, int $millis)`, `flush()`, `lastError()` (FFI mode only — the other transports don't have a session to ask).
 
-Laravel/Symfony middleware wrappers are planned but not shipped yet — track `DURUM.md`/M6 for status; the plain `Client` above works from either framework's own middleware today with a few lines, same as the WordPress hook above.
+Laravel/Symfony middleware wrappers ship under `bindings/php/src/Laravel/FosshMiddleware.php` and `bindings/php/src/Symfony/FosshRequestSubscriber.php` — register either the same way you'd register any other middleware/subscriber in that framework. The plain `Client` above still works directly from either framework with a few lines, same as the WordPress hook above, if you'd rather not add the wrapper.

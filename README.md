@@ -2,7 +2,7 @@
 
 Privacy-preserving, embeddable telemetry. Self-hosted site analytics without sending your visitors' data to a third party.
 
-**Status: open alpha (`0.1.0-alpha.1`).** Working, tested, not yet exhaustively hardened everywhere — see `DURUM.md` for exactly what's done versus in progress in the current development chapter, and `DECISIONS.md` for the reasoning behind every non-obvious choice made along the way.
+**Status: open alpha (`0.1.0-alpha.1`).** Working, tested, not yet exhaustively hardened everywhere — see `dev/DURUM.md` for exactly what's done versus in progress in the current development chapter, and `DECISIONS.md` for the reasoning behind every non-obvious choice made along the way.
 
 ## Why this exists
 
@@ -13,7 +13,7 @@ The usual way to get basic site analytics is a hosted service that sees every vi
 - **CGI** — `fossh-cgi`, a single static-leaning binary speaking RFC 3875 CGI. Works under Apache `mod_cgi`, or nginx via `fcgiwrap`.
 - **Embedded (FFI)** — `libfossh`, a C ABI (`cdylib`/`staticlib`) linked directly into Go, PHP, Ruby, or anything else that can call a C function. No process, no socket, no open port. See `bindings/`.
 - **Shared hosting** — no shell, no compiled extensions available? The PHP binding's HTTP-remote transport talks to a foSSH instance running elsewhere over plain HTTPS. See `docs/INTEGRATION-php.md`.
-- **Fedora-native** — `sudo dnf install fossh` (in progress — see `DURUM.md`'s current chapter): an OCaml watchdog, hardened systemd units, SELinux confinement, and a local TUI admin console/setup wizard (`fossh-tui`).
+- **Fedora-native** — `sudo dnf install fossh` (in progress — see `dev/DURUM.md`'s current chapter): an OCaml watchdog, hardened systemd units, SELinux confinement, and a local TUI admin console/setup wizard (`fossh-tui`).
 
 ## Quick start (building from source)
 
@@ -23,7 +23,7 @@ cargo build --release --workspace
 ./target/release/fossh site create my-site --allow pageview,signup
 ```
 
-That last command prints a write key once — it's the credential every binding/transport uses to authenticate. See `docs/` for the integration guide matching how you're actually deploying (`INTEGRATION-php.md`, `DEPLOY-nginx-cloudflare-tunnel.md`, and more as they land).
+That last command prints a write key once — it's the credential every binding/transport uses to authenticate. See `docs/` for the integration guide matching how you're actually deploying (`INTEGRATION-php.md`, `DEPLOY-apache.md`, `docs/preview/DEPLOY-nginx-cloudflare-tunnel.md`, and more as they land).
 
 ## Privacy and security
 
@@ -42,17 +42,18 @@ This is a lot of root-level files — most of them sit here because the project'
 | `tos.md` | Terms of use and disclaimer — the legal posture, not a contract for services. |
 | `SECURITY.md` | How to report a vulnerability. |
 | `NOTICE` | Third-party dependency licenses, generated, not hand-maintained. |
-| `AUTHORS`, `LICENSE-APACHE`, `LICENSE-MIT` | Exactly what they say. |
+| `AUTHORS`, `LICENSE` | Exactly what they say. |
 | `RULES.md` | Naming, tone, the public/private boundary, platform support, positioning. |
-| `DURUM.md` | Live status of the current development chapter. |
 | `DECISIONS.md` | The ADR log — every non-obvious choice, and why. |
+| `dev/` | How this project is actually being built, right now — chapter status (`dev/DURUM.md`), retrospectives. Not end-user documentation; read `docs/` for that. |
 | `docs/` | Per-language and per-webserver integration guides. |
+| `docs/preview/` | Deployment tiers documented ahead of the adversarial-review pass the rest of this project's deployment surfaces go through — the intended shape, not a reviewed, supported path yet. |
 | `PUBLISH.md` | Gitignored, not shipped — the author's own publishing copy-paste sheet. |
 | `private-onlyauthor/` | Gitignored, not shipped — anything identifying, or any private note, for the author's eyes only. |
 
 ## License
 
-Dual-licensed under [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.
+Licensed under [MIT](LICENSE).
 
 ## Funding
 

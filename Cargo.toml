@@ -16,7 +16,7 @@ exclude = ["crates/fossh-ffi"]
 [workspace.package]
 version = "0.1.0-alpha.1"
 edition = "2024"
-license = "Apache-2.0 OR MIT"
+license = "MIT"
 authors = ["$0aptile <https://github.com/s0aptile>"]
 repository = "https://github.com/s0aptile/fossh"
 homepage = "https://github.com/s0aptile/fossh"

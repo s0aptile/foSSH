@@ -32,7 +32,7 @@ pub fn run(_args: &[String]) -> i32 {
         eprintln!(
             "fossh glibc-check: this host's glibc is {}.{}, below foSSH's required floor of \
              {}.{}. Refusing to start the Fedora-native service on this host rather than fail \
-             later with an opaque dynamic-linker error — see DURUM.md §2.5.",
+             later with an opaque dynamic-linker error.",
             version.0, version.1, floor.0, floor.1
         );
         1
@@ -53,7 +53,7 @@ mod tests {
     fn runs_against_the_real_host_without_panicking() {
         // This environment's real ldd (2.43) is above the floor, so
         // this doubles as a real-host smoke test, not just "didn't
-        // crash" — see DURUM.md's §3.1 retrospective for why a
+        // crash" — see dev/DURUM.md's §3.1 retrospective for why a
         // below-floor case isn't faked here.
         assert_eq!(run(&[]), 0);
     }

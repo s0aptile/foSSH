@@ -96,7 +96,7 @@ mod tests {
         // This test suite never runs as root (nor should it try to) —
         // exercising the actual-drop path needs a real root process,
         // which is exactly the path this environment can't safely set
-        // up for a test run. See DURUM.md's retrospective for §3.2.
+        // up for a test run. See dev/DURUM.md's retrospective for §3.2.
         assert_eq!(drop_to_service_user(), Err(PrivDropError::NotRoot));
     }
 

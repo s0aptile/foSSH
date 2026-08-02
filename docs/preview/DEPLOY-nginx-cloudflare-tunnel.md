@@ -1,6 +1,6 @@
 # Deploying foSSH behind nginx + Cloudflare Tunnel
 
-> **Status: preview, deferred.** This tier is documented for reference and is explicitly *not* part of the Fedora-native hardening chapter tracked in `DURUM.md` — see that chapter's §6. It has not been through the adversarial-review QA gate the rest of this project's deployment surfaces go through. Treat this as a description of the intended shape, not a reviewed, supported path yet. Check `DURUM.md` before following this in production.
+> **Preview tier** — not yet through the adversarial-review QA gate the rest of this project's deployment surfaces go through. Read this as the intended shape, not a reviewed, supported path yet; see `dev/DURUM.md` for current status.
 
 This guide covers self-hosting foSSH on a single Fedora Server box, reachable from the public internet with **zero inbound ports opened** — no port forwarding, no firewall rule for 80/443, nothing listening on a public interface at all. Cloudflare Tunnel makes only outbound connections from your box to Cloudflare's edge; the edge terminates public TLS and forwards over that outbound tunnel.
 

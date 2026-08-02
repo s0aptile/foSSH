@@ -28,7 +28,7 @@ Version:        0.1.0~alpha.1
 Release:        1%{?dist}
 Summary:        Privacy-preserving, embeddable telemetry (self-hosted analytics)
 
-License:        Apache-2.0 OR MIT
+License:        MIT
 URL:            https://github.com/s0aptile/fossh
 Source0:        %{name}-%{srcversion}.tar.gz
 
@@ -134,7 +134,7 @@ fi
 %selinux_relabel_post
 
 %files
-%license LICENSE-APACHE LICENSE-MIT
+%license LICENSE
 %doc README.md
 %{_bindir}/fossh
 %{_bindir}/fossh-cgi

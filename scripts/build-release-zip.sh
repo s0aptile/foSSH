@@ -30,7 +30,7 @@ git ls-files -z | (cd "$stage/fossh" && xargs -0 -I{} sh -c 'mkdir -p "$(dirname
 
 # dist/: what this build environment can actually produce today, not
 # the full §19.7 wish list (musl x86_64+aarch64, an SBOM, a signed
-# manifest — none of those exist yet; see DURUM.md/DECISIONS.md for
+# manifest — none of those exist yet; see dev/DURUM.md/DECISIONS.md for
 # why, and the printed checklist below for an explicit, honest miss
 # rather than a silently-absent line).
 mkdir -p "$stage/fossh/dist"

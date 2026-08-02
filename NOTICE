@@ -28,7 +28,7 @@ for completeness.
 
 No offline country/GeoIP database is bundled as of this release —
 `country` resolution is not yet wired up (tracked in DECISIONS.md /
-DURUM.md); when one is added, its required attribution will be
+dev/DURUM.md); when one is added, its required attribution will be
 reproduced here exactly as that database's license mandates, per
 §19.4.8.
 

@@ -1,6 +1,6 @@
 # Deploying foSSH under Caddy
 
-Caddy doesn't speak plain CGI natively — like nginx, it needs `fcgiwrap` to bridge FastCGI to a per-request CGI exec of `fossh-cgi`. See `docs/DEPLOY-nginx-cloudflare-tunnel.md` §2 for the `fcgiwrap` systemd units this project ships (`packaging/systemd/fossh-fcgiwrap.{socket,service}`) — the setup below assumes those are already installed and running, and covers only the Caddy-specific side.
+Caddy doesn't speak plain CGI natively — like nginx, it needs `fcgiwrap` to bridge FastCGI to a per-request CGI exec of `fossh-cgi`. See `docs/preview/DEPLOY-nginx-cloudflare-tunnel.md` §2 for the `fcgiwrap` systemd units this project ships (`packaging/systemd/fossh-fcgiwrap.{socket,service}`) — those units themselves are the same reviewed §3.2 packaging either way; the setup below assumes they're already installed and running, and covers only the Caddy-specific side.
 
 ## 1. Install and start `fcgiwrap`
 
@@ -36,7 +36,7 @@ Caddy's `fastcgi` transport needs `SCRIPT_FILENAME` set explicitly (shown above)
 
 ## 3. `X-Forwarded-For` — read this before relying on visitor counts
 
-If Caddy itself is directly internet-facing (not behind another proxy like Cloudflare Tunnel), `fcgiwrap`/`fossh-cgi` already sees the real visitor's IP as `REMOTE_ADDR` with no extra configuration — Caddy sets that correctly by default. `FOSSH_TRUST_FORWARDED_FOR` (in `fossh-fcgiwrap.service`'s `Environment=`) is only relevant if Caddy itself sits behind another reverse proxy or tunnel; see `docs/DEPLOY-nginx-cloudflare-tunnel.md`'s note on this same setting for the reasoning — it applies identically here.
+If Caddy itself is directly internet-facing (not behind another proxy like Cloudflare Tunnel), `fcgiwrap`/`fossh-cgi` already sees the real visitor's IP as `REMOTE_ADDR` with no extra configuration — Caddy sets that correctly by default. `FOSSH_TRUST_FORWARDED_FOR` (in `fossh-fcgiwrap.service`'s `Environment=`) is only relevant if Caddy itself sits behind another reverse proxy or tunnel; see `docs/preview/DEPLOY-nginx-cloudflare-tunnel.md`'s note on this same setting for the reasoning — it applies identically here.
 
 ## 4. `fossh maintain` via cron or a timer
 
