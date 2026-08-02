@@ -18,6 +18,44 @@ pub enum BrowserFamily {
     Other,
 }
 
+impl BrowserFamily {
+    /// Stable wire/storage code — shared by `fossh-store` (DB columns) and
+    /// `fossh-ingest` (spool frames), so it's defined once, here,
+    /// alongside the enum. The match is exhaustive *within this crate*
+    /// even though the enum is `#[non_exhaustive]` to downstream crates —
+    /// which is the point: adding a variant without extending this match
+    /// is a compile error right here, not a silent "degrades to Other"
+    /// somewhere else.
+    pub fn as_u8(self) -> u8 {
+        match self {
+            BrowserFamily::Chrome => 0,
+            BrowserFamily::Firefox => 1,
+            BrowserFamily::Safari => 2,
+            BrowserFamily::Edge => 3,
+            BrowserFamily::Opera => 4,
+            BrowserFamily::SamsungInternet => 5,
+            BrowserFamily::Bot => 6,
+            BrowserFamily::Other => 7,
+        }
+    }
+
+    /// Inverse of `as_u8`. An unrecognized code (e.g. written by a newer
+    /// version of foSSH with more variants) decodes to `Other` rather than
+    /// failing — reading old data with a new binary must not crash.
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            0 => BrowserFamily::Chrome,
+            1 => BrowserFamily::Firefox,
+            2 => BrowserFamily::Safari,
+            3 => BrowserFamily::Edge,
+            4 => BrowserFamily::Opera,
+            5 => BrowserFamily::SamsungInternet,
+            6 => BrowserFamily::Bot,
+            _ => BrowserFamily::Other,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum OsFamily {
@@ -30,6 +68,32 @@ pub enum OsFamily {
     Other,
 }
 
+impl OsFamily {
+    pub fn as_u8(self) -> u8 {
+        match self {
+            OsFamily::Windows => 0,
+            OsFamily::MacOs => 1,
+            OsFamily::Linux => 2,
+            OsFamily::Android => 3,
+            OsFamily::Ios => 4,
+            OsFamily::Bot => 5,
+            OsFamily::Other => 6,
+        }
+    }
+
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            0 => OsFamily::Windows,
+            1 => OsFamily::MacOs,
+            2 => OsFamily::Linux,
+            3 => OsFamily::Android,
+            4 => OsFamily::Ios,
+            5 => OsFamily::Bot,
+            _ => OsFamily::Other,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DeviceClass {
@@ -38,6 +102,28 @@ pub enum DeviceClass {
     Tablet,
     Bot,
     Unknown,
+}
+
+impl DeviceClass {
+    pub fn as_u8(self) -> u8 {
+        match self {
+            DeviceClass::Desktop => 0,
+            DeviceClass::Mobile => 1,
+            DeviceClass::Tablet => 2,
+            DeviceClass::Bot => 3,
+            DeviceClass::Unknown => 4,
+        }
+    }
+
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            0 => DeviceClass::Desktop,
+            1 => DeviceClass::Mobile,
+            2 => DeviceClass::Tablet,
+            3 => DeviceClass::Bot,
+            _ => DeviceClass::Unknown,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +256,57 @@ pub fn bucket_user_agent(ua: &str) -> UaBuckets {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_family_code_roundtrip() {
+        for b in [
+            BrowserFamily::Chrome,
+            BrowserFamily::Firefox,
+            BrowserFamily::Safari,
+            BrowserFamily::Edge,
+            BrowserFamily::Opera,
+            BrowserFamily::SamsungInternet,
+            BrowserFamily::Bot,
+            BrowserFamily::Other,
+        ] {
+            assert_eq!(BrowserFamily::from_u8(b.as_u8()), b);
+        }
+    }
+
+    #[test]
+    fn os_family_code_roundtrip() {
+        for o in [
+            OsFamily::Windows,
+            OsFamily::MacOs,
+            OsFamily::Linux,
+            OsFamily::Android,
+            OsFamily::Ios,
+            OsFamily::Bot,
+            OsFamily::Other,
+        ] {
+            assert_eq!(OsFamily::from_u8(o.as_u8()), o);
+        }
+    }
+
+    #[test]
+    fn device_class_code_roundtrip() {
+        for d in [
+            DeviceClass::Desktop,
+            DeviceClass::Mobile,
+            DeviceClass::Tablet,
+            DeviceClass::Bot,
+            DeviceClass::Unknown,
+        ] {
+            assert_eq!(DeviceClass::from_u8(d.as_u8()), d);
+        }
+    }
+
+    #[test]
+    fn unrecognized_code_decodes_to_the_neutral_fallback() {
+        assert_eq!(BrowserFamily::from_u8(255), BrowserFamily::Other);
+        assert_eq!(OsFamily::from_u8(255), OsFamily::Other);
+        assert_eq!(DeviceClass::from_u8(255), DeviceClass::Unknown);
+    }
 
     const CHROME_WINDOWS: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
     const CHROME_ANDROID_PHONE: &str = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";

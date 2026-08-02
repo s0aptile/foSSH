@@ -87,7 +87,8 @@ CREATE TABLE sites (
   key_hash BLOB NOT NULL,
   allowlist TEXT NOT NULL,
   created_at INTEGER NOT NULL,
-  disabled INTEGER NOT NULL DEFAULT 0
+  disabled INTEGER NOT NULL DEFAULT 0,
+  public INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 ";
 
@@ -194,7 +195,8 @@ mod tests {
                 "key_hash",
                 "allowlist",
                 "created_at",
-                "disabled"
+                "disabled",
+                "public"
             ]
         );
     }

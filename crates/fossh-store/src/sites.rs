@@ -4,6 +4,15 @@
 //! whichever generates them for an operator (`fossh-cli`) — this module
 //! only ever sees and stores `BLAKE3(key)`, never the key itself (§8: "the
 //! key itself is never stored").
+//!
+//! `public` (added beyond §6's literal `CREATE TABLE`, see DECISIONS.md):
+//! §8 describes bearer-mode keys as "flagged `public=1` at creation, ...
+//! rate-limited harder, and [restricted to] the site's allowlist" — a
+//! column §6's own schema snippet never defines. `fossh-ingest` uses it to
+//! decide both the harder rate limit and whether to echo `Origin` back in
+//! `Access-Control-Allow-Origin` (only ever for public/browser-facing
+//! sites; signed server-to-server requests aren't browser requests, so
+//! CORS doesn't apply to them at all).
 
 use rusqlite::{OptionalExtension, params};
 
@@ -19,8 +28,10 @@ pub struct Site {
     pub allowlist: Vec<String>,
     pub created_at: i64,
     pub disabled: bool,
+    pub public: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn row_to_site(
     id: i64,
     slug: String,
@@ -28,6 +39,7 @@ fn row_to_site(
     allowlist_json: String,
     created_at: i64,
     disabled: i64,
+    public: i64,
 ) -> Result<Site, StoreError> {
     let key_hash: [u8; 32] = key_hash.try_into().map_err(|_| StoreError::CorruptSketch)?;
     let allowlist: Vec<String> = serde_json::from_str(&allowlist_json)?;
@@ -38,6 +50,7 @@ fn row_to_site(
         allowlist,
         created_at,
         disabled: disabled != 0,
+        public: public != 0,
     })
 }
 
@@ -48,11 +61,12 @@ impl Store {
         key_hash: &[u8; 32],
         allowlist: &[String],
         created_at: i64,
+        public: bool,
     ) -> Result<SiteId, StoreError> {
         let allowlist_json = serde_json::to_string(allowlist)?;
         self.conn.execute(
-            "INSERT INTO sites (slug, key_hash, allowlist, created_at, disabled) VALUES (?1, ?2, ?3, ?4, 0)",
-            params![slug, key_hash.as_slice(), allowlist_json, created_at],
+            "INSERT INTO sites (slug, key_hash, allowlist, created_at, disabled, public) VALUES (?1, ?2, ?3, ?4, 0, ?5)",
+            params![slug, key_hash.as_slice(), allowlist_json, created_at, public],
         )?;
         Ok(SiteId::new(self.conn.last_insert_rowid() as u32))
     }
@@ -60,31 +74,35 @@ impl Store {
     pub fn find_site_by_key_hash(&self, key_hash: &[u8; 32]) -> Result<Option<Site>, StoreError> {
         self.conn
             .query_row(
-                "SELECT id, slug, key_hash, allowlist, created_at, disabled FROM sites WHERE key_hash = ?1",
+                "SELECT id, slug, key_hash, allowlist, created_at, disabled, public FROM sites WHERE key_hash = ?1",
                 params![key_hash.as_slice()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+                |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?))
+                },
             )
             .optional()?
-            .map(|(id, slug, kh, al, ca, d)| row_to_site(id, slug, kh, al, ca, d))
+            .map(|(id, slug, kh, al, ca, d, p)| row_to_site(id, slug, kh, al, ca, d, p))
             .transpose()
     }
 
     pub fn find_site_by_slug(&self, slug: &str) -> Result<Option<Site>, StoreError> {
         self.conn
             .query_row(
-                "SELECT id, slug, key_hash, allowlist, created_at, disabled FROM sites WHERE slug = ?1",
+                "SELECT id, slug, key_hash, allowlist, created_at, disabled, public FROM sites WHERE slug = ?1",
                 params![slug],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+                |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?))
+                },
             )
             .optional()?
-            .map(|(id, slug, kh, al, ca, d)| row_to_site(id, slug, kh, al, ca, d))
+            .map(|(id, slug, kh, al, ca, d, p)| row_to_site(id, slug, kh, al, ca, d, p))
             .transpose()
     }
 
     pub fn list_sites(&self) -> Result<Vec<Site>, StoreError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, slug, key_hash, allowlist, created_at, disabled FROM sites ORDER BY id",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, slug, key_hash, allowlist, created_at, disabled, public FROM sites ORDER BY id")?;
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get(0)?,
@@ -93,11 +111,12 @@ impl Store {
                 row.get(3)?,
                 row.get(4)?,
                 row.get(5)?,
+                row.get(6)?,
             ))
         })?;
         rows.map(|r| {
-            let (id, slug, kh, al, ca, d) = r?;
-            row_to_site(id, slug, kh, al, ca, d)
+            let (id, slug, kh, al, ca, d, p) = r?;
+            row_to_site(id, slug, kh, al, ca, d, p)
         })
         .collect()
     }
@@ -134,7 +153,7 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let allow = vec!["pageview".to_string(), "signup.completed".to_string()];
         let id = store
-            .create_site("blog", &hash_of(1), &allow, 1_700_000_000)
+            .create_site("blog", &hash_of(1), &allow, 1_700_000_000, false)
             .unwrap();
 
         let site = store
@@ -146,13 +165,24 @@ mod tests {
         assert_eq!(site.key_hash, hash_of(1));
         assert_eq!(site.allowlist, allow);
         assert!(!site.disabled);
+        assert!(!site.public);
+    }
+
+    #[test]
+    fn public_flag_is_stored() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .create_site("blog", &hash_of(1), &[], 1_700_000_000, true)
+            .unwrap();
+        let site = store.find_site_by_slug("blog").unwrap().unwrap();
+        assert!(site.public);
     }
 
     #[test]
     fn find_by_key_hash() {
         let store = Store::open_in_memory().unwrap();
         store
-            .create_site("blog", &hash_of(7), &[], 1_700_000_000)
+            .create_site("blog", &hash_of(7), &[], 1_700_000_000, false)
             .unwrap();
         let site = store
             .find_site_by_key_hash(&hash_of(7))
@@ -166,9 +196,9 @@ mod tests {
     fn slug_must_be_unique() {
         let store = Store::open_in_memory().unwrap();
         store
-            .create_site("blog", &hash_of(1), &[], 1_700_000_000)
+            .create_site("blog", &hash_of(1), &[], 1_700_000_000, false)
             .unwrap();
-        let result = store.create_site("blog", &hash_of(2), &[], 1_700_000_001);
+        let result = store.create_site("blog", &hash_of(2), &[], 1_700_000_001, false);
         assert!(
             result.is_err(),
             "duplicate slug must be rejected (UNIQUE constraint)"
@@ -178,8 +208,8 @@ mod tests {
     #[test]
     fn list_sites_returns_all_in_creation_order() {
         let store = Store::open_in_memory().unwrap();
-        store.create_site("a", &hash_of(1), &[], 1).unwrap();
-        store.create_site("b", &hash_of(2), &[], 2).unwrap();
+        store.create_site("a", &hash_of(1), &[], 1, false).unwrap();
+        store.create_site("b", &hash_of(2), &[], 2, false).unwrap();
         let sites = store.list_sites().unwrap();
         assert_eq!(
             sites.iter().map(|s| s.slug.as_str()).collect::<Vec<_>>(),
@@ -190,7 +220,9 @@ mod tests {
     #[test]
     fn disable_site_marks_disabled_and_reports_whether_found() {
         let store = Store::open_in_memory().unwrap();
-        store.create_site("blog", &hash_of(1), &[], 1).unwrap();
+        store
+            .create_site("blog", &hash_of(1), &[], 1, false)
+            .unwrap();
         assert!(store.disable_site("blog").unwrap());
         assert!(!store.disable_site("does-not-exist").unwrap());
 
@@ -201,7 +233,9 @@ mod tests {
     #[test]
     fn rotate_key_updates_hash_and_old_hash_stops_matching() {
         let store = Store::open_in_memory().unwrap();
-        store.create_site("blog", &hash_of(1), &[], 1).unwrap();
+        store
+            .create_site("blog", &hash_of(1), &[], 1, false)
+            .unwrap();
         assert!(store.rotate_site_key("blog", &hash_of(2)).unwrap());
 
         assert!(store.find_site_by_key_hash(&hash_of(1)).unwrap().is_none());

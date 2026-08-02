@@ -7,6 +7,7 @@
 use rusqlite::params;
 
 use fossh_core::types::{Event, SiteId};
+#[cfg(test)]
 use fossh_core::ua::{BrowserFamily, DeviceClass, OsFamily};
 
 use crate::intern::{intern_name, intern_path, intern_ref};
@@ -19,79 +20,6 @@ use crate::{Store, StoreError};
 /// an `INTEGER PRIMARY KEY` (rowid alias) that SQLite starts allocating
 /// from `1`, so `0` is never assigned to a real interned path.
 pub(crate) const NO_PATH_SENTINEL: i64 = 0;
-
-pub(crate) fn browser_code(b: BrowserFamily) -> i64 {
-    match b {
-        BrowserFamily::Chrome => 0,
-        BrowserFamily::Firefox => 1,
-        BrowserFamily::Safari => 2,
-        BrowserFamily::Edge => 3,
-        BrowserFamily::Opera => 4,
-        BrowserFamily::SamsungInternet => 5,
-        BrowserFamily::Bot => 6,
-        BrowserFamily::Other => 7,
-        _ => 7, // forward-compat: an unrecognized future variant degrades to Other, not a crash
-    }
-}
-
-pub(crate) fn browser_from_code(c: i64) -> BrowserFamily {
-    match c {
-        0 => BrowserFamily::Chrome,
-        1 => BrowserFamily::Firefox,
-        2 => BrowserFamily::Safari,
-        3 => BrowserFamily::Edge,
-        4 => BrowserFamily::Opera,
-        5 => BrowserFamily::SamsungInternet,
-        6 => BrowserFamily::Bot,
-        _ => BrowserFamily::Other,
-    }
-}
-
-pub(crate) fn os_code(o: OsFamily) -> i64 {
-    match o {
-        OsFamily::Windows => 0,
-        OsFamily::MacOs => 1,
-        OsFamily::Linux => 2,
-        OsFamily::Android => 3,
-        OsFamily::Ios => 4,
-        OsFamily::Bot => 5,
-        OsFamily::Other => 6,
-        _ => 6,
-    }
-}
-
-pub(crate) fn os_from_code(c: i64) -> OsFamily {
-    match c {
-        0 => OsFamily::Windows,
-        1 => OsFamily::MacOs,
-        2 => OsFamily::Linux,
-        3 => OsFamily::Android,
-        4 => OsFamily::Ios,
-        5 => OsFamily::Bot,
-        _ => OsFamily::Other,
-    }
-}
-
-pub(crate) fn device_code(d: DeviceClass) -> i64 {
-    match d {
-        DeviceClass::Desktop => 0,
-        DeviceClass::Mobile => 1,
-        DeviceClass::Tablet => 2,
-        DeviceClass::Bot => 3,
-        DeviceClass::Unknown => 4,
-        _ => 4,
-    }
-}
-
-pub(crate) fn device_from_code(c: i64) -> DeviceClass {
-    match c {
-        0 => DeviceClass::Desktop,
-        1 => DeviceClass::Mobile,
-        2 => DeviceClass::Tablet,
-        3 => DeviceClass::Bot,
-        _ => DeviceClass::Unknown,
-    }
-}
 
 impl Store {
     /// Records one event: interns name/path/referrer, inserts the raw row
@@ -123,9 +51,9 @@ impl Store {
                 path_id,
                 ref_id,
                 event.country.as_str(),
-                browser_code(event.browser),
-                os_code(event.os),
-                device_code(event.device),
+                event.browser.as_u8(),
+                event.os.as_u8(),
+                event.device.as_u8(),
                 event.visitor.map(|v| v as i64),
                 event.value,
             ],
@@ -251,39 +179,27 @@ mod tests {
     }
 
     #[test]
-    fn browser_os_device_code_roundtrip() {
-        for b in [
-            BrowserFamily::Chrome,
-            BrowserFamily::Firefox,
-            BrowserFamily::Safari,
-            BrowserFamily::Edge,
-            BrowserFamily::Opera,
-            BrowserFamily::SamsungInternet,
-            BrowserFamily::Bot,
-            BrowserFamily::Other,
-        ] {
-            assert_eq!(browser_from_code(browser_code(b)), b);
-        }
-        for o in [
-            OsFamily::Windows,
-            OsFamily::MacOs,
-            OsFamily::Linux,
-            OsFamily::Android,
-            OsFamily::Ios,
-            OsFamily::Bot,
-            OsFamily::Other,
-        ] {
-            assert_eq!(os_from_code(os_code(o)), o);
-        }
-        for d in [
-            DeviceClass::Desktop,
-            DeviceClass::Mobile,
-            DeviceClass::Tablet,
-            DeviceClass::Bot,
-            DeviceClass::Unknown,
-        ] {
-            assert_eq!(device_from_code(device_code(d)), d);
-        }
+    fn stored_browser_os_device_codes_match_fossh_core_encoding() {
+        // The u8/from_u8 roundtrip itself is covered in fossh-core's own
+        // tests; this just checks the stored integer actually is what
+        // `as_u8()` produces, i.e. that `record_event` didn't invent its
+        // own encoding somewhere along the way.
+        let mut store = Store::open_in_memory().unwrap();
+        let mut ev = sample_event(1, 1_700_000_000, "pageview");
+        ev.browser = BrowserFamily::Edge;
+        ev.os = OsFamily::Ios;
+        ev.device = DeviceClass::Tablet;
+        store.record_event(&ev).unwrap();
+
+        let (browser, os, device): (i64, i64, i64) = store
+            .conn
+            .query_row("SELECT browser, os, device FROM events LIMIT 1", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(browser, BrowserFamily::Edge.as_u8() as i64);
+        assert_eq!(os, OsFamily::Ios.as_u8() as i64);
+        assert_eq!(device, DeviceClass::Tablet.as_u8() as i64);
     }
 
     #[test]

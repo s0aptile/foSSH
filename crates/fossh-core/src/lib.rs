@@ -9,6 +9,7 @@
 //! dedicated crate. Everything else is deterministic, allocation-bounded,
 //! 100% unit-testable logic with no side effects.
 
+pub mod base32;
 pub mod config;
 pub mod hist;
 pub mod hll;

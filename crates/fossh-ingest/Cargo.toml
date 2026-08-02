@@ -1,0 +1,22 @@
+[package]
+name = "fossh-ingest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "foSSH request -> Event pipeline: HMAC/bearer auth, rate limiting, salt lifecycle, and the spool writer/compactor."
+
+[lib]
+name = "fossh_ingest"
+
+[dependencies]
+fossh-core.workspace = true
+fossh-store.workspace = true
+blake3.workspace = true
+subtle.workspace = true
+zeroize.workspace = true
+serde.workspace = true
+serde_json.workspace = true

@@ -109,6 +109,16 @@ impl Host {
         &self.0
     }
 
+    /// Reconstructs a `Host` from a string that was already reduced by
+    /// `from_referrer_url` at some earlier point (e.g. decoding a spool
+    /// frame or a DB row) — wraps it directly rather than re-deriving it
+    /// through URL parsing again. Deliberately takes an owned `String`
+    /// with no validation: callers are expected to only ever pass back a
+    /// value that came from `as_str()` on a `Host` this crate produced.
+    pub fn from_trusted(s: String) -> Self {
+        Self(s)
+    }
+
     /// Extracts a coarse registrable domain from a full referrer URL.
     /// Returns `None` if nothing host-shaped can be recovered, rather than
     /// ever falling back to storing the raw input.

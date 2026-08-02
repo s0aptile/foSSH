@@ -107,9 +107,46 @@ One entry per non-obvious choice. Newest at the bottom. Format: decision, altern
 
 ---
 
-## ADR-0013 — Credential handling for local privileged commands
+## ADR-0013 — Rate limiting and CORS use plain positioned file I/O, not `mmap`
+
+**Decision:** `auth::NonceCache` (§8's nonce replay cache) and `ratelimit::TokenBucket` (S10) are backed by ordinary `std::fs::File` reads/writes at fixed offsets, not `memmap2`.
+**Alternatives rejected:** Following S8/S10's literal "mmap'd" wording.
+**Reason:** Every `memmap2` mapping call is `unsafe fn` — the kernel can change mapped bytes out from under Rust's aliasing model at any time, which is exactly what an `unsafe` boundary exists to flag. S1 forbids `unsafe` in every crate except `fossh-ffi`, and is explicitly one of the *hard*, non-negotiable invariants (§3/§4), ranked above "matches the spec's suggested implementation" in §19.1's own tie-break order (security invariant, priority 2, beats operator/developer ergonomics, priorities 4–5). A plain read-modify-write under concurrent CGI processes still gives the "no lock, tolerate ±1 slop" behavior S10 explicitly asks for — the *behavior* is preserved even though the *mechanism* changed. Same reasoning applies to §7.1's spool writer, which uses a single `std::fs::File::write` call instead of a raw `libc::write` (every `libc` FFI call is also `unsafe fn`) — see `spool.rs`'s module doc comment for why a single `write()` call is still exactly one `write(2)` syscall without needing that call.
+
+---
+
+## ADR-0014 — `sites.public` column, added beyond §6's literal `CREATE TABLE`
+
+**Decision:** `sites` gains `public INTEGER NOT NULL DEFAULT 0`. Public (bearer-mode) sites get half the configured `rate_limit` (`per_sec`/`burst`, minimum 1 each) and are the only sites whose `Origin` header is ever echoed into `Access-Control-Allow-Origin`.
+**Alternatives rejected:** Leaving `public` out (§6's schema doesn't have it) and finding some other way to satisfy §8's "such keys are flagged `public=1` at creation, are rate-limited harder, and can only emit event names on the site's allowlist."
+**Reason:** §8 refers to a `public` flag that §6's own `CREATE TABLE sites` never defines — the same kind of gap as ADR-0009's `uniques`/`value_hist`. There's no other natural home for it, and it directly answers two things the spec otherwise leaves open: how much harder public keys are rate-limited (half the configured bucket, a simple, explicit default), and — completely unspecified anywhere — what governs the CORS echo in §7.1's response table ("`Access-Control-Allow-Origin: <echoed only if origin ∈ site allowlist>`"). Reusing `sites.allowlist` for that would be wrong: §6 explicitly scopes that field to "permitted event names / prop keys," not origins, and inventing a *second*, undocumented allowlist for origins is worse than tying CORS echo to the one boolean the spec already gestures at (public/browser-facing vs. signed/server-to-server, where CORS doesn't apply at all).
+
+---
+
+## ADR-0015 — Signed-mode HMAC verification uses `key_hash` as the live signing key
+
+**Decision:** `sig = BLAKE3-keyed(key_material, canonical)` where `key_material` is `site.key_hash` (`BLAKE3(write_key)`, stored server-side) on both ends — the client computes it once from the write key it was issued and signs with it; the server never needs, transmits, or stores the original write key at all.
+**Alternatives rejected:**
+1. Reading §8 fully literally (`sig = BLAKE3-keyed(write_key, canonical)` using the raw key) — impossible to verify server-side given "only `BLAKE3(key)` is stored" in the very same section; a keyed hash can't be checked against a one-way hash of its key.
+2. Storing the raw `write_key` server-side after all, to make literal HMAC-with-the-raw-key verification possible — directly contradicts §8's explicit "the key itself is never stored," which is unambiguous and not in tension with anything else.
+
+**Reason:** §8 contains two claims that can't both be true as written; something has to give, and undoing "the key itself is never stored" is a much bigger invariant to break than reinterpreting which 32 bytes "the signing key" refers to. Treating the *hash* as the actual keyed-hash key is standard practice for systems that store `hash(secret)` and use the hash as the live verifier (its secrecy is equivalent to the original secret's — both require having seen the credential once, and `BLAKE3` isn't invertible) — it just isn't the literal string an operator pastes into a client's config file. `auth.rs` documents this in detail and names the parameter `signing_key`, not `write_key`, everywhere it appears, specifically so a future reader doesn't wire in the raw key by mistake.
+
+---
+
+## ADR-0016 — Compiled binary names match crate directory names (`fossh-cgi`, `fossh-cli` → `fossh`, `fossh-fcgi`), not all literally `fossh`
+
+**Decision:** The CLI's compiled binary is `fossh` (matching §9's explicit `fossh init` / `fossh site create` / ... invocations verbatim). The CGI and FastCGI binaries are `fossh-cgi` and `fossh-fcgi` — their own crate names — not `fossh`.
+**Alternatives rejected:** Naming all three binaries `fossh`, as §1's prose ("fossh CGI binary") and §13's size-gate wording ("Stripped musl CGI binary") suggest in isolation.
+**Reason:** Cargo builds every crate in a workspace into one shared `target/` directory; two packages defining a binary with the identical name is a build-time conflict, not just a deployment nuisance — `cargo build --workspace` cannot produce two different files both named `target/release/fossh`. Practically, a CGI binary is always wired into a webserver via an explicit, operator-chosen path in that webserver's own config (`ScriptAlias`, `fastcgi_pass`, etc.) — never resolved through `$PATH` the way a CLI command is — so its on-disk filename is far less load-bearing than the CLI's, which people actually type. `DEPLOY-{apache,nginx,caddy}.md` reference `fossh-cgi` by that name in their example config blocks.
+
+---
+
+## ADR-0017 — Credential handling for local privileged commands
 
 **Decision:** No password is ever placed in a shell command, file, or log from this session. Where a build step genuinely needs `sudo` (installing a missing system package), the exact command is surfaced for the user to run themselves via their own shell, rather than piping a credential through a tool call.
-**Reason:** A plaintext password embedded in a command is retained wherever that command is recorded. Standard toolchain setup (rustup, cargo, musl target) needed no elevated privileges at all; `cc`/`gcc` were already present on this machine, so this has not come up in practice for M1.
+**Reason:** A plaintext password embedded in a command is retained wherever that command is recorded. Standard toolchain setup (rustup, cargo, musl target) needed no elevated privileges at all; `cc`/`gcc` were already present on this machine.
+
+**Open item, M3:** the `x86_64-unknown-linux-musl` release build (needed to actually check §17's "stripped musl CGI binary < 3 MB" gate) fails at the `libsqlite3-sys` build-script step — it needs `x86_64-linux-musl-gcc`, which isn't installed, and installing it needs `sudo dnf install musl-gcc`. Asked the user; decided to defer rather than handle the password. The native (glibc) `--release` build works today and is a reasonable stand-in for now: `fossh-cgi` strips to 482 KB, comfortably under the 3 MB budget even before musl's typically-larger static-link footprint. Actually verifying the real musl artifact is carried forward as an M8 checklist item.
 
 ---

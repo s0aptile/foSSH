@@ -1,0 +1,20 @@
+[package]
+name = "fossh-cgi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "foSSH RFC 3875 CGI entrypoint. Reads request env + stdin, writes a minimal fixed response — no body ever, per §7.1."
+
+[[bin]]
+name = "fossh-cgi"
+path = "src/main.rs"
+
+[dependencies]
+fossh-core.workspace = true
+fossh-store.workspace = true
+fossh-ingest.workspace = true
+blake3.workspace = true

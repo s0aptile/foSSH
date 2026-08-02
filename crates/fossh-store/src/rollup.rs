@@ -10,8 +10,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use fossh_core::hist::Histogram;
 use fossh_core::hll::Hll;
 use fossh_core::types::{Event, SiteId};
+use fossh_core::ua::{BrowserFamily, DeviceClass, OsFamily};
 
-use crate::events::{browser_from_code, device_from_code, os_from_code};
 use crate::{Store, StoreError};
 
 /// `(uniques_blob, hits, value_sum, value_hist_blob, value_count)` — the
@@ -31,9 +31,9 @@ pub(crate) fn upsert_rollup(
     name_id: i64,
     path_id: i64,
 ) -> Result<(), StoreError> {
-    let browser = crate::events::browser_code(event.browser);
-    let os = crate::events::os_code(event.os);
-    let device = crate::events::device_code(event.device);
+    let browser = event.browser.as_u8();
+    let os = event.os.as_u8();
+    let device = event.device.as_u8();
     let kind = event.kind.as_i64();
     let country = event.country.as_str();
     let site_id = event.site_id.get();
@@ -237,9 +237,9 @@ impl Store {
                     GroupByField::Name => name.clone(),
                     GroupByField::Path => path.clone().unwrap_or_default(),
                     GroupByField::Country => country.clone(),
-                    GroupByField::Browser => format!("{:?}", browser_from_code(browser)),
-                    GroupByField::Os => format!("{:?}", os_from_code(os)),
-                    GroupByField::Device => format!("{:?}", device_from_code(device)),
+                    GroupByField::Browser => format!("{:?}", BrowserFamily::from_u8(browser as u8)),
+                    GroupByField::Os => format!("{:?}", OsFamily::from_u8(os as u8)),
+                    GroupByField::Device => format!("{:?}", DeviceClass::from_u8(device as u8)),
                 }
             };
             let key: Vec<String> = group_by.iter().map(|&f| dim_value(f)).collect();
