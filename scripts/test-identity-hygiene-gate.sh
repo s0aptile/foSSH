@@ -48,7 +48,13 @@ git config user.email 's0aptile@users.noreply.github.com'
 rm sub/leaky.md
 cat > bad.sh <<'EOF'
 #!/bin/sh
-echo "author: '$0aptile'"
+# Backslash-escaped, the actually-correct safe form inside a
+# double-quoted string — a single quote nested *inside* double quotes
+# is only a literal apostrophe in real shell semantics, it does not
+# suppress $-expansion, and an earlier draft of this fixture used that
+# broken form by mistake, which the gate correctly kept failing until
+# it was fixed to this.
+echo "author: \$0aptile"
 EOF
 git add -A
 # --reset-author: plain `--amend` preserves the *original* author

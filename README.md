@@ -56,8 +56,8 @@ Dual-licensed under [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your 
 
 ## Funding
 
-foSSH accepts Monero donations:
+foSSH accepts donations on:
 
-```
-87NdV4EUcpQWsBR77L4PdCcWZjxhxcy91YGH1hJCdeXU7ERZrwwRZYT843gCojF7wsWfTUm8zH83BRNA7DTLdh9xC8pxnmZ
-```
+- **Solana (SPL):** `J7wgrgySAVvWmreXiM51ig3rqY1vNnpdpvqZsHZLPfwD`
+- **Neon (Neon EVM):** `0xEde8Dd4413b667269e3Df902C49532C2212475AF`
+- **Monero** (not recommended): `87NdV4EUcpQWsBR77L4PdCcWZjxhxcy91YGH1hJCdeXU7ERZrwwRZYT843gCojF7wsWfTUm8zH83BRNA7DTLdh9xC8pxnmZ`

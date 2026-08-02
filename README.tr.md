@@ -35,8 +35,8 @@ Tercihinize göre [Apache-2.0](LICENSE-APACHE) veya [MIT](LICENSE-MIT) ile çift
 
 ## Bağış
 
-foSSH, Monero bağışı kabul eder:
+foSSH şu adreslerden bağış kabul eder:
 
-```
-87NdV4EUcpQWsBR77L4PdCcWZjxhxcy91YGH1hJCdeXU7ERZrwwRZYT843gCojF7wsWfTUm8zH83BRNA7DTLdh9xC8pxnmZ
-```
+- **Solana (SPL):** `J7wgrgySAVvWmreXiM51ig3rqY1vNnpdpvqZsHZLPfwD`
+- **Neon (Neon EVM):** `0xEde8Dd4413b667269e3Df902C49532C2212475AF`
+- **Monero** (önerilmez): `87NdV4EUcpQWsBR77L4PdCcWZjxhxcy91YGH1hJCdeXU7ERZrwwRZYT843gCojF7wsWfTUm8zH83BRNA7DTLdh9xC8pxnmZ`
