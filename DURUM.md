@@ -21,7 +21,7 @@ The core product — CGI + embedded-FFI privacy-preserving telemetry — was bui
 
 **M6 detail:** Go binding (`bindings/go`) written — cgo wrapper + `nofossh` no-op build tag + integration test — but never compiled; no Go toolchain in this environment. PHP binding: `composer.json` and `src/Client.php` done, now with **three** transports tried in order — FFI, then HTTP-remote (bearer-token auth over plain HTTPS, for real shared hosting — see `docs/INTEGRATION-php.md`), then CGI-subprocess, then a documented no-op. Laravel/Symfony middleware snippets, the runnable example, and Ruby's binding are still not written. `docs/INTEGRATION-php.md` done (shared-hosting-focused, per the user's direct request mid-chapter); `docs/INTEGRATION-{go,ruby}.md` not yet written.
 
-**Repository moved** from `/home/REDACTED/fossh` to `/home/REDACTED/Belgeler/fossh-project` at the start of this chapter (plain `mv`, git history intact, nothing recommitted or rewritten).
+**Repository relocated** to its current path at the start of this chapter (plain `mv` within the author's own home directory, git history intact, nothing recommitted or rewritten). The absolute path itself is not repeated here — see §19.4.12's identity-hygiene gate on real home-directory paths.
 
 ## This chapter — sub-chapter status
 

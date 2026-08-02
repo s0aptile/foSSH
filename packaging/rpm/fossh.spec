@@ -54,7 +54,12 @@ This is an open-alpha release (%{srcversion}). See
 # `.cargo/config.toml` pointing at it bundled into the source tarball
 # first. This works today only because the build environment's cargo
 # registry cache is already warm.
-cargo build --release --workspace
+#
+# scripts/build-release.sh (not a bare `cargo build --release`) sets
+# --remap-path-prefix so panic-location strings baked into the
+# binaries don't embed this build host's absolute paths — §19.4.12's
+# identity-hygiene gate, verified with `strings` after the build.
+./scripts/build-release.sh
 checkmodule -m -o packaging/selinux/fossh.mod packaging/selinux/fossh.te
 semodule_package -o packaging/selinux/fossh.pp -m packaging/selinux/fossh.mod -f packaging/selinux/fossh.fc
 
