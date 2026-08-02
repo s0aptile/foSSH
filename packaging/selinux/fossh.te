@@ -13,33 +13,48 @@
 # present), no `m4` support files required. (Note: this language's
 # comments are `#`-line only — no `/* */` block form.)
 #
-# Verified in this environment: compiles cleanly (`checkmodule -m`)
-# and packages cleanly (`semodule_package`) into a loadable `.pp`. NOT
-# yet verified: actually loading it (`semodule -i`, needs root — see
-# DURUM.md) against a real running `fossh-cgi`/`fcgiwrap`, and the
-# `audit2allow`-driven iteration a first real load typically needs to
-# close any gap this from-scratch pass missed. Scoped deliberately to
-# `fossh-cgi` itself (foSSH's own binary, unambiguous to label) rather
-# than also relabeling the shared, distro-packaged `fcgiwrap` binary,
-# which other units on the same host may use unrelated to foSSH.
+# Verified in this environment: compiles cleanly (`checkmodule -m`) and
+# packages cleanly (`semodule_package`) into a loadable `.pp`; every
+# type this module `require`s that isn't its own is confirmed present
+# on this box with `ls -Zd` against the real, enforcing policy
+# (`etc_t`, `usr_t`, `var_t`, `var_lib_t`, `lib_t`, `var_run_t`,
+# `urandom_device_t`), not assumed from memory. What compiling can
+# never catch, because `require{}` isn't resolved against a real base
+# policy until load time: a *missing* `allow` rule. An adversarial
+# review pass (see DURUM.md's §3.2 retrospective) found three
+# concretely missing grants this way — ancestor-directory `search`
+# permissions for `/etc`, `/usr`, `/var`, `/var/lib` (SELinux checks
+# `dir:search` at every path component the dynamic linker and this
+# module's own file opens have to traverse), `/dev/urandom` access
+# (`fossh-ingest`'s `random.rs` opens it directly, on the hot path
+# whenever the daily salt rotates), and the `capability` class permms
+# `require`d but never actually granted — all fixed below. NOT yet
+# verified even after those fixes: actually loading this (`semodule
+# -i`, needs root) against a real running `fossh-cgi`/`fcgiwrap`. See
+# the note on `unconfined_service_t` below for the one architectural
+# question that specifically needs that live check.
 module fossh 1.0.0;
 
 require {
     type httpd_t;
     type init_t;
+    type unconfined_service_t;
     type var_run_t;
+    type etc_t;
+    type usr_t;
+    type var_t;
+    type var_lib_t;
     type lib_t;
     type ld_so_t;
     type ld_so_cache_t;
+    type urandom_device_t;
 
     role system_r;
 
-    class dir { read search getattr open add_name remove_name write create lock ioctl };
-    class file {
-        read write open getattr create unlink lock ioctl append map
-        execute execute_no_trans entrypoint
-    };
+    class dir { read search getattr open add_name remove_name write };
+    class file { read write open getattr create unlink append execute execute_no_trans entrypoint map };
     class lnk_file { read getattr };
+    class chr_file { read write getattr open ioctl };
     class fd use;
     class fifo_file { read write getattr open ioctl };
     class process { transition sigchld noatsecure siginh rlimitinh fork signal };
@@ -63,29 +78,62 @@ type fossh_var_run_t;
 # fossh-fcgiwrap.service) — belt and suspenders, not redundant: a bug
 # in one layer doesn't undo the other.
 
-# --- Entering fossh_cgi_t: exec of fossh_cgi_exec_t from either the
-# systemd-managed path (init_t, this chapter's target) or the classic
-# Apache mod_cgi path (httpd_t, the original spec's deployment shape)
-# transitions into this confined domain. ---
+# --- Entering fossh_cgi_t: exec of fossh_cgi_exec_t from whichever
+# domain actually execs it. Three source domains, not two: `init_t`
+# (systemd itself — the "no shell in between" case) and `httpd_t`
+# (classic Apache mod_cgi, the original spec's deployment shape) are
+# the two obviously-correct ones. `unconfined_service_t` is added
+# defensively: the shipped `fossh-fcgiwrap.service` (packaging/systemd)
+# sets no `SELinuxContext=`, and a plain systemd unit with no dedicated
+# policy of its own commonly lands `fcgiwrap` in `unconfined_service_t`
+# on Fedora's targeted policy rather than `init_t` — if that's what
+# actually happens here, the `init_t` transition alone would never
+# fire and `fossh-cgi` would run unconfined with this module silently
+# providing no real confinement at all. This third source domain is
+# this module's best guess at closing that gap without root access to
+# confirm it; the actual confirmation (`ps -eZ | grep fcgiwrap` after a
+# real `semodule -i` + service start) is still an open item — see
+# DURUM.md. ---
 
-allow init_t fossh_cgi_exec_t:file { getattr open read execute execute_no_trans map entrypoint };
+allow init_t fossh_cgi_exec_t:file { getattr open read execute execute_no_trans map };
 allow init_t fossh_cgi_t:process { transition siginh rlimitinh noatsecure };
 allow fossh_cgi_t init_t:fd use;
 allow fossh_cgi_t init_t:process sigchld;
 allow fossh_cgi_t init_t:fifo_file { read write getattr ioctl };
 type_transition init_t fossh_cgi_exec_t:process fossh_cgi_t;
 
-allow httpd_t fossh_cgi_exec_t:file { getattr open read execute execute_no_trans map entrypoint };
+allow httpd_t fossh_cgi_exec_t:file { getattr open read execute execute_no_trans map };
 allow httpd_t fossh_cgi_t:process { transition siginh rlimitinh noatsecure };
 allow fossh_cgi_t httpd_t:fd use;
 allow fossh_cgi_t httpd_t:process sigchld;
 allow fossh_cgi_t httpd_t:fifo_file { read write getattr ioctl };
 type_transition httpd_t fossh_cgi_exec_t:process fossh_cgi_t;
 
+allow unconfined_service_t fossh_cgi_exec_t:file { getattr open read execute execute_no_trans map };
+allow unconfined_service_t fossh_cgi_t:process { transition siginh rlimitinh noatsecure };
+allow fossh_cgi_t unconfined_service_t:fd use;
+allow fossh_cgi_t unconfined_service_t:process sigchld;
+allow fossh_cgi_t unconfined_service_t:fifo_file { read write getattr ioctl };
+type_transition unconfined_service_t fossh_cgi_exec_t:process fossh_cgi_t;
+
 # --- What fossh_cgi_t may do once running ---
 
 allow fossh_cgi_t self:process { fork signal };
+# `entrypoint` is checked only via the *target* domain's relationship
+# to the executable (this rule), not the source domain's — the three
+# `allow <source> fossh_cgi_exec_t:file { ... }` grants above
+# deliberately don't repeat it.
 allow fossh_cgi_t fossh_cgi_exec_t:file entrypoint;
+# Needed for `privdrop.rs` (§3.2) to actually complete `setgid`/
+# `initgroups`/`setuid` under enforcement, for the case this binary is
+# genuinely exec'd as root (a misconfigured classic-CGI setup, not the
+# shipped systemd unit, which never runs it as root in the first
+# place — see privdrop.rs's own doc comment). Without this, SELinux
+# denies the capability independent of the process's actual Linux
+# capability set, and `privdrop.rs` fails closed (exits rather than
+# continuing to run as root) — safe, but breaks the one scenario
+# privilege-drop exists to handle.
+allow fossh_cgi_t self:capability { setuid setgid };
 
 # Dynamic linking: read the interpreter and shared libraries, use the
 # ld.so cache. No `execmem`/`execstack` — foSSH has no legitimate
@@ -94,16 +142,37 @@ allow fossh_cgi_t ld_so_t:file { read getattr open execute map };
 allow fossh_cgi_t ld_so_cache_t:file { read getattr open map };
 allow fossh_cgi_t lib_t:file { read getattr open execute map };
 allow fossh_cgi_t lib_t:lnk_file { read getattr };
+allow fossh_cgi_t lib_t:dir { read search getattr };
 
-# The data directory (SQLite db + its -wal/-shm siblings) and the
-# runtime directory (rotating salt files, per fossh-ingest's
-# salt.rs). Labeled via fossh.fc; see §2.3/§2.5 in DECISIONS.md for why
-# these are the two paths the CGI binary ever touches on disk.
-allow fossh_cgi_t fossh_data_t:dir { read search getattr add_name remove_name write };
-allow fossh_cgi_t fossh_data_t:file { read write open getattr create unlink lock ioctl append map };
-allow fossh_cgi_t fossh_var_run_t:dir { read search getattr add_name remove_name write };
-allow fossh_cgi_t fossh_var_run_t:file { read write open getattr create unlink lock ioctl append map };
-
-# Ancestor directories: search-only, never write, on the way down to
-# the two paths above.
+# Ancestor directories the dynamic linker and this module's own file
+# opens must traverse — SELinux checks `dir:search` at *every* path
+# component during resolution, not just the final target. Confirmed
+# against this box's real labels (`ls -Zd /etc /usr /var /var/lib`)
+# rather than assumed.
+allow fossh_cgi_t etc_t:dir { read search getattr };
+allow fossh_cgi_t usr_t:dir { read search getattr };
+allow fossh_cgi_t var_t:dir { read search getattr };
+allow fossh_cgi_t var_lib_t:dir { read search getattr };
 allow fossh_cgi_t var_run_t:dir { read search getattr };
+
+# `/dev/urandom` — `fossh-ingest::random::read_random_bytes` opens this
+# directly (not `getrandom(2)`), on the hot path whenever the daily
+# salt needs generating or has rotated (`SaltManager::current`), so
+# every first request and every UTC-midnight rollover needs this.
+allow fossh_cgi_t urandom_device_t:chr_file { read write getattr open ioctl };
+
+# The runtime directory (rotating salt file, spool, rate-limit/nonce
+# state — all under `FOSSH_SALT_DIR`/`FOSSH_DATA_DIR`, see
+# `fossh-cgi/src/main.rs`) and the data directory (the JSON
+# site-cache file `fossh-ingest::site_cache` reads on this hot path,
+# plus the same per-site spool/ratelimit/nonce files) — `fossh-cgi`
+# never opens the actual SQLite database itself (that's `fossh-cli`'s
+# job; see the M3 design note on why the CGI path reads a JSON cache
+# instead). No `lock`/`map` permission on either — nothing on this
+# path uses `mmap()` or advisory file locking (ADR-0013 chose plain
+# positioned I/O specifically to avoid needing `unsafe`), so granting
+# it would just be unused surface.
+allow fossh_cgi_t fossh_data_t:dir { read search getattr add_name remove_name write };
+allow fossh_cgi_t fossh_data_t:file { read write open getattr create unlink append };
+allow fossh_cgi_t fossh_var_run_t:dir { read search getattr add_name remove_name write };
+allow fossh_cgi_t fossh_var_run_t:file { read write open getattr create unlink append };

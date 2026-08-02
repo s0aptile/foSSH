@@ -1,0 +1,17 @@
+[package]
+name = "fossh-admin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Watchdog-adjacent security primitives shared by fossh-tui and the (OCaml) watchdog's FFI surface: the first-run setup token (§2.6), and — as later sub-chapters land — tamper-detection manifest signing and challenge-response auth."
+
+[dependencies]
+fossh-core.workspace = true
+fossh-ingest.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+zeroize.workspace = true

@@ -6,6 +6,8 @@ members = [
     "crates/fossh-ingest",
     "crates/fossh-cgi",
     "crates/fossh-cli",
+    "crates/fossh-admin",
+    "crates/fossh-tui",
 ]
 # Crates join `members` as each milestone lands (M2 adds fossh-store, etc.) — see DECISIONS.md.
 # fossh-ffi is deliberately NEVER a member — see DECISIONS.md "FFI crate split".
@@ -24,6 +26,7 @@ rust-version = "1.97"
 fossh-core = { path = "crates/fossh-core" }
 fossh-store = { path = "crates/fossh-store" }
 fossh-ingest = { path = "crates/fossh-ingest" }
+fossh-admin = { path = "crates/fossh-admin" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 blake3 = "1.5"
 subtle = "2.6"
@@ -35,6 +38,7 @@ memmap2 = "0.9"
 libc = "0.2"
 proptest = "1"
 nix = "0.29"
+sha2 = "0.10"
 
 [profile.release]
 opt-level = "z"

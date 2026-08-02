@@ -1,0 +1,21 @@
+[package]
+name = "fossh-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "foSSH local admin console and first-run setup wizard (chapter §3.9/§3.11). Local-only — never network-exposed."
+
+[[bin]]
+name = "fossh-tui"
+path = "src/main.rs"
+
+[dependencies]
+fossh-core.workspace = true
+fossh-store.workspace = true
+fossh-admin.workspace = true
+ratatui = "0.30"
+crossterm = "0.29"
