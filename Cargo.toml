@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/fossh-core",
+]
+# Crates join `members` as each milestone lands (M2 adds fossh-store, etc.) — see DECISIONS.md.
+# fossh-ffi is deliberately NEVER a member — see DECISIONS.md "FFI crate split".
+exclude = ["crates/fossh-ffi"]
+
+[workspace.package]
+version = "0.1.0-alpha.1"
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+authors = ["$0aptile <https://github.com/s0aptile>"]
+repository = "https://github.com/s0aptile/fossh"
+homepage = "https://github.com/s0aptile/fossh"
+rust-version = "1.97"
+
+[workspace.dependencies]
+fossh-core = { path = "crates/fossh-core" }
+fossh-store = { path = "crates/fossh-store" }
+fossh-ingest = { path = "crates/fossh-ingest" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+blake3 = "1.5"
+subtle = "2.6"
+zeroize = { version = "1.8", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+memmap2 = "0.9"
+libc = "0.2"
+proptest = "1"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 0

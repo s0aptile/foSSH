@@ -1,0 +1,15 @@
+/target
+/crates/*/target
+/crates/fossh-ffi/target
+/dist
+/fossh-oa.zip
+/fossh-oa-*.zip
+SHA256SUMS
+PUBLISH.md
+*.swp
+.DS_Store
+__MACOSX/
+.env
+*.env
+/fuzz/corpus
+/fuzz/artifacts
