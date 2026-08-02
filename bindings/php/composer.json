@@ -10,7 +10,11 @@
         "php": ">=7.4"
     },
     "suggest": {
-        "ext-ffi": "Required for in-process recording; falls back to spawning the fossh-cgi binary, or a documented no-op, without it."
+        "ext-ffi": "Required for in-process recording; falls back to an HTTP-remote transport, then spawning the fossh-cgi binary, then a documented no-op, without it.",
+        "ext-curl": "Preferred transport for HTTP-remote mode (shared hosting); falls back to a stream-context request without it.",
+        "illuminate/http": "For FoSSH\\Laravel\\FosshMiddleware.",
+        "symfony/http-kernel": "For FoSSH\\Symfony\\FosshRequestSubscriber.",
+        "symfony/event-dispatcher": "For FoSSH\\Symfony\\FosshRequestSubscriber."
     },
     "autoload": {
         "psr-4": {
