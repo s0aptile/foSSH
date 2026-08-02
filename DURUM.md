@@ -15,7 +15,7 @@ The core product — CGI + embedded-FFI privacy-preserving telemetry — was bui
 | M3 | `fossh-ingest`, `fossh-cgi` | Done. Auth, rate limiting, salt rotation, spool, CGI handler. 70 + 13 tests. |
 | M4 | `fossh-cli` | Done. `init`/`site`/`query`/`maintain`/`export`/`doctor`. 20 tests. |
 | M5 | `fossh-ffi` | Done. C ABI, `cbindgen` header, Miri-clean on the two pointer-touching functions, 32 tests in its own workspace. |
-| M6 | `bindings/{go,php,ruby}` | Partial — see below. Paused to start this chapter; not abandoned. |
+| M6 | `bindings/{go,php,ruby}` | Done. Go, PHP, Ruby — each with a runnable example and an integration test. None run against a real toolchain (none installed here); see below. |
 
 267 Rust tests passing across the two workspaces as of the last full run, zero clippy warnings, zero `rustfmt` diffs. Verified against real compiled binaries (CLI, a simulated CGI cycle, an independently-compiled C program linking `libfossh.so`), not just `cargo test`.
 
