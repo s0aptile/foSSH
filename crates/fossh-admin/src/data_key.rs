@@ -43,6 +43,50 @@ fn parse(bytes: Vec<u8>) -> Result<Zeroizing<[u8; KEY_LEN]>, DataKeyError> {
     Ok(Zeroizing::new(arr))
 }
 
+/// Writes `key` to a private, per-attempt temp file, then atomically
+/// hard-links it into place at `path` — never `create_new`-opens
+/// `path` directly and writes into it afterward. That approach (this
+/// module's first cut) left a window, between the winning attempt's
+/// `open()` and its subsequent `write_all`, where a concurrent loser's
+/// `fs::read(path)` fallback in `load_or_generate` could observe a
+/// freshly-created but still-empty file and misread a real key attempt
+/// as `Corrupt` — a real, empirically-reproducing race (roughly 2 in 5
+/// runs of this module's own `concurrent_first_callers_...` test), not
+/// a hypothetical. `hard_link` keeps `create_new`'s "fails if the
+/// destination already exists" semantics (same `AlreadyExists`
+/// fallback in `load_or_generate` handles both), but only ever makes a
+/// **fully-written** file visible under `path` — there is no window in
+/// which any reader can observe a partial one, since the content is
+/// completely written and synced to the temp file before `path` ever
+/// points at it.
+fn write_via_temp_then_link(path: &Path, key: &[u8; KEY_LEN]) -> Result<(), DataKeyError> {
+    // Random, not the PID/thread ID alone: this module's own test
+    // spawns 8 threads that race inside one process, so PID alone
+    // isn't unique per attempt. Independent of the key's own
+    // randomness on purpose — a temp filename must never be built from
+    // even a slice of real key material.
+    let suffix = read_random_bytes(8).map_err(|e| DataKeyError::Random(e.to_string()))?;
+    let suffix_hex: String = suffix.iter().map(|b| format!("{b:02x}")).collect();
+    let tmp_name = format!(
+        "{}.tmp-{}-{suffix_hex}",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("key"),
+        std::process::id(),
+    );
+    let tmp_path = path.with_file_name(tmp_name);
+
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true).mode(0o600);
+    {
+        let mut file = opts.open(&tmp_path).map_err(DataKeyError::Io)?;
+        file.write_all(key).map_err(DataKeyError::Io)?;
+        file.sync_all().map_err(DataKeyError::Io)?;
+    }
+
+    let result = fs::hard_link(&tmp_path, path);
+    fs::remove_file(&tmp_path).ok(); // always clean up our own temp name, win or lose
+    result.map_err(DataKeyError::Io)
+}
+
 fn generate_and_write(path: &Path) -> Result<Zeroizing<[u8; KEY_LEN]>, DataKeyError> {
     let raw = read_random_bytes(KEY_LEN).map_err(|e| DataKeyError::Random(e.to_string()))?;
     let key: [u8; KEY_LEN] = raw
@@ -53,11 +97,7 @@ fn generate_and_write(path: &Path) -> Result<Zeroizing<[u8; KEY_LEN]>, DataKeyEr
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(DataKeyError::Io)?;
     }
-    let mut opts = fs::OpenOptions::new();
-    opts.write(true).create_new(true).mode(0o600);
-    let mut file = opts.open(path).map_err(DataKeyError::Io)?;
-    file.write_all(&key).map_err(DataKeyError::Io)?;
-    file.sync_all().map_err(DataKeyError::Io)?;
+    write_via_temp_then_link(path, &key)?;
     Ok(Zeroizing::new(key))
 }
 
