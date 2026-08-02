@@ -52,6 +52,10 @@ Restated here only so a reader of this file doesn't have to cross-reference the 
 - Network egress from `cargo`/`rustc` works (verified with a real `crates.io` dependency fetch, `ratatui` and its full tree). A bare `curl` to `crates.io` gets an HTTP 403 from its WAF (user-agent based, unrelated to `cargo`'s own client) — not a sign network is actually blocked, just not the way to test it.
 - No passwordless `sudo` configured (`sudo -n true` fails). Per ADR-0023, the password given at the start of the original session is never placed in a command; where root is genuinely required, the exact command is surfaced here and in-chat for the user to run themselves.
 
+## §19.4.12 identity-hygiene CI gate
+
+`scripts/check-identity-hygiene.sh` + `scripts/test-identity-hygiene-gate.sh` + `.github/workflows/ci.yml` — see ADR-0031. Verified locally, both directions (a deliberately bad fixture fails all three checks; the cleaned fixture passes) — not yet run through real GitHub Actions infrastructure, which doesn't exist for this repository yet.
+
 ## Retrospectives
 
 (Appended one entry per sub-chapter as its QA gate closes.)
