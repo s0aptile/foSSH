@@ -271,7 +271,45 @@ fn spawn_maintenance_thread(db_path: PathBuf, retention_days: u32) -> thread::Jo
     })
 }
 
+/// §3.4's QUIC command channel (feature `quic`, off by default — see
+/// this crate's own Cargo.toml and `quic_client`'s own module doc).
+/// A no-op when the feature isn't compiled in, so `main` below can
+/// call this unconditionally rather than needing its own `#[cfg]`.
+/// Every failure here is soft (logged, channel left disabled) — this
+/// is an additive capability, not a requirement for this process's
+/// actual mission of accepting and storing telemetry, and a
+/// deployment that hasn't configured (or doesn't want) the watchdog
+/// relationship must not have its core service refuse to start over
+/// it.
+#[cfg(feature = "quic")]
+fn maybe_start_quic_client() {
+    if let Err(e) = fossh_fcgi::quic_client::block_sighup_process_wide() {
+        eprintln!(
+            "fossh-fcgi: could not block SIGHUP for the QUIC command channel: {e} — channel disabled"
+        );
+        return;
+    }
+    match fossh_fcgi::quic_client::QuicClientConfig::from_env() {
+        Ok(config) => {
+            thread::spawn(move || fossh_fcgi::quic_client::run(config));
+        }
+        Err(e) => eprintln!("fossh-fcgi: QUIC command channel not started: {e}"),
+    }
+}
+
+#[cfg(not(feature = "quic"))]
+fn maybe_start_quic_client() {}
+
 fn main() {
+    // Must run before any other thread is spawned below — a signal
+    // mask is inherited by new threads at creation time, not applied
+    // retroactively, and every thread in this process needs SIGHUP
+    // blocked so the OS default (terminate) never fires no matter
+    // which one the kernel happens to deliver it to; only the
+    // dedicated QUIC-client thread ever actually consumes it, via its
+    // own `sigwait`. A no-op when the `quic` feature is off.
+    maybe_start_quic_client();
+
     let config = match Config::load() {
         Ok(c) => c,
         Err(e) => {

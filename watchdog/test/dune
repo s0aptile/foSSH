@@ -5,6 +5,6 @@
 
 (tests
  (names test_nonce test_auth test_session test_manifest test_supervisor test_bootstrap test_keypair
-   test_quic test_command_protocol test_tls_identity)
+   test_quic test_command_protocol test_tls_identity test_core_pin test_quic_command_server)
  (modules :standard \ test_helpers)
  (libraries fossh_watchdog_lib fossh_watchdog_quic test_helpers unix threads.posix))

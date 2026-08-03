@@ -7,7 +7,7 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
-description = "foSSH persistent FastCGI listener (M7, feature `fcgi`) and optional loopback/unix-socket-only HTTP listener (feature `http`, off by default, S7-enforced)."
+description = "foSSH persistent FastCGI listener (M7, feature `fcgi`), optional loopback/unix-socket-only HTTP listener (feature `http`, off by default, S7-enforced), and optional §3.4 QUIC/mTLS command channel to the watchdog (feature `quic`, off by default)."
 
 [lib]
 name = "fossh_fcgi"
@@ -21,12 +21,24 @@ path = "src/main.rs"
 default = ["fcgi"]
 fcgi = []
 http = []
+# Off by default, deliberately: fossh-ipc (and the quiche/BoringSSL
+# build it pulls in via fossh-quiche-ffi) is excluded from this
+# workspace's own `members` specifically so an ordinary `cargo build
+# --workspace`/`cargo test --workspace` never pays that cost (see the
+# root Cargo.toml's own comment) — making it an *unconditional*
+# dependency of a workspace member like this crate would silently
+# reintroduce exactly that cost for every build, member crate or not.
+# Gating it behind an off-by-default feature keeps `fossh-ipc` a path
+# dependency only Cargo ever resolves when `--features quic` is passed
+# explicitly. See DECISIONS.md (ADR-0050).
+quic = ["dep:fossh-ipc", "nix/signal"]
 
 [dependencies]
 fossh-core.workspace = true
 fossh-store.workspace = true
 fossh-ingest.workspace = true
 fossh-admin.workspace = true
+fossh-ipc = { path = "../fossh-ipc", optional = true }
 nix = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]

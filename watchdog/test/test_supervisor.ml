@@ -103,4 +103,75 @@ let () =
           check "restart_if_safe refuses a restart when a watched file changed" true
       | _ -> check "restart_if_safe refuses a restart when a watched file changed" false);
 
+      (* §3.4: request_termination — the one cross-thread touch the
+         real QUIC command server (Quic_command_server) makes on a
+         live Supervisor.t, from a thread other than the one running
+         the wait_for_exit loop above. *)
+      let t4 = Supervisor.create ~program:"/bin/true" [| "/bin/true" |] in
+      check "request_termination on a supervisor with no tracked child is a safe no-op"
+        (Supervisor.request_termination t4;
+         true);
+
+      let t5 = Supervisor.create ~program:"/bin/sleep" [| "/bin/sleep"; "30" |] in
+      let (_ : int) = Supervisor.spawn t5 in
+      Supervisor.request_termination t5;
+      (match Supervisor.wait_for_exit t5 with
+      | Signaled n when n = Sys.sigterm ->
+          check "request_termination delivers SIGTERM to the real, currently-tracked child" true
+      | _ -> check "request_termination delivers SIGTERM to the real, currently-tracked child" false);
+      check "take_requested_termination reports true after a real request_termination, then resets"
+        (Supervisor.take_requested_termination t5 && not (Supervisor.take_requested_termination t5));
+
+      let t6 = Supervisor.create ~program:"/bin/true" [| "/bin/true" |] in
+      check "take_requested_termination is false when nothing has ever requested one"
+        (not (Supervisor.take_requested_termination t6));
+
+      (* Adversarial-review regression (ADR-0050, CRITICAL): a real,
+         reproduced bug had 6 individually-verified reload commands in
+         a row — an ordinary operational pattern, not an attack —
+         trip the crash-storm guard and `exit 4` the *entire watchdog
+         process*, because a command-triggered restart fed the exact
+         same counter a genuine crash loop needs. This drives more
+         than `default_policy.max_restarts` command-triggered restart
+         cycles through the real dispatch path
+         (request_termination -> wait_for_exit ->
+         take_requested_termination -> restart_after_requested_termination)
+         end to end and asserts every single one succeeds — proving
+         the storm guard is structurally bypassed for this path, not
+         merely "still passing today by chance."
+
+         A manifest covering *only* /bin/true, signed fresh here — not
+         the earlier manifest_covering_program above, which by this
+         point in the same test function has been invalidated on
+         purpose (the "restart_if_safe refuses a restart when a
+         watched file changed" check just above deliberately tampered
+         with watched_file, so re-using that same manifest here would
+         make every cycle below fail tamper-check for an unrelated
+         reason and never actually exercise the storm-guard bypass). *)
+      let manifest_for_true_only = sign_manifest_for [ "/bin/true" ] in
+      let t8 = Supervisor.create ~program:"/bin/true" [| "/bin/true" |] in
+      let (_ : int) = Supervisor.spawn t8 in
+      let cycles = Supervisor.default_policy.max_restarts + 3 in
+      let all_completed = ref true in
+      for _ = 1 to cycles do
+        Supervisor.request_termination t8;
+        let (_ : Supervisor.wait_outcome) = Supervisor.wait_for_exit t8 in
+        let was_requested = Supervisor.take_requested_termination t8 in
+        if not was_requested then all_completed := false
+        else
+          match
+            Supervisor.restart_after_requested_termination t8 ~gnupghome:k.gnupghome
+              ~expected_key_fingerprint:k.fingerprint ~clearsigned_manifest:manifest_for_true_only
+          with
+          | Requested_restart_completed _ -> ()
+          | Requested_restart_refused_tamper _ -> all_completed := false
+      done;
+      check
+        (Printf.sprintf
+           "%d command-triggered restarts (more than the %d-restart crash-storm cap) all completed, \
+            none refused"
+           cycles Supervisor.default_policy.max_restarts)
+        !all_completed;
+      let (_ : Supervisor.wait_outcome) = Supervisor.wait_for_exit t8 in
+
       summarize ())

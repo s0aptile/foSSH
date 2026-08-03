@@ -17,6 +17,10 @@
 //! side wasn't built in this environment", not "the interop is
 //! broken" — those are different failures and this test only speaks
 //! to the second one.
+//!
+//! Extended (see ADR-0048/ADR-0050) to exercise the full bidirectional
+//! exchange: the OCaml binary now also sends a real X.509 certificate
+//! PEM and expects one back over the same connection.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -44,7 +48,12 @@ fn ocaml_bootstrap_send_interops_with_the_real_rust_listener() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let socket_path = dir.join("handoff.sock");
-    let pin_path = dir.join("watchdog.pin");
+    let fingerprint_pin_path = dir.join("watchdog-fingerprint.pin");
+    let cert_pin_path = dir.join("watchdog-cert.pin");
+    let gnupghome = dir.join("gnupghome");
+    let tls_dir = dir.join("tls");
+    let core_cert_pin_path = dir.join("core-cert.pin");
+    std::fs::create_dir_all(&gnupghome).unwrap();
 
     // The real OCaml binary runs as a child of *this* process, so it
     // shares this test's real UID — SO_PEERCRED on the Rust side sees
@@ -52,39 +61,80 @@ fn ocaml_bootstrap_send_interops_with_the_real_rust_listener() {
     // process, not a same-process stand-in.
     let my_uid = nix::unistd::Uid::current().as_raw();
 
+    // Core's own certificate for this test — same shape a real
+    // `fossh-svc` would generate via `fossh_admin::tls_identity`, but
+    // this test only needs its bytes to arrive back at the OCaml side
+    // unmodified, not a real certificate a TLS stack would accept.
+    let own_cert_pem = "-----BEGIN CERTIFICATE-----\nZmFrZS1jb3Jl\n-----END CERTIFICATE-----\n";
+
     let socket_path_for_listener = socket_path.clone();
-    let pin_path_for_listener = pin_path.clone();
+    let fingerprint_pin_path_for_listener = fingerprint_pin_path.clone();
+    let cert_pin_path_for_listener = cert_pin_path.clone();
     let listener = thread::spawn(move || {
         fossh_admin::watchdog_pin::run_bootstrap_listener(
             &socket_path_for_listener,
-            &pin_path_for_listener,
+            &fingerprint_pin_path_for_listener,
+            &cert_pin_path_for_listener,
+            own_cert_pem,
             my_uid,
         )
     });
 
     // The OCaml side's own retry loop handles the listener not being
-    // bound yet — no artificial delay needed here.
-    let status = Command::new(&binary)
+    // bound yet — no artificial delay needed here. `bootstrap-send`
+    // derives its own fingerprint (from `gnupghome`) and its own
+    // X.509 identity (under `tls_dir`) rather than taking either as a
+    // literal argument — see ADR-0048/ADR-0050 and watchdog/bin/main.ml's
+    // own header comment for why a caller-supplied fingerprint was
+    // dropped as a footgun. It prints that derived fingerprint to
+    // stdout on success, the one piece of this handoff this test has
+    // no other way to learn.
+    let output = Command::new(&binary)
         .arg("bootstrap-send")
         .arg(&socket_path)
-        .arg("AA:BB:CC:DD:EE:FF:00:11:22:33")
-        .status()
+        .arg(&gnupghome)
+        .arg(&tls_dir)
+        .arg(&core_cert_pin_path)
+        .output()
         .expect("failed to run the real fossh-watchdog binary");
     assert!(
-        status.success(),
-        "fossh-watchdog bootstrap-send exited non-zero: {status:?}"
+        output.status.success(),
+        "fossh-watchdog bootstrap-send exited non-zero: {:?}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let sent_fingerprint = String::from_utf8(output.stdout)
+        .expect("bootstrap-send stdout should be valid UTF-8")
+        .trim()
+        .to_string();
+    assert!(
+        !sent_fingerprint.is_empty(),
+        "bootstrap-send should have printed its derived fingerprint"
     );
 
-    let fingerprint = listener
+    let received = listener
         .join()
         .expect("listener thread panicked")
         .expect("run_bootstrap_listener returned an error");
-    assert_eq!(fingerprint, "AA:BB:CC:DD:EE:FF:00:11:22:33");
+    assert_eq!(received.watchdog_fingerprint, sent_fingerprint);
 
-    let pinned = fossh_admin::watchdog_pin::load_pin(&pin_path)
+    let pinned_fingerprint = fossh_admin::watchdog_pin::load_pin(&fingerprint_pin_path)
         .unwrap()
-        .expect("pin file should exist after a successful handoff");
-    assert_eq!(pinned, "AA:BB:CC:DD:EE:FF:00:11:22:33");
+        .expect("fingerprint pin file should exist after a successful handoff");
+    assert_eq!(pinned_fingerprint, sent_fingerprint);
+
+    let pinned_cert = fossh_admin::watchdog_pin::load_pin(&cert_pin_path)
+        .unwrap()
+        .expect("cert pin file should exist after a successful handoff");
+    assert_eq!(pinned_cert, received.watchdog_cert_pem);
+    assert!(pinned_cert.contains("-----BEGIN CERTIFICATE-----"));
+
+    // The reply direction: core's own certificate, sent back over the
+    // same connection, should have landed in the OCaml side's own
+    // pin file exactly as core sent it.
+    let core_pin_on_watchdog_side = std::fs::read_to_string(&core_cert_pin_path)
+        .expect("watchdog-side core cert pin file should exist after a successful handoff");
+    assert_eq!(core_pin_on_watchdog_side, own_cert_pem);
 
     let _ = std::fs::remove_dir_all(&dir);
 }

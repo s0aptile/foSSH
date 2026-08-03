@@ -1,33 +1,71 @@
 //! §2.4: the one-time bootstrap handoff. `fossh-watchdog` generates a
-//! fresh per-install keypair on first start (its own concern, not
-//! this module's) and hands its public key/cert fingerprint to foSSH
-//! core exactly once, over a local Unix domain socket — not QUIC,
-//! which §3.4 scopes to steady-state IPC only, after this handoff has
-//! already pinned both sides. This module is core's (`fossh-svc`'s)
-//! half: listen, verify the connecting peer is really the watchdog
-//! (not just "some local process that found the socket path"), and
-//! persist the fingerprint so it can never be silently replaced.
+//! fresh per-install OpenPGP keypair on first start (its own concern,
+//! not this module's — used for tamper-detection manifest signing,
+//! §3.3) and hands its fingerprint to foSSH core exactly once, over a
+//! local Unix domain socket — not QUIC, which §3.4 scopes to
+//! steady-state IPC only, after this handoff has already pinned both
+//! sides. This module is core's (`fossh-svc`'s) half: listen, verify
+//! the connecting peer is really the watchdog (not just "some local
+//! process that found the socket path"), and persist what it sends so
+//! none of it can ever be silently replaced.
+//!
+//! **Extended beyond the original OpenPGP-fingerprint-only exchange**
+//! (see ADR-0048/ADR-0050): §3.4 requires the QUIC channel's mTLS to
+//! be verified in *both* directions, which needs each side to hold
+//! the other's actual X.509 certificate content — the OpenPGP
+//! fingerprint alone was never enough for that (wrong key, wrong
+//! format; quiche/BoringSSL needs a real PEM certificate to load as a
+//! trust anchor, not a hash of one). The wire exchange is now:
+//! watchdog sends its OpenPGP fingerprint (one line, unchanged), then
+//! its X.509 certificate (a PEM block, terminated by its own
+//! `-----END CERTIFICATE-----` line — an unambiguous delimiter PEM
+//! already defines, not a new framing convention invented here); core
+//! verifies the peer via `SO_PEERCRED` exactly as before, persists
+//! both, and — new — writes *its own* X.509 certificate back over the
+//! same, already-established, already-peer-verified connection before
+//! it closes. Still a single Unix-domain-socket round trip, not a
+//! new transport.
 //!
 //! "Regeneration requires a full re-bootstrap handoff, not a silent
 //! rotation" (§2.4) is enforced at the one point that actually
 //! matters: [`persist_pin`]'s `create_new` open refuses outright if a
 //! pin already exists, no matter how many handoff attempts run
 //! concurrently or how many times this function is called. An
-//! operator must explicitly remove the existing pin file before a new
-//! handoff can succeed at all — this module never does that itself.
+//! operator must explicitly remove the existing pin file(s) before a
+//! new handoff can succeed at all — this module never does that
+//! itself. One accepted asymmetry worth stating plainly: this
+//! module's own two `persist_pin` calls (fingerprint, then watchdog
+//! cert) happen *before* it writes its own reply back, so if that
+//! reply write itself fails (the connection dropped a moment early,
+//! say), the watchdog's data is still durably pinned on core's side
+//! even though the watchdog never received core's half — and because
+//! a pin already exists, a retried handoff would then be refused as
+//! `AlreadyPinned`, the same manual-recovery situation an operator
+//! already has to handle for *any* interrupted handoff, not a new
+//! failure mode this extension introduces on its own.
 
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 
-/// Real OpenPGP/X.509 fingerprints are well under this; generous
-/// enough to never legitimately reject one, tight enough that a
-/// confused or hostile peer can't make this read arbitrarily long.
+/// Real OpenPGP fingerprints are well under this; generous enough to
+/// never legitimately reject one, tight enough that a confused or
+/// hostile peer can't make this read arbitrarily long.
 pub const MAX_FINGERPRINT_LEN: usize = 512;
+
+/// A real EC P-256 self-signed certificate (this project's own shape
+/// — ADR-0044/ADR-0048/ADR-0049) PEM-encodes to a few hundred bytes;
+/// 8 KiB is generous headroom for a certificate with a longer subject
+/// or an unexpectedly large key, while still bounding how much a
+/// confused or hostile peer can make this read looking for a
+/// terminator line that never arrives.
+pub const MAX_CERT_PEM_LEN: usize = 8192;
+
+const CERT_PEM_END_MARKER: &str = "-----END CERTIFICATE-----";
 
 #[derive(Debug)]
 pub enum PinError {
@@ -45,6 +83,13 @@ pub enum PinError {
     },
     EmptyFingerprint,
     FingerprintTooLarge(usize),
+    EmptyCertPem,
+    CertPemTooLarge(usize),
+    /// The peer's cert data stopped (EOF) before a
+    /// `-----END CERTIFICATE-----` line ever arrived — a truncated or
+    /// malformed send, not a merely-oversized one (see
+    /// `CertPemTooLarge` for that case).
+    UnterminatedCertPem,
 }
 
 impl std::fmt::Display for PinError {
@@ -69,6 +114,17 @@ impl std::fmt::Display for PinError {
                     "handoff fingerprint too large ({n} bytes, cap {MAX_FINGERPRINT_LEN})"
                 )
             }
+            Self::EmptyCertPem => write!(f, "handoff sent an empty certificate"),
+            Self::CertPemTooLarge(n) => {
+                write!(
+                    f,
+                    "handoff certificate too large ({n} bytes, cap {MAX_CERT_PEM_LEN})"
+                )
+            }
+            Self::UnterminatedCertPem => write!(
+                f,
+                "handoff certificate ended before a {CERT_PEM_END_MARKER} line ever arrived"
+            ),
         }
     }
 }
@@ -141,10 +197,40 @@ fn stale_socket_is_safe_to_remove(path: &Path) -> bool {
     }
 }
 
+/// Reads lines from `reader` until one trims to exactly
+/// `CERT_PEM_END_MARKER`, returning everything read (including that
+/// final line). PEM's own `-----BEGIN`/`-----END` delimiters are used
+/// as-is as the framing — an unambiguous, already-standard marker,
+/// not a new convention invented for this wire protocol. Bounded by
+/// `cap`: an oversized block (checked after every line, not only at
+/// the end, so one pathologically long single line without its own
+/// newline can't read unboundedly either) is `CertPemTooLarge`; EOF
+/// before the marker ever appears is `UnterminatedCertPem` — a
+/// distinct, more specific error than a generic I/O failure, since a
+/// peer that simply stopped sending mid-certificate is a real,
+/// expected-to-happen malformed-input case, not a system error.
+fn read_pem_block(reader: &mut impl std::io::BufRead, cap: usize) -> Result<String, PinError> {
+    let mut collected = String::new();
+    loop {
+        let mut line = String::new();
+        let n = reader.read_line(&mut line).map_err(PinError::Io)?;
+        if n == 0 {
+            return Err(PinError::UnterminatedCertPem);
+        }
+        collected.push_str(&line);
+        if collected.len() > cap {
+            return Err(PinError::CertPemTooLarge(collected.len()));
+        }
+        if line.trim_end() == CERT_PEM_END_MARKER {
+            return Ok(collected);
+        }
+    }
+}
+
 fn accept_one_handoff(
     listener: &UnixListener,
     expected_watchdog_uid: u32,
-) -> Result<String, PinError> {
+) -> Result<(UnixStream, String, String), PinError> {
     let (stream, _) = listener.accept().map_err(PinError::Io)?;
 
     let creds =
@@ -157,33 +243,63 @@ fn accept_one_handoff(
         });
     }
 
-    let mut buf = String::new();
-    stream
-        .take(MAX_FINGERPRINT_LEN as u64 + 1)
-        .read_to_string(&mut buf)
-        .map_err(PinError::Io)?;
-    let fingerprint = buf.trim().to_string();
-    if fingerprint.is_empty() {
-        return Err(PinError::EmptyFingerprint);
-    }
-    if fingerprint.len() > MAX_FINGERPRINT_LEN {
-        return Err(PinError::FingerprintTooLarge(fingerprint.len()));
-    }
-    Ok(fingerprint)
+    // Scoped so the BufReader (which only borrows `stream`) is
+    // dropped before `stream` itself needs to move into the returned
+    // tuple. Any bytes it may have buffered ahead of what these two
+    // reads actually consumed are safe to drop with it: the protocol
+    // has core reading nothing further from the watchdog after this
+    // point, only writing its own reply — see this module's own
+    // header comment for the full exchange shape.
+    let (fingerprint, cert_pem) = {
+        let mut reader = std::io::BufReader::new(&stream);
+
+        let mut fingerprint_line = String::new();
+        reader
+            .by_ref()
+            .take(MAX_FINGERPRINT_LEN as u64 + 1)
+            .read_line(&mut fingerprint_line)
+            .map_err(PinError::Io)?;
+        let fingerprint = fingerprint_line.trim().to_string();
+        if fingerprint.is_empty() {
+            return Err(PinError::EmptyFingerprint);
+        }
+        if fingerprint.len() > MAX_FINGERPRINT_LEN {
+            return Err(PinError::FingerprintTooLarge(fingerprint.len()));
+        }
+
+        let cert_pem = read_pem_block(&mut reader, MAX_CERT_PEM_LEN)?;
+        if cert_pem.trim().is_empty() {
+            return Err(PinError::EmptyCertPem);
+        }
+
+        (fingerprint, cert_pem)
+    };
+
+    Ok((stream, fingerprint, cert_pem))
+}
+
+pub struct HandoffReceived {
+    pub watchdog_fingerprint: String,
+    pub watchdog_cert_pem: String,
 }
 
 /// Core's (`fossh-svc`'s) side of the handoff: bind `socket_path`,
 /// accept exactly one connection, verify it's really the watchdog via
-/// `SO_PEERCRED`, read its fingerprint, and pin it. Refuses before
-/// ever binding if `pin_path` already holds a pin, and refuses at the
-/// final, race-safe write either way — see this module's header
-/// comment for why regeneration is never silent.
+/// `SO_PEERCRED`, read its OpenPGP fingerprint and X.509 certificate,
+/// pin both, and write `own_cert_pem` back over the same connection
+/// before it closes. Refuses before ever binding if either pin
+/// already exists, and refuses at the final, race-safe persists
+/// either way — see this module's own header comment for why
+/// regeneration is never silent, and for the one accepted asymmetry
+/// (both pins land before the reply is sent, not atomically with it).
 pub fn run_bootstrap_listener(
     socket_path: &Path,
-    pin_path: &Path,
+    fingerprint_pin_path: &Path,
+    cert_pin_path: &Path,
+    own_cert_pem: &str,
     expected_watchdog_uid: u32,
-) -> Result<String, PinError> {
-    if load_pin(pin_path)?.is_some() {
+) -> Result<HandoffReceived, PinError> {
+    if load_pin(fingerprint_pin_path)?.is_some() || load_pin(cert_pin_path)?.is_some() {
         return Err(PinError::AlreadyPinned);
     }
     if stale_socket_is_safe_to_remove(socket_path) {
@@ -196,9 +312,30 @@ pub fn run_bootstrap_listener(
     let result = accept_one_handoff(&listener, expected_watchdog_uid);
     drop(listener);
     let _ = fs::remove_file(socket_path); // one-shot; don't linger listening after either outcome
-    let fingerprint = result?;
-    persist_pin(pin_path, &fingerprint)?;
-    Ok(fingerprint)
+    let (mut stream, fingerprint, cert_pem) = result?;
+
+    persist_pin(fingerprint_pin_path, &fingerprint)?;
+    persist_pin(cert_pin_path, &cert_pem)?;
+
+    // `own_cert_pem` is this same process's own, locally-generated
+    // certificate (from `Tls_identity`/`tls_identity::ensure_identity`
+    // on whichever side calls this), not peer-controlled input — no
+    // length/emptiness validation needed here the way the watchdog's
+    // own data got above; only a trailing-newline normalization so
+    // the reader on the other end reliably sees the same
+    // one-line-per-`read_line` framing this module's own read side
+    // depends on.
+    let reply = if own_cert_pem.ends_with('\n') {
+        own_cert_pem.to_string()
+    } else {
+        format!("{own_cert_pem}\n")
+    };
+    stream.write_all(reply.as_bytes()).map_err(PinError::Io)?;
+
+    Ok(HandoffReceived {
+        watchdog_fingerprint: fingerprint,
+        watchdog_cert_pem: cert_pem,
+    })
 }
 
 #[cfg(test)]
@@ -221,38 +358,60 @@ mod tests {
         nix::unistd::Uid::current().as_raw()
     }
 
+    const FAKE_WATCHDOG_CERT_PEM: &str = "-----BEGIN CERTIFICATE-----\nZmFrZS13YXRjaGRvZw==\n-----END CERTIFICATE-----\n";
+    const FAKE_CORE_CERT_PEM: &str = "-----BEGIN CERTIFICATE-----\nZmFrZS1jb3Jl\n-----END CERTIFICATE-----\n";
+
     #[test]
     fn a_handoff_from_the_expected_uid_is_accepted_and_persisted_at_0600() {
         let dir = scratch_dir("happy-path");
         let socket_path = dir.join("handoff.sock");
-        let pin_path = dir.join("watchdog.pin");
+        let fpr_pin_path = dir.join("watchdog.pin");
+        let cert_pin_path = dir.join("watchdog-cert.pin");
         let expected_uid = my_uid();
 
         let socket_path2 = socket_path.clone();
-        let sender = thread::spawn(move || {
+        let sender = thread::spawn(move || -> String {
             // Real client-side connect races the listener's bind — a
             // handful of short retries is standard practice for this,
             // not a design smell.
             for _ in 0..50 {
                 if let Ok(mut s) = UnixStream::connect(&socket_path2) {
                     s.write_all(b"AA:BB:CC:DD:EE:FF\n").unwrap();
-                    return;
+                    s.write_all(FAKE_WATCHDOG_CERT_PEM.as_bytes()).unwrap();
+                    let mut reply = String::new();
+                    s.read_to_string(&mut reply).unwrap();
+                    return reply;
                 }
                 thread::sleep(std::time::Duration::from_millis(10));
             }
             panic!("client never connected");
         });
 
-        let fingerprint = run_bootstrap_listener(&socket_path, &pin_path, expected_uid).unwrap();
-        sender.join().unwrap();
+        let received = run_bootstrap_listener(
+            &socket_path,
+            &fpr_pin_path,
+            &cert_pin_path,
+            FAKE_CORE_CERT_PEM,
+            expected_uid,
+        )
+        .unwrap();
+        let core_reply = sender.join().unwrap();
 
-        assert_eq!(fingerprint, "AA:BB:CC:DD:EE:FF");
+        assert_eq!(received.watchdog_fingerprint, "AA:BB:CC:DD:EE:FF");
+        assert_eq!(received.watchdog_cert_pem, FAKE_WATCHDOG_CERT_PEM);
+        assert_eq!(core_reply, FAKE_CORE_CERT_PEM, "watchdog must receive core's own certificate back");
         assert_eq!(
-            load_pin(&pin_path).unwrap().as_deref(),
+            load_pin(&fpr_pin_path).unwrap().as_deref(),
             Some("AA:BB:CC:DD:EE:FF")
         );
-        let mode = fs::metadata(&pin_path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
+        assert_eq!(
+            load_pin(&cert_pin_path).unwrap().as_deref(),
+            Some(FAKE_WATCHDOG_CERT_PEM)
+        );
+        for path in [&fpr_pin_path, &cert_pin_path] {
+            let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{path:?} must be 0600");
+        }
         assert!(
             !socket_path.exists(),
             "one-shot socket must not linger after success"
@@ -263,7 +422,8 @@ mod tests {
     fn a_handoff_from_the_wrong_uid_is_rejected_and_nothing_is_pinned() {
         let dir = scratch_dir("wrong-uid");
         let socket_path = dir.join("handoff.sock");
-        let pin_path = dir.join("watchdog.pin");
+        let fpr_pin_path = dir.join("watchdog.pin");
+        let cert_pin_path = dir.join("watchdog-cert.pin");
         // A real connection, from this same test process — but the
         // listener is told to expect a UID that isn't this process's
         // real one, so SO_PEERCRED's own kernel-reported value must
@@ -314,28 +474,42 @@ mod tests {
             panic!("client never connected");
         });
 
-        let result = run_bootstrap_listener(&socket_path, &pin_path, wrong_expected_uid);
+        let result = run_bootstrap_listener(
+            &socket_path,
+            &fpr_pin_path,
+            &cert_pin_path,
+            FAKE_CORE_CERT_PEM,
+            wrong_expected_uid,
+        );
         sender.join().unwrap();
 
         assert!(matches!(result, Err(PinError::WrongPeer { .. })));
         assert_eq!(
-            load_pin(&pin_path).unwrap(),
+            load_pin(&fpr_pin_path).unwrap(),
             None,
             "a rejected peer must never get pinned"
         );
+        assert_eq!(load_pin(&cert_pin_path).unwrap(), None);
     }
 
     #[test]
     fn a_second_handoff_attempt_is_refused_once_a_pin_already_exists() {
         let dir = scratch_dir("no-silent-rotation");
-        let pin_path = dir.join("watchdog.pin");
-        persist_pin(&pin_path, "already-pinned-fingerprint").unwrap();
+        let fpr_pin_path = dir.join("watchdog.pin");
+        let cert_pin_path = dir.join("watchdog-cert.pin");
+        persist_pin(&fpr_pin_path, "already-pinned-fingerprint").unwrap();
 
         // Refused before ever touching a socket at all — confirmed by
         // passing a socket path whose parent directory doesn't exist,
         // which would itself error if this function tried to bind.
         let unreachable_socket = dir.join("does/not/exist/handoff.sock");
-        let result = run_bootstrap_listener(&unreachable_socket, &pin_path, my_uid());
+        let result = run_bootstrap_listener(
+            &unreachable_socket,
+            &fpr_pin_path,
+            &cert_pin_path,
+            FAKE_CORE_CERT_PEM,
+            my_uid(),
+        );
         assert!(matches!(result, Err(PinError::AlreadyPinned)));
     }
 
@@ -360,7 +534,8 @@ mod tests {
     fn an_oversized_fingerprint_is_rejected() {
         let dir = scratch_dir("oversized");
         let socket_path = dir.join("handoff.sock");
-        let pin_path = dir.join("watchdog.pin");
+        let fpr_pin_path = dir.join("watchdog.pin");
+        let cert_pin_path = dir.join("watchdog-cert.pin");
         let expected_uid = my_uid();
 
         let socket_path2 = socket_path.clone();
@@ -368,7 +543,11 @@ mod tests {
             for _ in 0..50 {
                 if let Ok(mut s) = UnixStream::connect(&socket_path2) {
                     let oversized = "a".repeat(MAX_FINGERPRINT_LEN + 100);
-                    s.write_all(oversized.as_bytes()).unwrap();
+                    // A real, well-formed newline still has to follow —
+                    // otherwise this would also trip the *unterminated*
+                    // path (EOF before any newline) rather than
+                    // specifically testing the size cap on its own.
+                    let _ = s.write_all(format!("{oversized}\n").as_bytes());
                     return;
                 }
                 thread::sleep(std::time::Duration::from_millis(10));
@@ -376,10 +555,95 @@ mod tests {
             panic!("client never connected");
         });
 
-        let result = run_bootstrap_listener(&socket_path, &pin_path, expected_uid);
+        let result = run_bootstrap_listener(
+            &socket_path,
+            &fpr_pin_path,
+            &cert_pin_path,
+            FAKE_CORE_CERT_PEM,
+            expected_uid,
+        );
         sender.join().unwrap();
         assert!(matches!(result, Err(PinError::FingerprintTooLarge(_))));
-        assert_eq!(load_pin(&pin_path).unwrap(), None);
+        assert_eq!(load_pin(&fpr_pin_path).unwrap(), None);
+    }
+
+    #[test]
+    fn an_oversized_certificate_is_rejected() {
+        let dir = scratch_dir("oversized-cert");
+        let socket_path = dir.join("handoff.sock");
+        let fpr_pin_path = dir.join("watchdog.pin");
+        let cert_pin_path = dir.join("watchdog-cert.pin");
+        let expected_uid = my_uid();
+
+        let socket_path2 = socket_path.clone();
+        let sender = thread::spawn(move || {
+            for _ in 0..50 {
+                if let Ok(mut s) = UnixStream::connect(&socket_path2) {
+                    s.write_all(b"AA:BB:CC:DD:EE:FF\n").unwrap();
+                    // A real BEGIN line, then a huge body with no END
+                    // marker anywhere in the first MAX_CERT_PEM_LEN
+                    // bytes -- must trip the size cap specifically,
+                    // not the separate "EOF with no marker" case.
+                    let _ = s.write_all(b"-----BEGIN CERTIFICATE-----\n");
+                    let filler = "a".repeat(MAX_CERT_PEM_LEN + 100);
+                    let _ = s.write_all(filler.as_bytes());
+                    let _ = s.write_all(b"\n-----END CERTIFICATE-----\n");
+                    return;
+                }
+                thread::sleep(std::time::Duration::from_millis(10));
+            }
+            panic!("client never connected");
+        });
+
+        let result = run_bootstrap_listener(
+            &socket_path,
+            &fpr_pin_path,
+            &cert_pin_path,
+            FAKE_CORE_CERT_PEM,
+            expected_uid,
+        );
+        let _ = sender.join();
+        assert!(matches!(result, Err(PinError::CertPemTooLarge(_))));
+        assert_eq!(load_pin(&fpr_pin_path).unwrap(), None);
+        assert_eq!(load_pin(&cert_pin_path).unwrap(), None);
+    }
+
+    #[test]
+    fn a_certificate_with_no_end_marker_is_rejected_not_hung_on() {
+        let dir = scratch_dir("unterminated-cert");
+        let socket_path = dir.join("handoff.sock");
+        let fpr_pin_path = dir.join("watchdog.pin");
+        let cert_pin_path = dir.join("watchdog-cert.pin");
+        let expected_uid = my_uid();
+
+        let socket_path2 = socket_path.clone();
+        let sender = thread::spawn(move || {
+            for _ in 0..50 {
+                if let Ok(mut s) = UnixStream::connect(&socket_path2) {
+                    s.write_all(b"AA:BB:CC:DD:EE:FF\n").unwrap();
+                    s.write_all(b"-----BEGIN CERTIFICATE-----\nbm90IGEgcmVhbCBjZXJ0\n")
+                        .unwrap();
+                    // Deliberately no END marker, then a normal close
+                    // (drop) rather than an infinite/hanging send --
+                    // this must surface as UnterminatedCertPem, not
+                    // block the listener forever.
+                    return;
+                }
+                thread::sleep(std::time::Duration::from_millis(10));
+            }
+            panic!("client never connected");
+        });
+
+        let result = run_bootstrap_listener(
+            &socket_path,
+            &fpr_pin_path,
+            &cert_pin_path,
+            FAKE_CORE_CERT_PEM,
+            expected_uid,
+        );
+        sender.join().unwrap();
+        assert!(matches!(result, Err(PinError::UnterminatedCertPem)));
+        assert_eq!(load_pin(&fpr_pin_path).unwrap(), None);
     }
 
     #[test]
