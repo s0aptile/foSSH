@@ -1,0 +1,21 @@
+[workspace]
+members = ["."]
+# scripts/build-quiche-ffi.sh vendors quiche's own source into
+# vendor-build/ and builds it there directly (see that script's header
+# comment for why) — excluded so cargo doesn't try to fold it into
+# this crate's own single-member workspace.
+exclude = ["vendor-build"]
+
+[package]
+name = "fossh-quiche-ffi"
+version = "0.1.0-alpha.1"
+edition = "2024"
+license = "MIT"
+authors = ["$0aptile <https://github.com/s0aptile>"]
+repository = "https://github.com/s0aptile/foSSH"
+homepage = "https://github.com/s0aptile/foSSH"
+rust-version = "1.97"
+description = "Pins the exact quiche version the OCaml watchdog's ctypes bindings (§2.2/§3.4) link against — this Cargo.toml is never built directly; see scripts/build-quiche-ffi.sh's own header comment for why. Its own self-contained workspace, same as fossh-ffi (see DECISIONS.md ADR-0002) — quiche's default TLS backend vendors and compiles BoringSSL from source via cmake, a genuinely heavy build step no other crate in this project has any reason to pay for."
+
+[dependencies]
+quiche = { version = "0.29.3", features = ["ffi"] }

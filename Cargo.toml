@@ -15,7 +15,12 @@ members = [
 # fuzz/ is deliberately never a member either: cargo-fuzz needs nightly,
 # its own profile.release.debug override, and no panic="abort" — all of
 # which would collide with this workspace's shared release profile below.
-exclude = ["crates/fossh-ffi", "fuzz"]
+# fossh-quiche-ffi and fossh-ipc (§3.4) are excluded for a third reason:
+# quiche's default TLS backend vendors and compiles BoringSSL from
+# source via cmake, a genuinely heavy build step (real, measured: tens
+# of seconds even incrementally) no other crate in this workspace has
+# any reason to pay for on every plain `cargo build --workspace`.
+exclude = ["crates/fossh-ffi", "fuzz", "crates/fossh-quiche-ffi", "crates/fossh-ipc"]
 
 [workspace.package]
 version = "0.1.0-alpha.1"
