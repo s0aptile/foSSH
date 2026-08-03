@@ -17,12 +17,55 @@ type error =
   | Generate_failed of string
   | List_failed of string
   | Fingerprint_not_found
+  | Passphrase_io_error of string
 
 let describe_error = function
   | Generate_failed e -> Printf.sprintf "generating watchdog keypair: %s" e
   | List_failed e -> Printf.sprintf "listing watchdog keys: %s" e
   | Fingerprint_not_found ->
       "generated a key but could not read back its fingerprint"
+  | Passphrase_io_error e -> Printf.sprintf "watchdog keypair passphrase I/O error: %s" e
+
+(* This key used to be generated with an empty passphrase (`gpg
+   --passphrase ""`) — real, but undocumented anywhere public until an
+   adversarial-review-style question ("is this passphrase actually
+   protected?") traced it back to this exact line. Fixed by generating
+   a real, high-entropy passphrase and persisting it here, mode 0600,
+   alongside the keypair it protects. Not burned after first use, the
+   way §2.6's setup token is: that token's whole job ends the moment
+   setup completes; this passphrase protects a key meant to persist
+   for the install's entire lifetime, and is needed again every time
+   an operator re-signs the tamper-detection manifest (after an
+   update, say), not just once at generation time. Routine, unattended
+   startup is unaffected either way: `Manifest.check` (called on every
+   restart) only ever reads the *public* key, which `gpg --verify`
+   does without touching a passphrase at all — only signing needs one,
+   and signing is an operator-initiated action, never something this
+   process does to itself automatically. *)
+let passphrase_path (gnupghome : string) : string = Filename.concat gnupghome "passphrase"
+
+(* Idempotent, the same shape as `ensure_keypair` itself: returns the
+   existing passphrase if one is already on disk, generating and
+   persisting a fresh one only if not. Safe to call repeatedly (e.g.
+   once to protect a freshly generated key, then again later whenever
+   a caller needs to sign something) — the second and every later call
+   just reads the file back. *)
+let ensure_passphrase (gnupghome : string) : (string, error) result =
+  let path = passphrase_path gnupghome in
+  if Sys.file_exists path then
+    try Ok (Fileutil.read_all_bytes path) with Sys_error msg -> Error (Passphrase_io_error msg)
+  else
+    try
+      let passphrase = Nonce.generate () in
+      let fd = Unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] 0o600 in
+      let oc = Unix.out_channel_of_descr fd in
+      output_string oc passphrase;
+      close_out oc;
+      Ok passphrase
+    with
+    | Unix.Unix_error (e, fn, _) ->
+        Error (Passphrase_io_error (Printf.sprintf "%s: %s" fn (Unix.error_message e)))
+    | Sys_error msg -> Error (Passphrase_io_error msg)
 
 let run_gpg ~(gnupghome : string) (args : string list) : (string, string) result
     =
@@ -62,16 +105,19 @@ let ensure_keypair ~(gnupghome : string) ~(uid : string) :
   | Error e -> Error e
   | Ok (Some fpr) -> Ok fpr
   | Ok None -> (
-      match
-        run_gpg ~gnupghome
-          [
-            "--passphrase"; ""; "--quick-generate-key"; uid; "ed25519"; "sign";
-            "0";
-          ]
-      with
-      | Error e -> Error (Generate_failed e)
-      | Ok _ -> (
-          match existing_fingerprint ~gnupghome with
-          | Error e -> Error e
-          | Ok (Some fpr) -> Ok fpr
-          | Ok None -> Error Fingerprint_not_found))
+      match ensure_passphrase gnupghome with
+      | Error e -> Error e
+      | Ok passphrase -> (
+          match
+            run_gpg ~gnupghome
+              [
+                "--passphrase"; passphrase; "--quick-generate-key"; uid; "ed25519";
+                "sign"; "0";
+              ]
+          with
+          | Error e -> Error (Generate_failed e)
+          | Ok _ -> (
+              match existing_fingerprint ~gnupghome with
+              | Error e -> Error e
+              | Ok (Some fpr) -> Ok fpr
+              | Ok None -> Error Fingerprint_not_found)))

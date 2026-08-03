@@ -29,18 +29,25 @@ let run_gpg_ok ~(gnupghome : string) (args : string list) : string =
   | Ok out -> out
   | Error e -> failwith ("gpg " ^ String.concat " " args ^ " failed: " ^ e)
 
-type key = { gnupghome : string; fingerprint : string }
+type key = { gnupghome : string; fingerprint : string; passphrase : string }
 
 (* Delegates to the real product code (Keypair.ensure_keypair) rather
    than duplicating gpg key-generation logic here — every test that
    calls [generate_key] (nearly all of them, across every test file in
    this suite) now exercises the exact function real watchdog startup
-   will call, not a parallel test-only reimplementation of it. *)
+   will call, not a parallel test-only reimplementation of it. Fetches
+   the real passphrase too (Keypair.ensure_passphrase, same idempotent
+   shape — reads back what ensure_keypair already generated) since
+   Manifest.sign now needs one for every real signing key, tests
+   included. *)
 let generate_key ?(uid = "test <test@example.invalid>") () : key =
   let gnupghome = mkdtemp () in
   match Keypair.ensure_keypair ~gnupghome ~uid with
-  | Ok fingerprint -> { gnupghome; fingerprint }
   | Error e -> failwith (Keypair.describe_error e)
+  | Ok fingerprint -> (
+      match Keypair.ensure_passphrase gnupghome with
+      | Error e -> failwith (Keypair.describe_error e)
+      | Ok passphrase -> { gnupghome; fingerprint; passphrase })
 
 let export_pubkey (k : key) : string =
   run_gpg_ok ~gnupghome:k.gnupghome [ "--export"; k.fingerprint ]
@@ -93,6 +100,7 @@ let detach_sign (k : key) (data : string) : string =
           let (_ : string) =
             run_gpg_ok ~gnupghome:k.gnupghome
               [
+                "--pinentry-mode"; "loopback"; "--passphrase"; k.passphrase;
                 "--local-user"; k.fingerprint; "--yes"; "--detach-sign";
                 "--output"; sig_path; data_path;
               ]

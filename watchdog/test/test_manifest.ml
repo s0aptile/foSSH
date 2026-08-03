@@ -56,7 +56,7 @@ let () =
 
       (* sign / verify_and_extract round trip *)
       let signed =
-        match Manifest.sign ~gnupghome:k.gnupghome ~key_id:k.fingerprint rendered with
+        match Manifest.sign ~gnupghome:k.gnupghome ~key_id:k.fingerprint ~passphrase:k.passphrase rendered with
         | Ok s -> s
         | Error msg -> failwith ("sign failed: " ^ msg)
       in
@@ -106,7 +106,7 @@ let () =
       | _ -> check "check() refuses when the program isn't listed in the manifest at all" false);
 
       let empty_signed =
-        match Manifest.sign ~gnupghome:k.gnupghome ~key_id:k.fingerprint "" with
+        match Manifest.sign ~gnupghome:k.gnupghome ~key_id:k.fingerprint ~passphrase:k.passphrase "" with
         | Ok s -> s
         | Error msg -> failwith ("sign (empty) failed: " ^ msg)
       in
@@ -134,7 +134,7 @@ let () =
            have the watchdog's private key: same clearsign envelope
            shape, different (attacker-chosen, unsigned-by-the-real-key)
            content underneath. *)
-        match Manifest.sign ~gnupghome:other.gnupghome ~key_id:other.fingerprint rendered with
+        match Manifest.sign ~gnupghome:other.gnupghome ~key_id:other.fingerprint ~passphrase:other.passphrase rendered with
         | Ok s -> s
         | Error msg -> failwith ("sign (other key) failed: " ^ msg)
       in
@@ -156,7 +156,7 @@ let () =
           ]
         in
         match
-          Manifest.sign ~gnupghome:k.gnupghome ~key_id:k.fingerprint
+          Manifest.sign ~gnupghome:k.gnupghome ~key_id:k.fingerprint ~passphrase:k.passphrase
             (Manifest.render entries)
         with
         | Ok s -> s
@@ -193,7 +193,7 @@ let () =
       check "a large (~600KB) manifest renders to a substantial body"
         (String.length big_rendered > 400_000);
       let big_signed =
-        match Manifest.sign ~gnupghome:k.gnupghome ~key_id:k.fingerprint big_rendered with
+        match Manifest.sign ~gnupghome:k.gnupghome ~key_id:k.fingerprint ~passphrase:k.passphrase big_rendered with
         | Ok s -> s
         | Error msg -> failwith ("sign (large manifest) failed: " ^ msg)
       in

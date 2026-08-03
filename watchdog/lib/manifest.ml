@@ -89,13 +89,21 @@ let parse (body : string) : (entry list, string) result =
 
 let gpg_path = "/usr/bin/gpg"
 
-let sign ~(gnupghome : string) ~(key_id : string) (content : string) :
+(* `--pinentry-mode loopback`, alongside `--passphrase`: required as of
+   `Keypair.ensure_keypair` protecting the watchdog's key with a real
+   passphrase instead of an empty one — without it, `--batch` mode has
+   no interactive pinentry to fall back to and this call fails
+   (or hangs waiting for a terminal that will never come) rather than
+   using the passphrase handed to it directly. `passphrase` itself
+   comes from `Keypair.ensure_passphrase`, called with the same
+   `gnupghome` this function signs against. *)
+let sign ~(gnupghome : string) ~(key_id : string) ~(passphrase : string) (content : string) :
     (string, string) result =
   Subprocess.run ~prog:gpg_path
     ~argv:
       [|
-        "gpg"; "--batch"; "--homedir"; gnupghome; "--local-user"; key_id;
-        "--clearsign";
+        "gpg"; "--batch"; "--pinentry-mode"; "loopback"; "--passphrase"; passphrase;
+        "--homedir"; gnupghome; "--local-user"; key_id; "--clearsign";
       |]
     ~stdin_content:content
 

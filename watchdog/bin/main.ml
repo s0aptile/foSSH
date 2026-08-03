@@ -252,6 +252,7 @@ let () =
         match Keypair.ensure_keypair ~gnupghome ~uid:"fossh-watchdog" with
         | Ok fpr ->
             log "watchdog key fingerprint: %s" fpr;
+            log "watchdog key passphrase: %s" (Filename.concat gnupghome "passphrase");
             fpr
         | Error e ->
             log "COULD NOT ESTABLISH WATCHDOG KEYPAIR: %s" (Keypair.describe_error e);

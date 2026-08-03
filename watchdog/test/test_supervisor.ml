@@ -42,7 +42,7 @@ let () =
         | Error e -> failwith e
         | Ok entries -> (
             match
-              Manifest.sign ~gnupghome:k.gnupghome ~key_id:k.fingerprint
+              Manifest.sign ~gnupghome:k.gnupghome ~key_id:k.fingerprint ~passphrase:k.passphrase
                 (Manifest.render entries)
             with
             | Error e -> failwith e
