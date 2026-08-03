@@ -38,8 +38,19 @@ if [ "$identities" != '$0aptile <s0aptile@users.noreply.github.com>' ]; then
   fail=1
 fi
 
-echo "== generic real-path-shape sweep (/home/<user>/, /Users/<user>/) =="
-if git ls-files -z | grep -zvE "$self_exclude" | xargs -0 grep -InE '/home/[^/ ]+/|/Users/[^/ ]+/' 2>/dev/null; then
+echo "== generic real-path-shape sweep (/home/<user>, /Users/<user>) =="
+# No required trailing slash: a real leak (found the hard way, in this
+# codebase's own prose — see ADR-0054) can end in punctuation like a
+# backtick right after the username, not just another path segment.
+# A placeholder like /home/<user> still won't match: '<' breaks the
+# character class immediately, same as it did before this fix. No '.'
+# in the class either, deliberately: a bare "/home/" or "/Users/"
+# mentioned in prose and immediately followed by sentence-ending
+# punctuation (e.g. "...grep for /home/ and /Users/. Zero hits.") is
+# not a leak, and '.' being a valid (if rare) username character isn't
+# worth the false positive — real usernames overwhelmingly don't need
+# it, per POSIX's own portable username charset.
+if git ls-files -z | grep -zvE "$self_exclude" | xargs -0 grep -InE '/home/[A-Za-z0-9_-]+|/Users/[A-Za-z0-9_-]+' 2>/dev/null; then
   echo "FAIL: a real-looking home-directory path was found above"
   fail=1
 else

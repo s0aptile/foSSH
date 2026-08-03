@@ -24,7 +24,7 @@ A single binary that speaks CGI, plus a C-ABI shared library you link straight i
 ## 60-second quickstart
 
 ```
-sha256sum -c fossh-oa.zip.sha256   # verify the checksum first
+sha256sum -c SHA256SUMS            # verify the checksum first (the file shipped alongside this zip on the download page)
 unzip fossh-oa.zip
 cd fossh/dist
 ./fossh init

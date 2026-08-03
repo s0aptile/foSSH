@@ -53,7 +53,14 @@ chmod -R u+w "$build_dir"
 printf '\n[workspace]\n' >> "$build_dir/Cargo.toml"
 
 echo "build-quiche-ffi: building (this compiles BoringSSL from source via cmake — expect it to take a while the first time)" >&2
-(cd "$build_dir" && cargo build --release --features ffi)
+cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+# CFLAGS/CXXFLAGS alongside RUSTFLAGS: BoringSSL is C/C++ via cmake,
+# which --remap-path-prefix (rustc-only) doesn't reach. See ADR-0054.
+(cd "$build_dir" \
+  && RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=${build_dir}=/build/quiche --remap-path-prefix=${cargo_home}=/build/cargo-registry" \
+     CFLAGS="${CFLAGS:-} -ffile-prefix-map=${cargo_home}=/build/cargo-registry -ffile-prefix-map=${build_dir}=/build/quiche" \
+     CXXFLAGS="${CXXFLAGS:-} -ffile-prefix-map=${cargo_home}=/build/cargo-registry -ffile-prefix-map=${build_dir}=/build/quiche" \
+     cargo build --release --features ffi)
 
 mkdir -p "$out_dir/lib" "$out_dir/include"
 cp "$build_dir/target/release/libquiche.so" "$out_dir/lib/"
