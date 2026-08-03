@@ -1,0 +1,9 @@
+(library
+ (name fossh_watchdog_quic)
+ (libraries unix ctypes ctypes-foreign integers fossh_watchdog_lib)
+ (foreign_stubs
+  (language c)
+  (names quic_shim)
+  (include_dirs vendor))
+ (c_library_flags
+  (-Lquic/vendor -Wl,--no-as-needed -lquiche -Wl,--export-dynamic -lpthread -ldl -lm)))

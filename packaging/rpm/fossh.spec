@@ -50,6 +50,20 @@ BuildRequires:  systemd-rpm-macros
 BuildRequires:  ocaml
 BuildRequires:  ocaml-dune
 BuildRequires:  gnupg2
+# §3.4's OCaml/ctypes half of the watchdog<->core QUIC channel
+# (watchdog/quic/) — ocaml-ctypes-devel/ocaml-findlib for the ctypes
+# bindings themselves; cmake/clang-devel/jq for
+# scripts/build-quiche-ffi.sh, which %%build below runs before `dune
+# build` to vendor and compile quiche's own C ABI (see that script's
+# own header comment for why quiche can't just be an ordinary Cargo
+# dependency here — cmake and clang-devel are BoringSSL's own build
+# and bindgen requirements, one layer further down). All four
+# confirmed available as native Fedora RPMs, not opam packages.
+BuildRequires:  ocaml-ctypes-devel
+BuildRequires:  ocaml-findlib
+BuildRequires:  cmake
+BuildRequires:  clang-devel
+BuildRequires:  jq
 
 Requires:       fcgiwrap
 Requires:       gnupg2
@@ -89,13 +103,17 @@ This is an open-alpha release (%{srcversion}). See
 checkmodule -m -o packaging/selinux/fossh.mod packaging/selinux/fossh.te
 semodule_package -o packaging/selinux/fossh.pp -m packaging/selinux/fossh.mod -f packaging/selinux/fossh.fc
 # Deliberately NOT `eval $(opam env)` or anything opam-related — dune
-# resolves ocaml/ocaml-dune from the system findlib database installed
-# by the ocaml-dune BuildRequires above. The watchdog project doesn't
-# depend on anything beyond the OCaml standard distribution yet
-# (Unix, Threads) — §3.4's ctypes-based QUIC binding, once built,
-# will need ocaml-ctypes-devel added here too (already confirmed
-# available as a native Fedora RPM, just not needed by anything that
-# compiles yet).
+# resolves ocaml/ocaml-dune/ocaml-ctypes from the system findlib
+# database installed by the BuildRequires above, the same real,
+# clean-env build path §3.3's own logic layer already used before
+# §3.4's ctypes bindings existed.
+#
+# watchdog/quic/'s own dune file links against
+# watchdog/quic/vendor/libquiche.so, which does not exist until this
+# runs — quiche is never an ordinary Cargo dependency of anything
+# built above (see scripts/build-quiche-ffi.sh's own header comment),
+# so nothing earlier in this %%build already produced it.
+./scripts/build-quiche-ffi.sh
 (cd watchdog && dune build --profile release)
 
 %check
@@ -106,7 +124,14 @@ semodule_package -o packaging/selinux/fossh.pp -m packaging/selinux/fossh.mod -f
 # build (§3.10).
 cargo test --workspace
 (cd crates/fossh-ffi && cargo test)
-(cd watchdog && dune test)
+# LD_LIBRARY_PATH: every test binary this produces links against
+# libquiche.so.0 now (test/dune's single `(tests ...)` stanza puts all
+# of them in one executables group sharing fossh_watchdog_quic as a
+# dependency, not just test_quic.exe), and %%post's `ldconfig` hasn't
+# run yet at this point in a package build — there is no other way for
+# the dynamic linker to find a library that lives in this source tree,
+# not yet in any system library path.
+(cd watchdog && LD_LIBRARY_PATH="$(pwd)/quic/vendor" dune test)
 
 %install
 install -D -m0755 target/release/fossh %{buildroot}%{_bindir}/fossh
@@ -114,6 +139,24 @@ install -D -m0755 target/release/fossh-cgi %{buildroot}%{_bindir}/fossh-cgi
 install -D -m0755 target/release/fossh-fcgi %{buildroot}%{_bindir}/fossh-fcgi
 install -D -m0755 target/release/fossh-tui %{buildroot}%{_bindir}/fossh-tui
 install -D -m0755 watchdog/_build/default/bin/main.exe %{buildroot}%{_bindir}/fossh-watchdog
+
+# fossh-watchdog's DT_NEEDED dependency on libquiche.so.0 (§3.4) —
+# quiche is not a Fedora-packaged system library, so there is nothing
+# to add to Requires: for it; this package carries its own copy,
+# installed to a package-private directory (not %%{_libdir} directly,
+# so it can never shadow or collide with some *other* package's own
+# unrelated libquiche build) and made discoverable via an
+# ld.so.conf.d drop-in + `ldconfig` in %%post/%%postun below, the
+# standard Fedora pattern for a private shared library exactly one
+# package's own binaries use. Installed *before* the strip line below,
+# not after: `strip` on a path that doesn't exist yet fails the whole
+# %%install step outright, under `set -e` — a real, reproduced ordering
+# bug an earlier version of this spec had, caught by an adversarial
+# review, not by ever actually running a full rpmbuild against it.
+install -D -m0755 watchdog/quic/vendor/libquiche.so %{buildroot}%{_libdir}/fossh/libquiche.so.0
+install -d -m0755 %{buildroot}%{_sysconfdir}/ld.so.conf.d
+echo "%{_libdir}/fossh" > %{buildroot}%{_sysconfdir}/ld.so.conf.d/fossh-libquiche.conf
+
 # Explicit, not relied-upon-implicitly: Cargo's own `strip = true`
 # strips these before they're even copied in here, but rpm's automatic
 # post-install stripping is tied to automatic debuginfo generation
@@ -131,8 +174,14 @@ install -D -m0755 watchdog/_build/default/bin/main.exe %{buildroot}%{_bindir}/fo
 # "with debug_info, not stripped" on a real release-profile build) —
 # so for this one binary, this line is the only place stripping
 # actually happens, not a belt-and-suspenders reinforcement of
-# something Cargo already did.
-strip --strip-all %{buildroot}%{_bindir}/fossh %{buildroot}%{_bindir}/fossh-cgi %{buildroot}%{_bindir}/fossh-fcgi %{buildroot}%{_bindir}/fossh-tui %{buildroot}%{_bindir}/fossh-watchdog
+# something Cargo already did. libquiche.so.0 also included: it's
+# vendored from a *separate* build directory (scripts/build-quiche-
+# ffi.sh's own vendor-build/, not this project's own workspace), whose
+# Cargo.toml never inherited this project's own release-profile strip
+# setting — confirmed with `file` the same way, "not stripped" on a
+# real vendored build, not assumed just because the rest of the
+# release build is.
+strip --strip-all %{buildroot}%{_bindir}/fossh %{buildroot}%{_bindir}/fossh-cgi %{buildroot}%{_bindir}/fossh-fcgi %{buildroot}%{_bindir}/fossh-tui %{buildroot}%{_bindir}/fossh-watchdog %{buildroot}%{_libdir}/fossh/libquiche.so.0
 
 install -D -m0644 packaging/systemd/fossh-fcgiwrap.socket %{buildroot}%{_unitdir}/fossh-fcgiwrap.socket
 install -D -m0644 packaging/systemd/fossh-fcgiwrap.service %{buildroot}%{_unitdir}/fossh-fcgiwrap.service
@@ -155,6 +204,14 @@ getent passwd fossh-watchdog >/dev/null || useradd -r -g fossh-watchdog -d %{_sh
 exit 0
 
 %post
+# Must run before anything below might exec fossh-watchdog (nothing in
+# this %%post does yet, but a future setup-wizard-triggered start
+# could) — the freshly-installed libquiche.so.0 and its
+# ld.so.conf.d/fossh-libquiche.conf entry only take effect once
+# ldconfig has rebuilt the dynamic linker's cache; skipping this would
+# leave fossh-watchdog unable to start with a "libquiche.so.0: cannot
+# open shared object file" it has no way to explain to an operator.
+/sbin/ldconfig
 # /run/fossh{,/salt} (packaging/systemd/fossh.tmpfiles.conf) are
 # tmpfiles.d entries — normally only materialized by
 # systemd-tmpfiles-setup.service at boot. Without this, `dnf install`
@@ -184,6 +241,11 @@ restorecon -R %{_bindir}/fossh-cgi %{_bindir}/fossh-fcgi %{_sharedstatedir}/foss
 %systemd_preun fossh-fcgi.service
 
 %postun
+# Unconditional (not inside the "$1 -eq 0" full-removal check below):
+# ldconfig's cache also needs refreshing on a plain upgrade if the new
+# package version ever ships a different libquiche.so.0 build, and
+# re-running it is always harmless.
+/sbin/ldconfig
 %systemd_postun_with_restart fossh-fcgiwrap.socket
 %systemd_postun_with_restart fossh-fcgi.service
 if [ $1 -eq 0 ]; then
@@ -201,6 +263,9 @@ fi
 %{_bindir}/fossh-fcgi
 %{_bindir}/fossh-tui
 %{_bindir}/fossh-watchdog
+%dir %{_libdir}/fossh
+%{_libdir}/fossh/libquiche.so.0
+%{_sysconfdir}/ld.so.conf.d/fossh-libquiche.conf
 %{_unitdir}/fossh-fcgiwrap.socket
 %{_unitdir}/fossh-fcgiwrap.service
 %{_unitdir}/fossh-fcgi.service
