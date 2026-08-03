@@ -34,3 +34,19 @@ let is_valid (token : string) : bool =
 
 let revoke (token : string) : unit = Hashtbl.remove sessions token
 let revoke_all () : unit = Hashtbl.reset sessions
+
+(* Extends an existing, still-valid session's expiry without changing
+   its token value — "activity keeps a session alive," needed once a
+   token represents a potentially long-lived channel (§3.4's QUIC
+   connection between the watchdog and core, meant to persist for the
+   install's whole uptime) rather than a single bounded request flow
+   this module's original 15-minute default was sized for. A no-op,
+   not an error, if the token is already invalid or unknown — the
+   caller finds that out via is_valid, whatever check it was already
+   going to do, not via this function's return value (it has none). *)
+let touch ?(lifetime_seconds = default_lifetime_seconds) (token : string) : unit =
+  match Hashtbl.find_opt sessions token with
+  | None -> ()
+  | Some e ->
+      if Unix.gettimeofday () > e.expires_at then Hashtbl.remove sessions token
+      else Hashtbl.replace sessions token { expires_at = Unix.gettimeofday () +. lifetime_seconds }
