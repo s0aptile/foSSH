@@ -1,0 +1,23 @@
+[workspace]
+members = ["."]
+
+[package]
+name = "fossh-ipc"
+version = "0.1.0-alpha.1"
+edition = "2024"
+license = "MIT"
+authors = ["$0aptile <https://github.com/s0aptile>"]
+repository = "https://github.com/s0aptile/foSSH"
+homepage = "https://github.com/s0aptile/foSSH"
+rust-version = "1.97"
+description = "Core's (fossh-svc's) side of the steady-state watchdog<->core QUIC/mTLS IPC channel (§3.4), using quiche's safe Rust API directly — no ctypes needed on this side, unlike the OCaml watchdog's half. Its own self-contained workspace, same as fossh-ffi and fossh-quiche-ffi (see DECISIONS.md ADR-0002) — quiche's default TLS backend vendors and compiles BoringSSL from source via cmake, a genuinely heavy build step no other crate in this project has any reason to pay for."
+
+[lib]
+name = "fossh_ipc"
+
+[dependencies]
+quiche = "0.29.3"
+
+[dev-dependencies]
+env_logger = "0.11.11"
+log = "0.4.33"
