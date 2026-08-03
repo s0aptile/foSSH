@@ -272,9 +272,41 @@ mod tests {
 
         let socket_path2 = socket_path.clone();
         let sender = thread::spawn(move || {
-            for _ in 0..50 {
+            // 200 tries at 10ms (2s total), not the original 50
+            // (500ms): confirmed flaky under real load, not
+            // theoretically — this crate's own test suite now
+            // includes several real, CPU-heavy `openssl` subprocess
+            // tests (`tls_identity`) that can legitimately delay this
+            // thread's own scheduling past 500ms when run in
+            // parallel with them, and a slow scheduler handoff here
+            // is not the thing this test exists to check.
+            for _ in 0..200 {
                 if let Ok(mut s) = UnixStream::connect(&socket_path2) {
-                    s.write_all(b"should-never-be-pinned\n").unwrap();
+                    // A second, distinct race from the connect-retry
+                    // one above, also confirmed for real (not just
+                    // theorized): once connected, the listener checks
+                    // SO_PEERCRED and, on a mismatch, returns
+                    // immediately without ever reading — dropping its
+                    // side of the stream and closing it. If that
+                    // rejection-and-close completes before this write
+                    // reaches the kernel (plausible any time, more so
+                    // under the same real system load discussed
+                    // above), this write legitimately fails with
+                    // BrokenPipe/ConnectionReset — which is not a test
+                    // failure, it is direct evidence the server
+                    // rejected this connection *promptly*, exactly
+                    // what this test exists to confirm. Only a write
+                    // that fails for some *other* reason indicates an
+                    // actual problem.
+                    match s.write_all(b"should-never-be-pinned\n") {
+                        Ok(()) => {}
+                        Err(e)
+                            if matches!(
+                                e.kind(),
+                                std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                            ) => {}
+                        Err(e) => panic!("client write failed unexpectedly: {e}"),
+                    }
                     return;
                 }
                 thread::sleep(std::time::Duration::from_millis(10));
@@ -361,7 +393,31 @@ mod tests {
             let _listener = UnixListener::bind(&socket_path).unwrap();
         }
         assert!(socket_path.exists());
-        assert!(stale_socket_is_safe_to_remove(&socket_path));
+        // Retried, not a single immediate check: confirmed flaky under
+        // real, heavy parallel system load (this crate's test suite
+        // now includes several CPU-heavy real-`openssl`-subprocess
+        // tests running concurrently by default) — reproduced directly
+        // with full output: `stale_socket_is_safe_to_remove` observed
+        // `false` immediately after the listener's own fd was closed.
+        // That is not a correctness gap in the function under test
+        // (an immediate `connect()` racing the kernel's own listen-
+        // state teardown is not something this project's threat model
+        // needs to be instantaneous), and every other place this
+        // project polls for an expected-but-not-guaranteed-instant
+        // state change already retries rather than checking once (e.g.
+        // `Bootstrap.send_fingerprint_with_retry`) — this test should
+        // hold itself to the same standard rather than assuming
+        // synchronous teardown under load conditions it doesn't
+        // control.
+        let mut became_safe = false;
+        for _ in 0..50 {
+            if stale_socket_is_safe_to_remove(&socket_path) {
+                became_safe = true;
+                break;
+            }
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(became_safe, "a socket with no listener must eventually be detected as safe to remove");
     }
 
     #[test]

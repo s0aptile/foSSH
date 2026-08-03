@@ -14,4 +14,5 @@
 
 pub mod data_key;
 pub mod setup_token;
+pub mod tls_identity;
 pub mod watchdog_pin;
