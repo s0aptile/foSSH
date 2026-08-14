@@ -108,6 +108,12 @@
      7 - could not establish this watchdog's own keypair at startup
          (main supervision path only — bootstrap-send's own keypair
          failures use exit code 6, scoped to that subcommand)
+     9 - refused to start because privilege separation is impossible:
+         supervision must hand the child off to `fossh-svc`, which
+         needs root, and this process is not root. Distinguished from
+         every code above because it is a deployment mistake fixable
+         before anything runs, not a runtime refusal — see
+         `resolve_privdrop_target`
      8 - generate-manifest failed (could not establish its own keypair
          or passphrase, could not hash/sign one of the given paths, or
          could not write the manifest file) *)
@@ -128,6 +134,54 @@ let fossh_svc_user = "fossh-svc"
 
 let env_var (key : string) : string option =
   match Sys.getenv_opt key with Some "" -> None | v -> v
+
+(* Decides whether this process can actually hand its child off to
+   `fossh-svc`, and refuses to run at all if it cannot.
+
+   `Supervisor.spawn` implements the drop by exec'ing `setpriv
+   --reuid=fossh-svc`, and `setresuid(2)` is only permitted to a
+   process with CAP_SETUID — in practice, only to root. Run as an
+   ordinary user, every single spawn therefore dies instantly with
+   `setpriv: setresuid failed: Operation not permitted` and exit 127.
+
+   Before this gate existed, that produced a genuinely misleading
+   failure rather than an error: the supervisor treated each instant
+   death as a crash, restarted, hit the 5-restarts-in-60s storm cap
+   after about a second, and exited the *whole watchdog* — taking the
+   operator-auth server and the QUIC command server down with it. Every
+   client mid-handshake at that moment saw `Broken pipe`, which is a
+   description of the symptom four layers removed from the cause. Both
+   of this project's cross-language interop tests had been failing
+   exactly this way, and the message gave no hint that the real problem
+   was "this is not root".
+
+   Refusing is deliberate, and silently continuing without the drop
+   would be the wrong repair: a watchdog that appears to work while
+   running core with the invoking user's full privileges is a real
+   §2.3 violation, and a quiet one. The escape hatch exists for tests
+   and development only, has to be asked for explicitly, and says so
+   loudly every time it is used. *)
+let allow_no_privdrop_var = "FOSSH_WATCHDOG_ALLOW_NO_PRIVDROP"
+
+let resolve_privdrop_target () : string option =
+  if Unix.geteuid () = 0 then Some fossh_svc_user
+  else
+    match env_var allow_no_privdrop_var with
+    | Some "1" ->
+        log
+          "WARNING: running without privilege separation — the supervised child will inherit \
+           this process's own uid (%d), not %s. This is a development and test mode only; %s \
+           must never be set on a real install."
+          (Unix.geteuid ()) fossh_svc_user allow_no_privdrop_var;
+        None
+    | _ ->
+        log
+          "REFUSING TO START: supervision drops the child's privileges to %s, which requires \
+           running as root (euid is %d). Start this via its systemd unit, or set %s=1 to \
+           supervise without privilege separation — a development mode that is not safe on a \
+           real install."
+          fossh_svc_user (Unix.geteuid ()) allow_no_privdrop_var;
+        exit 9
 
 let env_var_default (key : string) ~(default : string) : string =
   Option.value (env_var key) ~default
@@ -403,7 +457,7 @@ let () =
       in
       let args = Array.of_list (program :: rest) in
       let supervisor =
-        Supervisor.create ~drop_privileges_to:(Some fossh_svc_user) ~program args
+        Supervisor.create ~drop_privileges_to:(resolve_privdrop_target ()) ~program args
       in
       start_quic_command_server supervisor ~gnupghome ~expected_key_fingerprint ~manifest_path;
       start_operator_auth_server ();

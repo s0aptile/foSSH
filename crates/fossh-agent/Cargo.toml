@@ -1,5 +1,5 @@
 [package]
-name = "fossh-tui"
+name = "fossh-agent"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,10 +7,10 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
-description = "foSSH local admin console and first-run setup wizard (chapter §3.9/§3.11). Local-only — never network-exposed."
+description = "foSSH admin bridge: a headless JSON-lines-over-stdio front end to the local admin surfaces, spawned as a child process by fossh-console. Never listens on a socket."
 
 [[bin]]
-name = "fossh-tui"
+name = "fossh-agent"
 path = "src/main.rs"
 
 [features]
@@ -31,5 +31,16 @@ fossh-store.workspace = true
 fossh-admin.workspace = true
 fossh-ipc = { path = "../fossh-ipc", optional = true }
 zeroize.workspace = true
-ratatui = "0.30"
-crossterm = "0.29"
+serde.workspace = true
+serde_json.workspace = true
+
+# Deliberately NOT a dependency here: any HTTP/TLS client crate.
+# `integrations_net.rs` shells out to the system `curl` instead, and
+# ADR-0063 records why — the short version is that this binary is the
+# only place in the project that ever makes an outbound request, the
+# request is operator-triggered rather than automatic, and a
+# rustls/ring dependency tree would add ~80 crates to the §3.10
+# supply-chain gate to do what one already-audited, already-installed
+# system tool does. Nothing about that choice is load-bearing for
+# security: the API key never reaches `curl`'s argv or environment
+# (see that module's own doc comment).

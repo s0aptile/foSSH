@@ -1208,6 +1208,17 @@ mod tests {
     /// `LD_LIBRARY_PATH="$(pwd)/quic/vendor"` override
     /// `packaging/rpm/fossh.spec`'s own `%check` already uses for
     /// `dune test`, applied here for the same reason on the Rust side.
+    /// Whatever the spawned watchdog wrote to stderr, for inclusion in
+    /// an assertion message. A failing interop test should never make
+    /// the reader go and re-run it by hand to find out why.
+    fn watchdog_stderr(path: &Path) -> String {
+        match std::fs::read_to_string(path) {
+            Ok(s) if s.trim().is_empty() => "(the watchdog wrote nothing to stderr)".to_string(),
+            Ok(s) => format!("\n--- watchdog stderr ---\n{}", s.trim_end()),
+            Err(e) => format!("(could not read the watchdog's stderr: {e})"),
+        }
+    }
+
     fn watchdog_quic_vendor_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../watchdog/quic/vendor")
     }
@@ -1312,6 +1323,14 @@ mod tests {
         import_pubkey(&key_dir.join("operator-gnupghome"), &operator_pubkey);
 
         let auth_socket = dir.join("operator-auth.sock");
+        // The watchdog's own stderr, kept rather than discarded. An
+        // earlier revision sent it to /dev/null, so when the child
+        // died during startup this test reported whatever the client
+        // happened to hit next -- a bare "Broken pipe" -- and the
+        // actual cause ("setpriv: setresuid failed") was invisible.
+        // Surfaced on every assertion below that can fail because the
+        // watchdog is not alive.
+        let watchdog_log = dir.join("watchdog.stderr");
         let port = find_free_loopback_port();
 
         let mut watchdog_process = Command::new(&binary)
@@ -1325,8 +1344,11 @@ mod tests {
             .env("FOSSH_WATCHDOG_TLS_DIR", dir.join("watchdog-tls"))
             .env("FOSSH_CORE_CERT_PIN", dir.join("core-cert.pin"))
             .env("LD_LIBRARY_PATH", watchdog_quic_vendor_dir())
+            .env("FOSSH_WATCHDOG_ALLOW_NO_PRIVDROP", "1")
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::from(
+                std::fs::File::create(&watchdog_log).expect("could not create the watchdog log file"),
+            ))
             .spawn()
             .expect("failed to spawn the real fossh-watchdog binary");
 
@@ -1336,7 +1358,8 @@ mod tests {
         }
         assert!(
             auth_socket.exists(),
-            "the real watchdog never bound its operator-auth socket"
+            "the real watchdog never bound its operator-auth socket{}",
+            watchdog_stderr(&watchdog_log)
         );
 
         match authenticate_at(&auth_socket, Some(&operator_gnupghome)) {
@@ -1766,6 +1789,14 @@ mod tests {
         std::fs::write(&token_path, "the-real-setup-token-for-this-test").unwrap();
 
         let auth_socket = dir.join("operator-auth.sock");
+        // The watchdog's own stderr, kept rather than discarded. An
+        // earlier revision sent it to /dev/null, so when the child
+        // died during startup this test reported whatever the client
+        // happened to hit next -- a bare "Broken pipe" -- and the
+        // actual cause ("setpriv: setresuid failed") was invisible.
+        // Surfaced on every assertion below that can fail because the
+        // watchdog is not alive.
+        let watchdog_log = dir.join("watchdog.stderr");
         let port = find_free_loopback_port();
 
         let mut watchdog_process = Command::new(&binary)
@@ -1780,8 +1811,11 @@ mod tests {
             .env("FOSSH_WATCHDOG_TLS_DIR", dir.join("watchdog-tls"))
             .env("FOSSH_CORE_CERT_PIN", dir.join("core-cert.pin"))
             .env("LD_LIBRARY_PATH", watchdog_quic_vendor_dir())
+            .env("FOSSH_WATCHDOG_ALLOW_NO_PRIVDROP", "1")
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::from(
+                std::fs::File::create(&watchdog_log).expect("could not create the watchdog log file"),
+            ))
             .spawn()
             .expect("failed to spawn the real fossh-watchdog binary");
 
@@ -1791,7 +1825,8 @@ mod tests {
         }
         assert!(
             auth_socket.exists(),
-            "the real watchdog never bound its operator-auth socket"
+            "the real watchdog never bound its operator-auth socket{}",
+            watchdog_stderr(&watchdog_log)
         );
 
         let operator_gnupghome = dir.join("operator-gnupghome");

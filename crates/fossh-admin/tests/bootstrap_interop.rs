@@ -89,12 +89,25 @@ fn ocaml_bootstrap_send_interops_with_the_real_rust_listener() {
     // dropped as a footgun. It prints that derived fingerprint to
     // stdout on success, the one piece of this handoff this test has
     // no other way to learn.
+    // `main.exe` is dynamically linked against `libquiche.so.0` (§3.4's
+    // OCaml/ctypes QUIC channel), which lives in this vendor directory
+    // in a dev checkout; on an installed target it is `/usr/lib64/fossh/`
+    // registered with `ldconfig`, which a checkout is not. Without this
+    // the binary dies in the dynamic linker before its `main` ever runs,
+    // and this test fails with a bare non-zero exit that has nothing to
+    // do with the bootstrap protocol it exists to exercise. The two
+    // interop tests in `fossh-agent` already did this; this one was
+    // simply missed, and had been failing for exactly that reason.
+    let quic_vendor_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../watchdog/quic/vendor");
+
     let output = Command::new(&binary)
         .arg("bootstrap-send")
         .arg(&socket_path)
         .arg(&gnupghome)
         .arg(&tls_dir)
         .arg(&core_cert_pin_path)
+        .env("LD_LIBRARY_PATH", &quic_vendor_dir)
         .output()
         .expect("failed to run the real fossh-watchdog binary");
     assert!(
