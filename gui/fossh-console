@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Entry point installed as /usr/bin/fossh-console."""
+
+import sys
+
+from fossh_console import main
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

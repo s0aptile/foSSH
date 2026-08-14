@@ -1,0 +1,246 @@
+/* foSSH Console — structure and type.
+ *
+ * Colours are NOT here. They live in `palette.py`, which generates an
+ * `@define-color` block and reloads it whenever the system switches
+ * between light and dark — GTK's CSS has no `prefers-color-scheme`
+ * query, so following the system means regenerating, not branching.
+ * Everything below references those names (`@brand_fg`,
+ * `@brand_accent`, …) and never a literal, which is what keeps the
+ * two schemes in step and keeps `tests/test_palette.py` able to prove
+ * the contrast of what actually renders.
+ *
+ * Three rules this file holds to:
+ *
+ *   1. Spacing is a 4px grid: 4, 8, 12, 16, 24, 32. Nothing else.
+ *      Arbitrary values are what make an interface feel subtly wrong
+ *      while every individual line looks fine.
+ *
+ *   2. Anything a person can hit is at least 24x24px — WCAG 2.2
+ *      §2.5.8 Target Size (Minimum).
+ *
+ *   3. Focus is always visible, at 2px, against a colour that clears
+ *      3:1 — §2.4.13 Focus Appearance.
+ */
+
+/* --- typeface ----------------------------------------------------
+ *
+ * Roboto and Roboto Mono, both Google's, both packaged by Fedora
+ * (`google-roboto-fonts`, `google-roboto-mono-fonts`). Named with
+ * fallbacks rather than assumed: `branding.py` checks what is really
+ * installed through Pango's font map, and a family named here that
+ * does not exist would otherwise be silently substituted by
+ * fontconfig into whatever it guessed. */
+
+window,
+.wordmark,
+.section-title,
+.stat-value {
+  font-family: "Roboto", "Inter", "Cantarell", sans-serif;
+}
+
+.mono,
+textview.monospace,
+.key-hint {
+  font-family: "Roboto Mono", "Source Code Pro", monospace;
+}
+
+/* Material's ligature glyphs. The family is applied per widget in
+ * `iconography.py` because it is only known at runtime; this only has
+ * to stop the theme from inheriting a weight or spacing onto it. */
+.material-icon {
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+/* Tabular figures. Any number that updates in place must have these,
+ * or it changes width as its digits change and the whole row twitches
+ * on every refresh. The highest-value rule in this file. */
+.numeric {
+  font-feature-settings: "tnum" 1, "zero" 1;
+  font-variant-numeric: tabular-nums slashed-zero;
+}
+
+.stat-value {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: @brand_fg;
+}
+
+.stat-label {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: @brand_muted;
+}
+
+.section-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: @brand_fg;
+}
+
+/* Secondary text. Colour rather than opacity: an opacity that happens
+ * to look right on one background silently fails on another, which is
+ * exactly the bug `test_palette.py` caught in the TUI's own muted
+ * value. */
+.caption,
+.dim {
+  font-size: 12px;
+  color: @brand_muted;
+}
+
+/* §1.4.12 Text Spacing wants a 1.5 line height to be survivable. It
+ * is set here rather than left to the theme so that increasing it
+ * further cannot clip anything. */
+label {
+  line-height: 1.5;
+}
+
+.mono {
+  font-size: 12px;
+}
+
+.error {
+  color: @brand_error;
+}
+
+/* --- the wordmark ------------------------------------------------
+ *
+ * The `◆` separator carried over from the TUI's own chrome title
+ * ("foSSH ◆ local admin console"). Sized down and given its own
+ * colour so it reads as a mark rather than as punctuation. */
+
+/* The TUI set its chrome title in AMBER bold. The mark carries that
+ * over, so it reads as the same product rather than a lookalike. */
+.wordmark-name {
+  color: @brand_accent;
+}
+
+.wordmark-diamond {
+  color: @brand_accent;
+  font-size: 9px;
+}
+
+.wordmark-tagline {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: @brand_muted;
+}
+
+/* --- surfaces ---------------------------------------------------- */
+
+.card-surface,
+.stat-card {
+  background-color: @brand_card;
+  border-radius: 12px;
+  border: 1px solid @brand_hairline;
+  /* Padding, not margins on the child. Setting margins to fake an
+   * inset shrinks the card itself, so it no longer lines up with
+   * anything beside it and its own text clips at the edge — which is
+   * exactly what the Health card did before this moved here. */
+  padding: 16px;
+}
+
+.hairline {
+  background-color: @brand_hairline;
+  min-height: 1px;
+}
+
+/* --- status dots -------------------------------------------------
+ *
+ * A 10px dot beside a word, never a coloured word. Colour alone is
+ * not a signal everyone receives — §1.4.1 Use of Color — so the state
+ * is always spelled out in text next to it, and the dot is the
+ * secondary cue rather than the only one. The dot itself still has to
+ * clear 3:1 as a meaningful non-text element (§1.4.11), which
+ * `test_palette.py` asserts for each state. */
+
+.status-dot {
+  min-width: 10px;
+  min-height: 10px;
+  border-radius: 999px;
+}
+
+.status-dot.ok {
+  background-color: @brand_success;
+  box-shadow: 0 0 0 3px alpha(@brand_success, 0.20);
+}
+
+.status-dot.warn {
+  background-color: @brand_warning;
+  box-shadow: 0 0 0 3px alpha(@brand_warning, 0.20);
+}
+
+.status-dot.bad {
+  background-color: @brand_error;
+  box-shadow: 0 0 0 3px alpha(@brand_error, 0.20);
+}
+
+.status-dot.idle {
+  background-color: @brand_muted;
+}
+
+/* --- focus (WCAG 2.2 §2.4.13) ------------------------------------
+ *
+ * 2px, offset so it is never confused with a border, and in the
+ * accent — which the palette test already proves clears 3:1 against
+ * every surface it can land on. GTK's default focus ring is thinner
+ * and lower contrast than the criterion wants. */
+
+*:focus-visible {
+  outline: 2px solid @brand_accent;
+  outline-offset: 2px;
+}
+
+/* --- target size (WCAG 2.2 §2.5.8) -------------------------------
+ *
+ * 24x24 is the floor. GTK's own buttons are comfortably larger, but a
+ * `.flat` icon button in a header bar can be shrunk by a theme, so
+ * the minimum is stated rather than assumed. */
+
+button,
+row.activatable,
+checkbutton,
+switch {
+  min-height: 24px;
+  min-width: 24px;
+}
+
+/* --- the k-anonymity notice --------------------------------------
+ *
+ * Information, not a warning. A folded result is foSSH working
+ * exactly as designed, and colouring it like an error would teach
+ * operators to read a privacy guarantee as a fault. */
+
+.privacy-note {
+  background-color: alpha(@brand_accent, 0.12);
+  border-left: 3px solid @brand_accent;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.privacy-note label {
+  font-size: 12px;
+  color: @brand_fg;
+}
+
+/* --- credentials -------------------------------------------------- */
+
+.key-hint {
+  font-size: 12px;
+  color: @brand_muted;
+}
+
+/* --- sparkline ---------------------------------------------------- */
+
+.sparkline {
+  min-height: 44px;
+}
+
+/* --- sidebar ------------------------------------------------------ */
+
+.sidebar-brand {
+  padding: 16px 12px;
+}

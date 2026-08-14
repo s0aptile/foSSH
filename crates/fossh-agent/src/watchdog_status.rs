@@ -14,7 +14,7 @@
 //! ICMP-style refusal over QUIC's UDP transport, so an eager query on
 //! every app launch or every redraw would mean blocking the whole
 //! TUI's startup on a multi-second timeout in the common case of
-//! running this TUI with no watchdog listening at all (during
+//! running this console with no watchdog listening at all (during
 //! development, or before the watchdog service has been started —
 //! note this is no longer the wizard screen's own situation: as of
 //! ADR-0059, `wizard.rs` is a real client of the watchdog's setup
@@ -143,7 +143,7 @@ mod live {
 
     pub fn query() -> Result<WatchdogStatus, String> {
         Err(
-            "this build of fossh-tui was compiled without watchdog QUIC support (rebuild with \
+            "this build of fossh-agent was compiled without watchdog QUIC support (rebuild with \
              `--features quic`)"
                 .to_string(),
         )
