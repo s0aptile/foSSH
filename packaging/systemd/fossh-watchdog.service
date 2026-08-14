@@ -1,0 +1,60 @@
+[Unit]
+Description=foSSH watchdog (process supervision, tamper detection, auth gate)
+Documentation=https://github.com/s0aptile/foSSH
+After=network.target
+Conflicts=fossh-fcgi.service
+
+[Service]
+Type=simple
+User=fossh-watchdog
+Group=fossh-watchdog
+
+ExecStart=/usr/bin/fossh-watchdog /usr/bin/fossh-fcgi /var/lib/fossh-watchdog/gnupghome /var/lib/fossh-watchdog/manifest.asc
+
+Environment=FOSSH_CONFIG=/etc/fossh/fossh.toml
+Environment=FOSSH_FCGI_SOCKET=/run/fossh/fcgi.sock
+Environment=FOSSH_FCGI_WORKERS=8
+
+Environment=FOSSH_WATCHDOG_TLS_DIR=/var/lib/fossh-watchdog/tls
+Environment=FOSSH_CORE_CERT_PIN=/var/lib/fossh-watchdog/core-cert.pin
+Environment=FOSSH_QUIC_LISTEN_ADDR=127.0.0.1:7443
+Environment=FOSSH_OPERATOR_AUTH_SOCKET=/var/lib/fossh-watchdog/operator-auth.sock
+Environment=FOSSH_OPERATOR_KEY_DIR=/var/lib/fossh-watchdog/operator-key
+
+Restart=on-failure
+RestartSec=2s
+
+PrivateNetwork=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/fossh-watchdog /run/fossh /etc/fossh
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_SETPCAP
+AmbientCapabilities=CAP_SETUID CAP_SETGID CAP_SETPCAP
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@setuid capset
+SystemCallArchitectures=native
+PrivateDevices=yes
+ProtectProc=invisible
+ProcSubset=pid
+PrivateUsers=identity
+IPAddressDeny=any
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

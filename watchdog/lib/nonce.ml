@@ -28,9 +28,18 @@ let hex_of_bytes (s : string) : string =
   done;
   Bytes.unsafe_to_string out
 
+(* [n] bytes of entropy, hex-encoded. [generate] (below) is the
+   security-relevant, fixed-256-bit case every existing caller uses;
+   this general form exists for the one callsite (`Operator_key`'s
+   temp-gnupghome naming) that needs *fewer* random bytes purely for
+   filesystem-path uniqueness, not secrecy — see that callsite's own
+   comment for why a shorter suffix there is a real, load-bearing fix,
+   not just a cosmetic shrink. *)
+let generate_n (n : int) : string = hex_of_bytes (read_random_bytes n)
+
 (* 32 bytes (256 bits) of entropy, hex-encoded — a single-use,
    short-lived challenge nonce (§2.1) or session token (Session). *)
-let generate () : string = hex_of_bytes (read_random_bytes 32)
+let generate () : string = generate_n 32
 
 (* Compares two secret-derived strings (session tokens, in practice)
    without an early-exit on the first differing byte, so how many

@@ -4,11 +4,17 @@
 //! writes accepted events straight to SQLite through one dedicated
 //! writer thread (`writer.rs`, batched every 100 events or 500ms) and
 //! runs its own retention/vacuum maintenance on a timer instead of
-//! relying on an external `fossh maintain` cron job. No data-at-rest
-//! spool encryption is loaded here on purpose: §3.8/ADR-0027 scoped
-//! that specifically to the *spool file*, which this write path never
-//! touches at all — see ADR-0035 for why this binary doesn't offer a
-//! spool-mode alternative despite `Config::mode` existing.
+//! relying on an external `fossh maintain` cron job.
+//!
+//! §3.8: this binary never touches the *spool* file at all (unchanged —
+//! ADR-0035 covers why it has no spool-mode alternative despite
+//! `Config::mode` existing), but it does load the same per-install
+//! data-encryption key `fossh-cgi`/`fossh-cli` use, because the
+//! database itself is now encrypted at rest too, not just the spool.
+//! `fossh_store::Store::open_encrypted` is what both this process's
+//! long-lived `store` (owned by `writer.rs`'s dedicated thread) and the
+//! periodic maintenance thread's own reopen use — see
+//! `spawn_maintenance_thread` below.
 //!
 //! No async runtime, per the spec's own constraint: a small, fixed
 //! thread pool (`FOSSH_FCGI_WORKERS`, default 8) shares one
@@ -26,6 +32,7 @@ use std::thread;
 use std::time::Duration;
 
 use fossh_core::config::Config;
+use fossh_ingest::geoip::GeoipReader;
 use fossh_ingest::ingest::{self, IngestDecision};
 
 /// Read/write timeout on every accepted connection, in both
@@ -120,6 +127,12 @@ struct Shared {
     respect_optout_signals: bool,
     trust_forwarded_for: bool,
     events_tx: Sender<fossh_core::types::Event>,
+    /// Opened once at process start from `Config.country_db` (see
+    /// `main` below), shared read-only across every worker thread for
+    /// this process's whole lifetime — not reopened per request. Safe
+    /// to share this way: `maxminddb::Reader` is `Send + Sync`, and
+    /// `GeoipReader::resolve` takes `&self`, never mutates anything.
+    country_db: GeoipReader,
 }
 
 fn handle_connection(mut stream: UnixStream, shared: &Shared) {
@@ -171,6 +184,7 @@ fn handle_connection(mut stream: UnixStream, shared: &Shared) {
                     rate_limit_burst: shared.rate_limit_burst,
                     respect_optout_signals: shared.respect_optout_signals,
                     now: unix_now(),
+                    country_db: &shared.country_db,
                 });
                 match decision {
                     IngestDecision::Status {
@@ -243,7 +257,11 @@ fn spawn_worker_pool(
 /// far less often (once per this many retention passes) to keep that
 /// cost proportionate to a persistent database, not a fresh sqlite
 /// file every hour.
-fn spawn_maintenance_thread(db_path: PathBuf, retention_days: u32) -> thread::JoinHandle<()> {
+fn spawn_maintenance_thread(
+    db_path: PathBuf,
+    retention_days: u32,
+    data_key: zeroize::Zeroizing<[u8; 32]>,
+) -> thread::JoinHandle<()> {
     const RETENTION_INTERVAL: Duration = Duration::from_secs(3600);
     const VACUUM_EVERY_N_PASSES: u32 = 24;
 
@@ -251,7 +269,7 @@ fn spawn_maintenance_thread(db_path: PathBuf, retention_days: u32) -> thread::Jo
         let mut passes: u32 = 0;
         loop {
             thread::sleep(RETENTION_INTERVAL);
-            let Ok(mut store) = fossh_store::Store::open(&db_path) else {
+            let Ok(mut store) = fossh_store::Store::open_encrypted(&db_path, &data_key) else {
                 continue; // transient open failure: try again next interval
             };
             match store.enforce_retention(retention_days, unix_now()) {
@@ -344,8 +362,21 @@ fn main() {
         }
     };
 
+    // §3.8: the same per-install data-encryption key `fossh-cgi` and
+    // `fossh-cli` use — loaded once here and moved into both the writer
+    // thread's `Store::open_encrypted` call below and the maintenance
+    // thread's own periodic reopen.
+    let data_key = match fossh_admin::data_key::load_or_generate(&config.data_dir.join(".data_key"))
+    {
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("fossh-fcgi: could not load data-encryption key: {e}");
+            std::process::exit(1);
+        }
+    };
+
     let db_path = config.data_dir.join("fossh.db");
-    let store = match fossh_store::Store::open(&db_path) {
+    let store = match fossh_store::Store::open_encrypted(&db_path, &data_key) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("fossh-fcgi: could not open {}: {e}", db_path.display());
@@ -354,12 +385,17 @@ fn main() {
     };
     let (events_tx, events_rx) = mpsc::channel();
     thread::spawn(move || writer::run(store, events_rx));
-    spawn_maintenance_thread(db_path, config.retention_days);
+    spawn_maintenance_thread(db_path, config.retention_days, data_key);
 
     let trust_forwarded_for = matches!(
         env_var("FOSSH_TRUST_FORWARDED_FOR").as_deref(),
         Some("1") | Some("true")
     );
+    // Opened once here, not per request — see `Shared::country_db`'s own
+    // doc comment. A missing/corrupt/unconfigured database degrades to
+    // an inert reader (every event's country is `ZZ`), never a startup
+    // failure — see `fossh_ingest::geoip`.
+    let country_db = GeoipReader::open(config.country_db.path());
     let shared = Arc::new(Shared {
         data_dir: config.data_dir.clone(),
         salt_dir: config.salt_dir.clone(),
@@ -368,6 +404,7 @@ fn main() {
         respect_optout_signals: config.respect_optout_signals,
         trust_forwarded_for,
         events_tx,
+        country_db,
     });
 
     let worker_count: usize = env_var("FOSSH_FCGI_WORKERS")
@@ -488,6 +525,7 @@ mod tests {
             respect_optout_signals: true,
             trust_forwarded_for: false,
             events_tx,
+            country_db: GeoipReader::none(),
         });
         (shared, events_rx)
     }
@@ -526,6 +564,7 @@ mod tests {
                 id: fossh_core::types::SiteId::new(1),
                 slug: "blog".to_string(),
                 key_hash,
+                sign_pubkey: None,
                 allowlist: vec!["pageview".to_string()],
                 created_at: 1_700_000_000,
                 disabled: false,

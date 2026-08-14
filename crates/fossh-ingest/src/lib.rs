@@ -17,6 +17,7 @@ pub mod auth;
 pub mod compact;
 pub mod crypto;
 pub mod forwarded;
+pub mod geoip;
 pub mod ingest;
 pub mod pipeline;
 pub mod random;
@@ -39,6 +40,9 @@ pub enum IngestError {
     CorruptFrame,
     /// A stored sketch/state blob wasn't the size this crate wrote.
     CorruptState,
+    /// A site slug wasn't safe to use as a filesystem path component (see
+    /// `site_cache::is_safe_slug`) — refused before ever touching disk.
+    InvalidSlug,
 }
 
 impl fmt::Display for IngestError {
@@ -51,6 +55,7 @@ impl fmt::Display for IngestError {
             IngestError::Json(e) => write!(f, "json: {e}"),
             IngestError::CorruptFrame => write!(f, "spool frame CRC mismatch"),
             IngestError::CorruptState => write!(f, "persisted state blob has an unexpected shape"),
+            IngestError::InvalidSlug => write!(f, "slug is not safe to use as a path component"),
         }
     }
 }
@@ -62,7 +67,9 @@ impl std::error::Error for IngestError {
             IngestError::Store(e) => Some(e),
             IngestError::Validation(e) => Some(e),
             IngestError::Json(e) => Some(e),
-            IngestError::CorruptFrame | IngestError::CorruptState => None,
+            IngestError::CorruptFrame | IngestError::CorruptState | IngestError::InvalidSlug => {
+                None
+            }
         }
     }
 }

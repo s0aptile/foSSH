@@ -82,9 +82,27 @@ let read_pem_block (ic : in_channel) : (string, error) result =
    happen before any read: core's own reader is line/marker-bounded,
    not EOF-bounded (see the Rust side's `read_line`/`read_pem_block`),
    so no half-close or shutdown is needed between writing and
-   reading. *)
+   reading.
+
+   Fresh sweep (SIGPIPE check): this writes to a Unix-domain STREAM
+   socket — a real SIGPIPE risk (unlike quic.ml's own sockets, which are
+   SOCK_DGRAM/UDP and structurally cannot raise SIGPIPE on send, since
+   there is no "broken pipe" for a connectionless protocol). main.ml's
+   own top-level entry point already ignores SIGPIPE process-wide before
+   dispatching to the `bootstrap-send` subcommand that calls this, so a
+   real `fossh-watchdog bootstrap-send` run is not exposed today — but
+   `Operator_auth_server.run` already set the exact same precedent
+   ("safe on its own for any caller -- test or future embedder -- that
+   doesn't happen to go through main.ml") for the identical reason this
+   module didn't yet follow: this file's own test (test_bootstrap.ml)
+   calls `send_handoff` directly, never through main.ml, and was running
+   exposed to a real process-killing SIGPIPE the whole time it happened
+   not to lose the write-before-close race — not a hypothetical, see
+   that test's own new regression case. Idempotent, harmless to set
+   twice, matching the same idiom. *)
 let send_handoff ~(socket_path : string) ~(fingerprint : string) ~(cert_pem : string) :
     (string, error) result =
+  Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
   match Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 with
   | exception Unix.Unix_error (e, fn, _) ->
       Error (Connect_failed (Printf.sprintf "%s: %s" fn (Unix.error_message e)))

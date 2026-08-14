@@ -4,7 +4,11 @@
 
 use fossh_core::types::SiteId;
 
+use crate::args::wants_help;
 use crate::common::{load_config, open_store, unix_now};
+
+const HELP: &str = "usage: fossh maintain\n\n\
+Drain every site's spool into the database, enforce retention, vacuum.";
 
 fn site_spool_dir(data_dir: &std::path::Path, site_id: SiteId) -> std::path::PathBuf {
     data_dir
@@ -13,22 +17,21 @@ fn site_spool_dir(data_dir: &std::path::Path, site_id: SiteId) -> std::path::Pat
         .join("spool")
 }
 
-pub fn run(_args: &[String]) -> i32 {
+pub fn run(args: &[String]) -> i32 {
+    if wants_help(args) {
+        println!("{HELP}");
+        return 0;
+    }
     let config = load_config();
     let mut store = open_store(&config.data_dir);
     let now = unix_now();
 
     // §3.8: the same per-install data-encryption key `fossh-cgi` seals
-    // spool frames under — must be loaded from the same fixed path to
-    // ever decrypt anything it wrote.
-    let data_key = match fossh_admin::data_key::load_or_generate(&config.data_dir.join(".data_key"))
-    {
-        Ok(key) => key,
-        Err(e) => {
-            eprintln!("fossh maintain: could not load data-encryption key: {e}");
-            return 1;
-        }
-    };
+    // spool frames under, and `open_store` above already used to open
+    // the database itself — loaded a second time here (cheap: one small
+    // file read) rather than threading it out of `open_store`, since
+    // this is the one command that needs it for both purposes at once.
+    let data_key = crate::common::load_data_key(&config.data_dir);
 
     let sites = match store.list_sites() {
         Ok(s) => s,

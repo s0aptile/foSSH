@@ -14,14 +14,14 @@
 //! reason: there is exactly one watchdog and exactly one core per
 //! install, never more.
 //!
-//! Scope of this module, this pass: real, verified connection
-//! establishment with mutual TLS and basic stream send/recv — the
-//! transport primitives. NOT yet built: the actual command protocol
-//! (session-token-bound app-level commands, replay protection per
-//! §3.4's own "a captured, valid command must not be replayable over
-//! a newly established connection" requirement) or wiring this into
-//! `fossh-fcgi`'s or the watchdog's real runtime loops — see
-//! dev/DURUM.md for exactly what's connected versus still open.
+//! This module covers the transport primitives: real, verified
+//! connection establishment with mutual TLS and basic stream
+//! send/recv. The app-level command protocol (session-token-bound
+//! commands, replay protection per §3.4's own requirement) and its
+//! wiring into `fossh-fcgi`'s real runtime loop are built too, but
+//! live elsewhere — `crates/fossh-admin::command_client` and
+//! `crates/fossh-fcgi/src/quic_client.rs` respectively; see ADR-0047/
+//! ADR-0050 and dev/DURUM.md for exactly what's connected.
 
 #![forbid(unsafe_code)]
 

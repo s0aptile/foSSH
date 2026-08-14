@@ -84,4 +84,30 @@ let () =
                       ~expected_key_fingerprint:revoke_target.fingerprint
                       ~data:revoked_nonce ~signature_binary:revoked_sig))));
 
+      (* Regression test for a real, fresh-sweep finding: verify_signature's
+         three nested Tempfile.with_contents calls plus the
+         Fileutil.read_all_bytes of status_path were unguarded Stdlib
+         channel ops (raise Sys_error, not Unix.Unix_error) — the same
+         bug class Manifest.verify_and_extract had (see that module's own
+         test for the full history and why real fd exhaustion, not a
+         mid-process TMPDIR change, is what actually reproduces it). Not
+         process-crashing here even before the fix (the one real caller
+         already runs inside accept_loop's own connection-level
+         catch-all), but this function's whole contract is "return a
+         bool, never raise" — confirmed it now holds under the identical
+         real fault. *)
+      let exhausted = exhaust_fds () in
+      Fun.protect
+        ~finally:(fun () -> release_exhausted_fds exhausted)
+        (fun () ->
+          check "verify_signature under real fd exhaustion returns false, not an uncaught exception"
+            (not
+               (Auth.verify_signature ~gnupghome:k.gnupghome
+                  ~expected_key_fingerprint:k.fingerprint ~data:nonce
+                  ~signature_binary:sig_bytes)));
+      check "a real verify_signature call succeeds again once fds are released"
+        (Auth.verify_signature ~gnupghome:k.gnupghome
+           ~expected_key_fingerprint:k.fingerprint ~data:nonce
+           ~signature_binary:sig_bytes);
+
       summarize ())

@@ -264,7 +264,7 @@ impl Store {
                 result.push(acc.into_row(dims));
             }
         }
-        if other_present {
+        if other_present && other.hll.estimate().round() as u64 >= k_anonymity as u64 {
             let dims = group_by
                 .iter()
                 .map(|&f| (f, "(other)".to_string()))
@@ -387,7 +387,6 @@ mod tests {
     #[test]
     fn k_anonymity_folds_small_groups_into_other() {
         let mut store = Store::open_in_memory().unwrap();
-        // /popular: 20 distinct visitors. /rare: 2 distinct visitors.
         for i in 0..20 {
             store
                 .record_event(&event(
@@ -410,6 +409,17 @@ mod tests {
                 ))
                 .unwrap();
         }
+        for i in 0..3 {
+            store
+                .record_event(&event(
+                    1,
+                    1_700_000_000 + i,
+                    "pageview",
+                    "/rare2",
+                    300 + i as u64,
+                ))
+                .unwrap();
+        }
 
         let rows = store
             .query_rollup(SiteId::new(1), 0, i64::MAX, &[GroupByField::Path], 5)
@@ -425,9 +435,10 @@ mod tests {
         let other = rows
             .iter()
             .find(|r| r.dims[0].1 == "(other)")
-            .expect("rare group folds into (other)");
-        assert_eq!(other.hits, 2);
-        assert_eq!(other.uniques, 2);
+            .expect("rare groups merge into a (other) that itself meets k");
+        assert_eq!(other.hits, 5);
+        assert_eq!(other.uniques, 5);
+        assert!(other.uniques >= 5, "no reported group, including (other), may show uniques < k");
     }
 
     #[test]
@@ -441,8 +452,70 @@ mod tests {
         let rows = store
             .query_rollup(SiteId::new(1), 0, i64::MAX, &[GroupByField::Path], 5)
             .unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].dims[0].1, "(other)", "4 uniques < k=5 must fold");
+        assert!(
+            rows.is_empty(),
+            "4 uniques < k=5, and the lone (other) fold's own uniques are also 4 < 5 — not reportable at all"
+        );
+    }
+
+    #[test]
+    fn other_bucket_below_k_after_merge_is_suppressed_entirely() {
+        let mut store = Store::open_in_memory().unwrap();
+        for i in 0..2 {
+            store
+                .record_event(&event(1, 1_700_000_000 + i, "pageview", "/a", 100 + i as u64))
+                .unwrap();
+        }
+        for i in 0..2 {
+            store
+                .record_event(&event(1, 1_700_000_000 + i, "pageview", "/b", 200 + i as u64))
+                .unwrap();
+        }
+
+        let rows = store
+            .query_rollup(SiteId::new(1), 0, i64::MAX, &[GroupByField::Path], 5)
+            .unwrap();
+        assert!(
+            rows.is_empty(),
+            "both groups fold into (other), whose own merged uniques (4) is still < k=5"
+        );
+    }
+
+    #[test]
+    fn other_bucket_at_or_above_k_after_merge_is_reported() {
+        let mut store = Store::open_in_memory().unwrap();
+        for i in 0..2 {
+            store
+                .record_event(&event(1, 1_700_000_000 + i, "pageview", "/a", 100 + i as u64))
+                .unwrap();
+        }
+        for i in 0..3 {
+            store
+                .record_event(&event(1, 1_700_000_000 + i, "pageview", "/b", 200 + i as u64))
+                .unwrap();
+        }
+
+        let rows = store
+            .query_rollup(SiteId::new(1), 0, i64::MAX, &[GroupByField::Path], 5)
+            .unwrap();
+        assert_eq!(rows.len(), 1, "the merged (other) bucket meets k=5 and is reportable");
+        assert_eq!(rows[0].dims[0].1, "(other)");
+        assert_eq!(rows[0].uniques, 5);
+        assert!(rows[0].uniques >= 5, "no reported group may show uniques < k");
+    }
+
+    #[test]
+    fn suppressed_other_bucket_leaks_no_row_at_all_not_even_via_hits() {
+        let mut store = Store::open_in_memory().unwrap();
+        for i in 0..2 {
+            store
+                .record_event(&event(1, 1_700_000_000 + i, "pageview", "/rare", 300 + i as u64))
+                .unwrap();
+        }
+        let rows = store
+            .query_rollup(SiteId::new(1), 0, i64::MAX, &[GroupByField::Path], 5)
+            .unwrap();
+        assert!(rows.is_empty());
     }
 
     #[test]

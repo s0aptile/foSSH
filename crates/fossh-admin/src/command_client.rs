@@ -23,6 +23,7 @@ pub const MAX_LINE_LEN: usize = 512;
 pub enum Command {
     Restart,
     Reload,
+    Status,
 }
 
 impl Command {
@@ -30,6 +31,49 @@ impl Command {
         match self {
             Self::Restart => "restart",
             Self::Reload => "reload",
+            Self::Status => "status",
+        }
+    }
+}
+
+/// Wire-exact counterpart to `command_protocol.ml`'s `child_state` —
+/// one of the two fixed-keyword fields a `STATUS` reply carries, see
+/// `Response::Status` below.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildState {
+    Running,
+    Stopped,
+}
+
+impl ChildState {
+    fn from_name(s: &str) -> Option<Self> {
+        match s {
+            "running" => Some(Self::Running),
+            "stopped" => Some(Self::Stopped),
+            _ => None,
+        }
+    }
+}
+
+/// Wire-exact counterpart to `command_protocol.ml`'s `tamper_state`.
+/// `Unknown` covers every way the watchdog's own live tamper recheck
+/// couldn't produce a real clean/tampered answer (e.g. its manifest
+/// file was unreadable at query time) — never silently reported as
+/// `Clean`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TamperState {
+    Clean,
+    Tampered,
+    Unknown,
+}
+
+impl TamperState {
+    fn from_name(s: &str) -> Option<Self> {
+        match s {
+            "clean" => Some(Self::Clean),
+            "tampered" => Some(Self::Tampered),
+            "unknown" => Some(Self::Unknown),
+            _ => None,
         }
     }
 }
@@ -38,6 +82,10 @@ impl Command {
 pub enum Response {
     Ok,
     Error(String),
+    Status {
+        child: ChildState,
+        tamper: TamperState,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -50,7 +98,9 @@ impl std::fmt::Display for ProtocolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Malformed(line) => write!(f, "malformed message: {line:?}"),
-            Self::LineTooLarge(n) => write!(f, "line exceeded the {MAX_LINE_LEN}-byte cap (got {n})"),
+            Self::LineTooLarge(n) => {
+                write!(f, "line exceeded the {MAX_LINE_LEN}-byte cap (got {n})")
+            }
         }
     }
 }
@@ -63,7 +113,9 @@ impl std::error::Error for ProtocolError {}
 /// a mismatch here would silently make every real session token this
 /// side ever receives fail its own syntax check.
 fn looks_like_a_token(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// OCaml's `String.trim` (used throughout `command_protocol.ml`'s own
@@ -106,7 +158,12 @@ pub fn encode_command(session_token: &str, cmd: Command) -> String {
     format!("COMMAND {session_token} {}\n", cmd.name())
 }
 
-/// Parses an `OK` / `ERROR <reason>` reply line.
+/// Parses an `OK` / `ERROR <reason>` / `STATUS <child> <tamper>` reply
+/// line — same order of checks as `command_protocol.ml`'s own
+/// `decode_response` (OK, then the ERROR prefix, then STATUS), kept
+/// in lockstep rather than reordered so both sides agree on which
+/// shape a given line is even in edge cases neither side's own
+/// `encode_*` would ever actually produce.
 pub fn decode_response(line: &str) -> Result<Response, ProtocolError> {
     if line.len() > MAX_LINE_LEN {
         return Err(ProtocolError::LineTooLarge(line.len()));
@@ -117,7 +174,18 @@ pub fn decode_response(line: &str) -> Result<Response, ProtocolError> {
     } else if let Some(reason) = trimmed.strip_prefix("ERROR ") {
         Ok(Response::Error(reason.to_string()))
     } else {
-        Err(ProtocolError::Malformed(trimmed.to_string()))
+        match trimmed.split(' ').collect::<Vec<_>>().as_slice() {
+            ["STATUS", child_tok, tamper_tok] => {
+                match (
+                    ChildState::from_name(child_tok),
+                    TamperState::from_name(tamper_tok),
+                ) {
+                    (Some(child), Some(tamper)) => Ok(Response::Status { child, tamper }),
+                    _ => Err(ProtocolError::Malformed(trimmed.to_string())),
+                }
+            }
+            _ => Err(ProtocolError::Malformed(trimmed.to_string())),
+        }
     }
 }
 
@@ -185,6 +253,52 @@ mod tests {
             encode_command(&token, Command::Reload),
             format!("COMMAND {token} reload\n")
         );
+        assert_eq!(
+            encode_command(&token, Command::Status),
+            format!("COMMAND {token} status\n")
+        );
+    }
+
+    #[test]
+    fn a_status_response_decodes_every_child_tamper_combination() {
+        for (line, child, tamper) in [
+            (
+                "STATUS running clean\n",
+                ChildState::Running,
+                TamperState::Clean,
+            ),
+            (
+                "STATUS running tampered\n",
+                ChildState::Running,
+                TamperState::Tampered,
+            ),
+            (
+                "STATUS stopped unknown\n",
+                ChildState::Stopped,
+                TamperState::Unknown,
+            ),
+        ] {
+            assert_eq!(
+                decode_response(line),
+                Ok(Response::Status { child, tamper })
+            );
+        }
+    }
+
+    #[test]
+    fn a_status_response_with_an_unrecognized_field_is_malformed() {
+        for line in [
+            "STATUS running\n",
+            "STATUS not-a-real-state clean\n",
+            "STATUS running not-a-real-state\n",
+            "STATUS running clean extra\n",
+            "STATUS\n",
+        ] {
+            assert!(
+                matches!(decode_response(line), Err(ProtocolError::Malformed(_))),
+                "expected {line:?} to be rejected as malformed"
+            );
+        }
     }
 
     #[test]
@@ -195,7 +309,9 @@ mod tests {
     #[test]
     fn an_error_response_carries_its_reason_text() {
         assert_eq!(
-            decode_response("ERROR session token missing, expired, revoked, or not this connection's own\n"),
+            decode_response(
+                "ERROR session token missing, expired, revoked, or not this connection's own\n"
+            ),
             Ok(Response::Error(
                 "session token missing, expired, revoked, or not this connection's own".to_string()
             ))

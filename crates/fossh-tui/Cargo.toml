@@ -13,10 +13,23 @@ description = "foSSH local admin console and first-run setup wizard (chapter §3
 name = "fossh-tui"
 path = "src/main.rs"
 
+[features]
+default = []
+# Off by default, same reason and same shape as fossh-fcgi's own
+# `quic` feature (see that crate's Cargo.toml and DECISIONS.md
+# ADR-0050 Part 3): fossh-ipc pulls in quiche's own BoringSSL build, a
+# genuinely heavy compile step no other member of this workspace
+# should pay for on an ordinary `cargo build --workspace`. Without
+# this feature, `watchdog_status::query` still compiles and runs — it
+# just always returns a "not compiled with watchdog support" error
+# rather than ever attempting a connection (see that module).
+quic = ["dep:fossh-ipc"]
+
 [dependencies]
 fossh-core.workspace = true
 fossh-store.workspace = true
 fossh-admin.workspace = true
+fossh-ipc = { path = "../fossh-ipc", optional = true }
 zeroize.workspace = true
 ratatui = "0.30"
 crossterm = "0.29"

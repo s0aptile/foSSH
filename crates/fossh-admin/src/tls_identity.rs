@@ -35,7 +35,7 @@
 use std::fs;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use fossh_ingest::random::read_random_bytes;
 
@@ -105,12 +105,21 @@ fn validate_common_name(common_name: &str) -> Result<(), TlsIdentityError> {
 /// module's identical function for the empirical confirmation this
 /// distinction is load-bearing (a bare `-noout` parse exits 0 on a
 /// certificate years past its own expiry).
+// stdio nulled on every `Command` here: inherited by default,
+// `openssl x509 -noout -checkend 0` still prints "Certificate will
+// not expire" to stdout on every successful call, not just first-time
+// generation. Reproduced corrupting fossh-tui's alternate-screen
+// rendering, since a subprocess writing to inherited stdout bypasses
+// ratatui's buffer entirely. Doesn't affect correctness — nothing
+// here reads stdout/stderr.
 fn cert_is_valid(path: &Path) -> bool {
     path.is_file()
         && Command::new(OPENSSL_PATH)
             .args(["x509", "-in"])
             .arg(path)
             .args(["-noout", "-checkend", "0"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
@@ -122,6 +131,8 @@ fn key_is_valid(path: &Path) -> bool {
             .args(["pkey", "-in"])
             .arg(path)
             .arg("-noout")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
@@ -151,6 +162,8 @@ fn generate_into(tmp_dir: &Path, common_name: &str) -> Result<(), TlsIdentityErr
         .arg("-out")
         .arg(&cert_path)
         .args(["-subj", &format!("/CN={common_name}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .map_err(|e| TlsIdentityError::Generate(e.to_string()))?;
 

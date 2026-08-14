@@ -52,6 +52,8 @@ use std::path::Path;
 
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 
+use fossh_ingest::random::read_random_bytes;
+
 /// Real OpenPGP fingerprints are well under this; generous enough to
 /// never legitimately reject one, tight enough that a confused or
 /// hostile peer can't make this read arbitrarily long.
@@ -70,6 +72,10 @@ const CERT_PEM_END_MARKER: &str = "-----END CERTIFICATE-----";
 #[derive(Debug)]
 pub enum PinError {
     Io(std::io::Error),
+    /// Failed to source randomness for a temp filename — see
+    /// `persist_pin`'s own doc comment for why that randomness is
+    /// load-bearing, not decorative.
+    Random(String),
     /// A pin already exists at the target path — see this module's
     /// own header comment. The caller must not remove it automatically;
     /// that is deliberately an operator action, not a code path.
@@ -96,6 +102,7 @@ impl std::fmt::Display for PinError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(e) => write!(f, "bootstrap handoff I/O: {e}"),
+            Self::Random(e) => write!(f, "bootstrap handoff: {e}"),
             Self::AlreadyPinned => write!(
                 f,
                 "a watchdog fingerprint is already pinned; remove it explicitly before re-bootstrapping"
@@ -147,12 +154,32 @@ pub fn load_pin(path: &Path) -> Result<Option<String>, PinError> {
 /// value" shape, `AlreadyExists` on the final `hard_link` is exactly
 /// the desired outcome (refuse, don't overwrite), not something to
 /// fall back past by reading the existing file instead.
+///
+/// The temp filename folds in a fresh random suffix, not
+/// `std::process::id()` alone — the same `Unix.getpid()`-only-temp-
+/// path bug class this project's OCaml sibling module found and fixed
+/// at the source in `operator_key.ml` (a real, reproduced corruption
+/// under a forced-overlap thread race, PID alone being unique per
+/// *process*, not per *call*), and separately flagged but left
+/// unfixed in `core_pin.ml`. This function has the identical
+/// structural gap: two threads inside one process racing to persist
+/// the *same* path previously computed the exact same PID-only temp
+/// path, so the losing racer's own `create_new` failed with
+/// `AlreadyExists` on that shared temp file — mapped straight to a
+/// generic `PinError::Io`, not the documented `PinError::AlreadyPinned`
+/// this module's header comment promises "no matter how many handoff
+/// attempts run concurrently." Reproduced directly (100% of forced-
+/// overlap runs, not intermittent — see this module's own regression
+/// test) before this fix, matching `data_key::write_via_temp_then_link`'s
+/// existing "random, not the PID/thread ID alone" reasoning exactly.
 fn persist_pin(path: &Path, fingerprint: &str) -> Result<(), PinError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(PinError::Io)?;
     }
+    let suffix_bytes = read_random_bytes(8).map_err(|e| PinError::Random(e.to_string()))?;
+    let suffix: String = suffix_bytes.iter().map(|b| format!("{b:02x}")).collect();
     let tmp_path = path.with_file_name(format!(
-        "{}.tmp-{}",
+        "{}.tmp-{}-{suffix}",
         path.file_name().and_then(|n| n.to_str()).unwrap_or("pin"),
         std::process::id(),
     ));
@@ -528,6 +555,68 @@ mod tests {
         let dir = scratch_dir("missing-is-none");
         let pin_path = dir.join("does-not-exist.pin");
         assert_eq!(load_pin(&pin_path).unwrap(), None);
+    }
+
+    #[test]
+    fn concurrent_persist_pin_racers_for_the_same_path_all_get_a_clean_verdict() {
+        // Regression test for the same `Unix.getpid()`-only-temp-path
+        // bug class this project's OCaml sibling module found and
+        // fixed at the source in `operator_key.ml`, and separately
+        // flagged (but explicitly left, as out of scope for that pass)
+        // in `core_pin.ml` -- see DECISIONS.md's discussion of the
+        // `Unix.getpid()` collision. `persist_pin`'s temp filename was
+        // built from `std::process::id()` alone: unique per *process*,
+        // not per *call*. Every thread inside one process racing to
+        // persist the *same* destination path computes the exact same
+        // temp path, so `OpenOptions::create_new`'s kernel-level
+        // atomicity means at most one racer can ever even begin
+        // writing -- every other racer's own `create_new` on that
+        // shared temp path fails with `AlreadyExists` before it ever
+        // touches the real destination, and the pre-fix code mapped
+        // that straight to a generic `PinError::Io`, not the
+        // documented, caller-facing `PinError::AlreadyPinned` this
+        // module's own header comment promises regardless of "how many
+        // handoff attempts run concurrently." A perfectly ordinary
+        // concurrent-first-caller race would surface as an opaque I/O
+        // failure indistinguishable from a real disk problem, exactly
+        // the same "no such promise documented, but a future caller
+        // would inherit the gap silently" shape the OCaml finding
+        // described. A `Barrier` forces genuinely simultaneous calls
+        // (not sleep-staggered ones), matching this project's own
+        // countdown-latch pattern for the identical class of race.
+        for attempt in 0..20 {
+            let dir = scratch_dir(&format!("persist-race-{attempt}"));
+            let path = dir.join("watchdog.pin");
+            const RACERS: usize = 8;
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(RACERS));
+            let handles: Vec<_> = (0..RACERS)
+                .map(|i| {
+                    let path = path.clone();
+                    let barrier = std::sync::Arc::clone(&barrier);
+                    thread::spawn(move || {
+                        barrier.wait();
+                        persist_pin(&path, &format!("racer-{i}"))
+                    })
+                })
+                .collect();
+            let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+            let ok_count = results.iter().filter(|r| r.is_ok()).count();
+            assert_eq!(
+                ok_count, 1,
+                "exactly one racer must win and persist (attempt {attempt})"
+            );
+            for r in &results {
+                if let Err(e) = r {
+                    assert!(
+                        matches!(e, PinError::AlreadyPinned),
+                        "every losing racer must get a clean AlreadyPinned verdict, \
+                         not {e:?} (attempt {attempt})"
+                    );
+                }
+            }
+            fs::remove_dir_all(&dir).ok();
+        }
     }
 
     #[test]

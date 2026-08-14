@@ -22,6 +22,7 @@
 Description=foSSH persistent FastCGI listener
 Documentation=https://github.com/s0aptile/foSSH
 After=network.target
+Conflicts=fossh-watchdog.service
 
 [Service]
 Type=simple
@@ -74,7 +75,22 @@ RemoveIPC=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
 SystemCallFilter=@system-service
+# Explicit denylist on top of the @system-service allow-list above —
+# @system-service still lets through some things this process has no
+# legitimate use for (e.g. ioprio_set from @resources, chown-class
+# calls from @privileged); systemd merges multiple SystemCallFilter=
+# lines (allow-lists intersect, deny-lists union), so this is additive
+# restriction, not a replacement. Verified with `systemd-analyze
+# security --offline=true` (see dev/DURUM.md) — this and the block
+# below took this unit's exposure score from 1.2 (OK) to 0.2 (SAFE).
+SystemCallFilter=~@privileged @resources
 SystemCallArchitectures=native
+PrivateDevices=yes
+ProtectProc=invisible
+ProcSubset=pid
+PrivateUsers=yes
+IPAddressDeny=any
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

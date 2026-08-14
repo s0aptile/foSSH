@@ -1,6 +1,15 @@
 # Deploying foSSH behind nginx + Cloudflare Tunnel
 
-> **Preview tier** — not yet through the adversarial-review QA gate the rest of this project's deployment surfaces go through. Read this as the intended shape, not a reviewed, supported path yet; see `dev/DURUM.md` for current status.
+> **Community reference, not this project's verified path.** foSSH's
+> actively supported and live-verified deployment path is
+> [Apache](../DEPLOY-apache.md) — every command and config block there
+> has been run against a real Apache instance. This guide is preview
+> tier: it hasn't been through the adversarial-review QA gate the rest
+> of this project's deployment surfaces go through, and the nginx
+> config below has not itself been run against a live nginx — see
+> `dev/DURUM.md` for current status. Read it as the intended shape for
+> the zero-inbound-port pattern it describes, not a reviewed, verified
+> path. If Apache is an option for you, use that guide instead.
 
 This guide covers self-hosting foSSH on a single Fedora Server box, reachable from the public internet with **zero inbound ports opened** — no port forwarding, no firewall rule for 80/443, nothing listening on a public interface at all. Cloudflare Tunnel makes only outbound connections from your box to Cloudflare's edge; the edge terminates public TLS and forwards over that outbound tunnel.
 
@@ -68,6 +77,21 @@ server {
         include fastcgi_params;
         fastcgi_pass unix:/run/fossh/fcgiwrap.sock;
         fastcgi_param SCRIPT_FILENAME /usr/bin/fossh-cgi;
+        # Load-bearing, not optional: nginx's stock fastcgi_params does
+        # not set PATH_INFO at all, but fossh-cgi's own routing matches
+        # on PATH_INFO, not SCRIPT_NAME (crates/fossh-ingest/src/ingest.rs's
+        # decide()) -- without this, every request reaches fossh-cgi with
+        # an empty PATH_INFO and falls through to a 422 regardless of
+        # whether auth/allowlist/everything else is correct. $uri is the
+        # whole normalized request path here (there's nothing after /e or
+        # /e.gif for fastcgi_split_path_info to split), so it's exactly
+        # the value PATH_INFO needs. The underlying PATH_INFO problem is
+        # confirmed real (reproduced against a live Apache+mod_cgid
+        # instance, see DEPLOY-apache.md); this nginx directive follows
+        # the same well-documented fastcgi_param mechanism but -- per
+        # the notice at the top of this guide -- hasn't itself been run
+        # against a live nginx.
+        fastcgi_param PATH_INFO $uri;
     }
 
     location / {

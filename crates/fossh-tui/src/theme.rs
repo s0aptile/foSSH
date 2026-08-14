@@ -1,19 +1,38 @@
-//! Shared visual language for the whole TUI: warm amber/sage/terracotta
-//! accents layered on top of the terminal's own default foreground and
-//! background (never overridden for body text, so this stays readable on
-//! both light and dark terminals), rounded borders, and consistent
-//! padding so panels don't feel cramped. Accent colors carry meaning
-//! (amber = pending/in-progress, sage = healthy/public/verified,
+//! Shared visual language for the whole TUI: a deep graphite background
+//! with warm amber/sage/terracotta accents, rounded borders, and
+//! consistent padding so panels don't feel cramped. Release 1 is dark
+//! mode only (light mode is release-2 scope) — so, unlike an earlier
+//! version of this module, the background is now forced explicitly
+//! rather than left to the terminal's own default. Accent colors carry
+//! meaning (amber = pending/in-progress, sage = healthy/public/verified,
 //! terracotta = reserved for actual errors, muted = secondary/help text)
 //! rather than being decorative alone.
 
+use ratatui::Frame;
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, BorderType, Borders, Padding};
 
+pub const GRAPHITE: Color = Color::Rgb(28, 28, 30);
+pub const FOREGROUND: Color = Color::Rgb(216, 210, 200);
 pub const AMBER: Color = Color::Rgb(224, 175, 104);
 pub const SAGE: Color = Color::Rgb(135, 169, 107);
 pub const TERRACOTTA: Color = Color::Rgb(214, 118, 89);
 pub const MUTED: Color = Color::Rgb(145, 135, 122);
+
+pub fn base_style() -> Style {
+    Style::default().fg(FOREGROUND).bg(GRAPHITE)
+}
+
+/// Paints the whole frame graphite before anything else draws this
+/// pass. Every widget rendered afterward only patches the style fields
+/// it actually sets (ratatui's `Style::patch` leaves unset fields
+/// alone), so an otherwise-unstyled `Span` still lands on graphite with
+/// a readable foreground instead of whatever the terminal's own
+/// default happens to be.
+pub fn fill_background(frame: &mut Frame, area: Rect) {
+    frame.render_widget(Block::default().style(base_style()), area);
+}
 
 /// A rounded, padded panel for the three main screens — `Min(0)`-sized
 /// areas with room to spare, unlike the fixed-height tab/status bars.

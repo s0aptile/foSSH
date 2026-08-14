@@ -21,34 +21,47 @@
 
 let gpg_path = "/usr/bin/gpg"
 
+(* Adversarial review (fresh sweep, real repro): same Sys_error-escape gap as
+   `Manifest.verify_and_extract` (see that function's own comment for the full
+   bug-class history) — this function's three nested `Tempfile.with_contents`
+   calls and the `Fileutil.read_all_bytes` of `status_path` are all Stdlib
+   channel ops. Not process-crashing today (the one real caller,
+   `Operator_auth_server.handle_one_connection`, already runs inside
+   `accept_loop`'s own connection-level catch-all), but still an undocumented
+   exception escaping a function whose whole contract is "return a bool,
+   never raise" — fixed for the same reason the rest of this codebase already
+   holds itself to. Fails closed (`false`), matching every other failure path
+   this function already has. *)
 let verify_signature ~(gnupghome : string) ~(expected_key_fingerprint : string)
     ~(data : string) ~(signature_binary : string) : bool =
-  Tempfile.with_contents data (fun data_path ->
-      Tempfile.with_contents signature_binary (fun sig_path ->
-          Tempfile.with_contents "" (fun status_path ->
-              match
-                Subprocess.run ~prog:gpg_path
-                  ~argv:
-                    [|
-                      "gpg";
-                      "--batch";
-                      "--homedir";
-                      gnupghome;
-                      "--status-file";
-                      status_path;
-                      "--verify";
-                      "--";
-                      sig_path;
-                      data_path;
-                    |]
-                  ~stdin_content:""
-              with
-              | Error _ -> false
-              | Ok _ -> (
-                  match
-                    Gpg_status.parse (Fileutil.read_all_bytes status_path)
-                  with
-                  | Good_signature_by key_id ->
-                      Gpg_status.key_id_matches_fingerprint ~key_id
-                        ~fingerprint:expected_key_fingerprint
-                  | Revoked_key | Expired_key | No_good_signature -> false))))
+  try
+    Tempfile.with_contents data (fun data_path ->
+        Tempfile.with_contents signature_binary (fun sig_path ->
+            Tempfile.with_contents "" (fun status_path ->
+                match
+                  Subprocess.run ~prog:gpg_path
+                    ~argv:
+                      [|
+                        "gpg";
+                        "--batch";
+                        "--homedir";
+                        gnupghome;
+                        "--status-file";
+                        status_path;
+                        "--verify";
+                        "--";
+                        sig_path;
+                        data_path;
+                      |]
+                    ~stdin_content:""
+                with
+                | Error _ -> false
+                | Ok _ -> (
+                    match
+                      Gpg_status.parse (Fileutil.read_all_bytes status_path)
+                    with
+                    | Good_signature_by key_id ->
+                        Gpg_status.key_id_matches_fingerprint ~key_id
+                          ~fingerprint:expected_key_fingerprint
+                    | Revoked_key | Expired_key | No_good_signature -> false))))
+  with Sys_error _ -> false

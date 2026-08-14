@@ -86,13 +86,19 @@ pub fn verify(submitted: &str, stored: TokenHash) -> bool {
     submitted_hash.ct_eq(&stored.0).into()
 }
 
-/// Hashes a plaintext this caller already holds by some other means —
-/// for a standalone TUI reloading a token file it didn't just generate
-/// in this process (a real install's watchdog holds the hash directly
-/// instead and never needs this; see `fossh-tui`'s module docs on
-/// standalone/demo mode). Same primitive `generate()` uses internally,
-/// exposed so a second, independent `sha256` implementation doesn't
-/// need to exist anywhere just to re-derive the same hash.
+/// Hashes a plaintext this caller already holds by some other means.
+/// Not called by any production code path any more — `fossh-tui`'s
+/// wizard screen (`crates/fossh-tui/src/wizard.rs`) used to be a
+/// standalone/demo mode that generated and verified its own token
+/// in-process using this whole module; it has since been rewritten to
+/// speak the real, watchdog-owned `Setup_token`/`Operator_auth_server`
+/// protocol instead (see that file's own module doc and DECISIONS.md's
+/// ADR-0057), which never needs a hash on the client side at all — the
+/// plaintext token is sent to the watchdog verbatim, and only the
+/// watchdog ever hashes or verifies it. Kept here (exercised by this
+/// module's own tests below) rather than deleted: it's real, correct,
+/// tested code implementing §2.6's own hashing rule, and removing it
+/// is a separate cleanup this pass didn't set out to do.
 pub fn hash_of(plaintext: &str) -> TokenHash {
     TokenHash(sha256(plaintext.as_bytes()))
 }

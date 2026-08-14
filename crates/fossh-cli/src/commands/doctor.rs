@@ -13,7 +13,12 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
+use crate::args::wants_help;
 use crate::common::{db_path, unix_now};
+
+const HELP: &str = "usage: fossh doctor\n\n\
+Verify permissions, config sanity, and privacy/security invariants against\n\
+the live install.";
 
 struct Check {
     name: &'static str,
@@ -87,7 +92,11 @@ fn check_permissions(path: &Path, expected: u32, name: &'static str) -> Check {
     }
 }
 
-pub fn run(_args: &[String]) -> i32 {
+pub fn run(args: &[String]) -> i32 {
+    if wants_help(args) {
+        println!("{HELP}");
+        return 0;
+    }
     let mut checks = Vec::new();
     checks.push(check_glibc_floor());
 
@@ -140,15 +149,32 @@ pub fn run(_args: &[String]) -> i32 {
         }),
     }
 
-    let store_result = fossh_store::Store::open(&db_path(&config.data_dir));
-    checks.push(Check {
-        name: "database schema opens cleanly",
-        pass: store_result.is_ok(),
-        detail: match &store_result {
-            Ok(_) => "ok".to_string(),
-            Err(e) => e.to_string(),
+    // §3.8: opening the real store here means opening it *encrypted*,
+    // the same way every other real caller does — a `doctor` pass that
+    // quietly used the legacy unkeyed `Store::open` instead would give
+    // a false "opens cleanly" pass on a database that a real deployment
+    // could never actually open, which defeats the entire point of this
+    // check.
+    let db_check = match fossh_admin::data_key::load_or_generate(&config.data_dir.join(".data_key"))
+    {
+        Ok(key) => {
+            let store_result = fossh_store::Store::open_encrypted(&db_path(&config.data_dir), &key);
+            Check {
+                name: "database schema opens cleanly",
+                pass: store_result.is_ok(),
+                detail: match &store_result {
+                    Ok(_) => "ok".to_string(),
+                    Err(e) => e.to_string(),
+                },
+            }
+        }
+        Err(e) => Check {
+            name: "database schema opens cleanly",
+            pass: false,
+            detail: format!("could not load data-encryption key: {e}"),
         },
-    });
+    };
+    checks.push(db_check);
 
     checks.push(Check {
         name: "k_anonymity threshold (P6)",

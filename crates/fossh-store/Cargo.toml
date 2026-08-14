@@ -14,5 +14,30 @@ name = "fossh_store"
 
 [dependencies]
 fossh-core.workspace = true
-rusqlite.workspace = true
+# §3.8: encrypt telemetry at rest, not just the transient spool. Adds
+# SQLCipher (transparent page-level AES-256) on top of the workspace's
+# base `bundled` feature rather than inventing a hand-rolled
+# encrypt-then-write layer over plain SQLite — same "reuse audited
+# crypto" posture as ADR-0037 (spool frames use `chacha20poly1305`
+# directly, not a bespoke construction) and the project's general
+# preference for battle-tested primitives over homegrown ones.
+# Plain `bundled-sqlcipher` (not `-vendored-openssl`): the vendored
+# variant additionally builds OpenSSL itself from source via
+# `openssl-sys`'s `vendored` feature, which needs `perl`'s `FindBin`
+# module at build time — not installed on this project's own dev
+# sandbox (`perl-FindBin` is a separate Fedora package, root-only to
+# add, and not something to route around with a build hack). Plain
+# `bundled-sqlcipher` links SQLCipher's crypto against the *system*
+# OpenSSL via `pkg-config` instead of vendoring it — confirmed present
+# here (`openssl-devel`/`openssl-libs` 3.5.7) and, since this project
+# already only targets a Fedora-native deployment (see
+# `fossh_core::glibc_gate`), a reasonable one to depend on rather than
+# a heavier from-source build every install would otherwise pay for
+# with no corresponding benefit on this platform. See DECISIONS.md for
+# the license check this required (OpenSSL's own Apache-2.0 license,
+# already in `deny.toml`'s allow list) and this crate's own doc comment
+# for what actually changes if a non-Fedora target ever needs the
+# vendored path instead.
+rusqlite = { workspace = true, features = ["bundled-sqlcipher"] }
 serde_json.workspace = true
+zeroize.workspace = true

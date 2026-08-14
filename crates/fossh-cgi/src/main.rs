@@ -23,16 +23,36 @@
 //! search + TOML parse is real, if small, work — needless on a path
 //! §7.1 explicitly budgets at < 5 ms p99.
 
+#![forbid(unsafe_code)]
+
 mod handler;
 mod privdrop;
 
 use std::io::{self, Read, Write};
 
+use fossh_core::config::CountryDb;
 use fossh_ingest::forwarded;
+use fossh_ingest::geoip::GeoipReader;
 use handler::{CgiEnv, HandleParams};
 
+/// Caps every CGI env var this binary reads at `ENV_VALUE_MAX` — the
+/// same per-value ceiling `fossh-core::config` already applies to
+/// `FOSSH_*` config env vars (S4). Without this, a header-derived value
+/// (`HTTP_X_FOSSH_NONCE` in particular: it's concatenated and BLAKE3-hashed
+/// by `NonceCache::fingerprint`, and used in HMAC-style signature
+/// verification, both before auth can reject anything) would flow
+/// through with no size limit at all — unlike `fossh-fcgi`, which gets
+/// this for free from `protocol::MAX_PARAMS_BYTES` capping its whole
+/// PARAMS stream, `fossh-cgi` reads each var straight from the process
+/// environment with no such structural bound. An oversized value is
+/// treated as absent (same as truly missing) — S2's "fail closed":
+/// every caller already handles `None` as "this header wasn't
+/// presented," which is a safe, conservative reading of "value was too
+/// large to trust."
 fn env_var(key: &str) -> Option<String> {
-    std::env::var(key).ok().filter(|s| !s.is_empty())
+    std::env::var(key)
+        .ok()
+        .filter(|s| !s.is_empty() && s.len() <= fossh_core::validate::ENV_VALUE_MAX)
 }
 
 fn read_cgi_env(trust_forwarded_for: bool) -> CgiEnv {
@@ -168,6 +188,15 @@ fn main() {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
+    // Same `FOSSH_COUNTRY_DB` semantics as `Config`'s own env override
+    // (`CountryDb::from_str`) — see the module doc comment on why this
+    // binary parses env vars directly instead of calling `Config::load`.
+    // Opened once per process here, not once per lookup inside
+    // `geoip::resolve` — see that module's own doc comment.
+    let country_db = env_var("FOSSH_COUNTRY_DB")
+        .map(|v| CountryDb::from_str(&v))
+        .unwrap_or_default();
+    let geoip_reader = GeoipReader::open(country_db.path());
 
     if env.method == "GET" && env.path_info == "/healthz" {
         write_response(204, None);
@@ -211,6 +240,7 @@ fn main() {
         rate_limit_burst,
         respect_optout_signals,
         now,
+        country_db: &geoip_reader,
     };
 
     let response = handler::route(&params);

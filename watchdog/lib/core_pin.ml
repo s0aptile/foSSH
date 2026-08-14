@@ -17,8 +17,20 @@ let describe_error = function
   | Already_pinned -> "a core certificate is already pinned"
   | Io_error e -> Printf.sprintf "core pin I/O error: %s" e
 
+(* Fresh sweep: this was the deliberately-deferred `Unix.getpid()`-only temp
+   path flagged, not fixed, in `Operator_key.ml`'s own concurrency-bug entry
+   ("a third, structurally identical instance was found by inspection but
+   deliberately left unfixed" — out of scope there since `persist_pin` has no
+   concurrent callers through this project's real, current `bootstrap-send`
+   CLI subcommand). Revisited now: the fix is the exact same one-line change
+   already proven correct twice in `Operator_key.ml` (`enroll`'s temp
+   gnupghome, `persist_fingerprint`'s temp file), isolated to this function's
+   own local binding, and costs nothing even though no caller today can
+   actually race it — folding in `Nonce.generate()` closes the root cause
+   (two calls, thread or process, computing the same tmp_path) rather than
+   leaving it standing on "not reachable today." *)
 let persist_pin (path : string) (contents : string) : (unit, error) result =
-  let tmp_path = Printf.sprintf "%s.tmp-%d" path (Unix.getpid ()) in
+  let tmp_path = Printf.sprintf "%s.tmp-%d-%s" path (Unix.getpid ()) (Nonce.generate ()) in
   match
     let fd = Unix.openfile tmp_path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] 0o600 in
     Fun.protect

@@ -205,4 +205,91 @@ let () =
         | Ok body -> body = big_rendered
         | Error _ -> false);
 
+      (* Regression test for a real bug found by a fresh adversarial
+         sweep (the fifth instance of this codebase's own recurring
+         "Stdlib channel op raises Sys_error, not Unix.Unix_error, and
+         escapes as an uncaught exception" bug class — see bootstrap.ml,
+         core_pin.ml, main.ml's cert-path read, and Setup_token's
+         hashing path for the first four): verify_and_extract's
+         Tempfile.with_contents "" (creating status_path) and the later
+         Fileutil.read_all_bytes status_path were both unguarded.
+         Reachable via Manifest.check, which Supervisor.tamper_check
+         runs on EVERY spawn and EVERY restart — and every one of
+         main.ml's call sites around that path only catches
+         Unix.Unix_error, not Sys_error, so an uncaught Sys_error here
+         would have crashed the entire watchdog process, not just
+         refused one restart.
+
+         Reproduced with real fd exhaustion (Test_helpers.exhaust_fds),
+         the same trigger this project already used once for a related
+         Sys_error escape (Nonce.generate's own open_in_bin
+         "/dev/urandom" — DECISIONS.md: "reproduced directly under a
+         real ulimit -n 256"). A [TMPDIR]-pointed-at-a-missing-directory
+         approach was tried first and abandoned: confirmed directly
+         against the stdlib that [Filename.get_temp_dir_name] caches the
+         environment once at process start rather than re-reading it, so
+         a mid-process [Unix.putenv "TMPDIR" ...] has no effect and
+         cannot reproduce this bug from inside an already-running test
+         binary — [exhaust_fds] doesn't have that problem, since it acts
+         on the process's live fd table directly. Under real exhaustion,
+         [Tempfile.with_contents]'s own [open_out_bin] for [status_path]
+         is the very first Stdlib channel op in the whole call chain
+         (before [Subprocess.run]'s own pipes are ever created), so this
+         exercises exactly the guard this fix added. *)
+      let exhausted = exhaust_fds () in
+      Fun.protect
+        ~finally:(fun () -> release_exhausted_fds exhausted)
+        (fun () ->
+          check "verify_and_extract under real fd exhaustion is a clean Error, not an uncaught exception"
+            (match
+               Manifest.verify_and_extract ~gnupghome:k.gnupghome
+                 ~expected_key_fingerprint:k.fingerprint signed
+             with
+            | Error _ -> true
+            | Ok _ -> false);
+          check "check() under real fd exhaustion is a clean result, not a crash of the whole tamper gate"
+            (match
+               Manifest.check ~gnupghome:k.gnupghome ~expected_key_fingerprint:k.fingerprint
+                 ~program:file_a ~clearsigned_manifest:signed
+             with
+            | Ok_manifest _ -> false (* must not silently pass under fd exhaustion *)
+            | Signature_invalid _ | Hash_mismatch _ | Program_not_covered _ | Io_error _ -> true));
+      check "a real check() call succeeds again once fds are released (no lingering state)"
+        (match
+           Manifest.check ~gnupghome:k.gnupghome ~expected_key_fingerprint:k.fingerprint
+             ~program:file_a ~clearsigned_manifest:signed
+         with
+        | Ok_manifest e -> e = entries
+        | _ -> false);
+
+      (* generate_and_sign: the composed hash_all/render/sign operation
+         `fossh-watchdog generate-manifest` actually calls. Its output
+         must be exactly what check() accepts as valid for the paths it
+         covered — proves the CLI subcommand and the supervision loop's
+         own verification agree on the same manifest shape, not just
+         that each half works in isolation. *)
+      let generated =
+        match
+          Manifest.generate_and_sign ~gnupghome:k.gnupghome ~key_id:k.fingerprint
+            ~passphrase:k.passphrase [ file_a; file_b ]
+        with
+        | Ok s -> s
+        | Error msg -> failwith ("generate_and_sign failed: " ^ msg)
+      in
+      check "generate_and_sign's output passes check() for every path it covered"
+        (match
+           Manifest.check ~gnupghome:k.gnupghome ~expected_key_fingerprint:k.fingerprint
+             ~program:file_a ~clearsigned_manifest:generated
+         with
+        | Ok_manifest e -> e = entries
+        | _ -> false);
+      check "generate_and_sign fails closed on a path that does not exist"
+        (match
+           Manifest.generate_and_sign ~gnupghome:k.gnupghome ~key_id:k.fingerprint
+             ~passphrase:k.passphrase
+             [ Filename.concat watched_dir "does-not-exist" ]
+         with
+        | Error _ -> true
+        | Ok _ -> false);
+
       summarize ())

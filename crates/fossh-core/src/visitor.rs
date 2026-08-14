@@ -1,5 +1,12 @@
 //! P2 — rotating-salt visitor hashing:
-//! `visitor_id = truncate64(BLAKE3(daily_salt ‖ client_ip ‖ ua_string ‖ site_id))`
+//! `visitor_id = truncate64(BLAKE3_keyed(daily_salt, client_ip ‖ ua_string ‖ site_id))`
+//!
+//! `daily_salt` is the BLAKE3 key (`keyed_hash`, not `hash` of a
+//! `salt ‖ message` concatenation) — the same construction
+//! `fossh_ingest::auth::sign` already uses for the per-site write-key
+//! MAC, for the same reason: `keyed_hash` is BLAKE3's own documented,
+//! domain-separated API for exactly this "secret + message" shape,
+//! rather than relying on prefix-hashing being safe by coincidence.
 //!
 //! This module only computes the hash. Salt *generation*, *rotation at UTC
 //! midnight*, and *tmpfs persistence with `shred` on rotation* are process
@@ -31,14 +38,13 @@ pub fn hash_visitor(
     site_id: SiteId,
 ) -> u64 {
     let mut input = Zeroizing::new(Vec::with_capacity(
-        SALT_LEN + client_ip.len() + ua_string.len() + 4,
+        client_ip.len() + ua_string.len() + 4,
     ));
-    input.extend_from_slice(daily_salt);
     input.extend_from_slice(client_ip.as_bytes());
     input.extend_from_slice(ua_string.as_bytes());
     input.extend_from_slice(&site_id.get().to_be_bytes());
 
-    let digest = blake3::hash(&input);
+    let digest = blake3::keyed_hash(daily_salt, &input);
     let bytes = digest.as_bytes();
     u64::from_be_bytes(bytes[0..8].try_into().expect("blake3 output is 32 bytes"))
 }

@@ -19,13 +19,15 @@
    not rediscovered from scratch, since both bugs were already paid
    for once.
 
-   Scope of this module, this pass: real, verified connection
-   establishment with mutual TLS and basic stream send/recv — matching
-   fossh-ipc's own identical scope note. NOT yet built: the app-level
-   command protocol (session-token-bound commands, replay protection
-   per §3.4's own requirement) or wiring this into the watchdog's real
-   supervisor loop — see dev/DURUM.md for exactly what's connected
-   versus still open. *)
+   This module covers the transport primitives: real, verified
+   connection establishment with mutual TLS and basic stream
+   send/recv — matching fossh-ipc's own identical scope note. The
+   app-level command protocol (session-token-bound commands, replay
+   protection per §3.4's own requirement) and its wiring into the
+   watchdog's real supervisor loop are built too, but live in
+   lib/command_protocol.ml and quic/quic_command_server.ml
+   respectively — see ADR-0047/ADR-0050 and dev/DURUM.md for exactly
+   what's connected. *)
 
 let quiche_err_done = -1
 let quiche_max_conn_id_len = 20

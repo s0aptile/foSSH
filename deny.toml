@@ -100,6 +100,15 @@ allow = [
     "Unlicense",
     "Unicode-3.0",
     "BSL-1.0",
+    # ISC: pulled in by the `quic` feature's dependency chain
+    # (bindgen -> clang-sys -> libloading, for BoringSSL's own bindgen
+    # step) once release builds started unconditionally enabling that
+    # feature (scripts/build-release.sh). fossh-ipc's and
+    # fossh-quiche-ffi's own deny.toml already allow it for the same
+    # reason -- this was policy drift invisible until a real release-
+    # flags `cargo deny check` actually exercised the 277-crate graph,
+    # not a 243-crate default-features one.
+    "ISC",
 ]
 # The confidence threshold for detecting a license from license text.
 # The higher the value, the more closely the license text must be to the

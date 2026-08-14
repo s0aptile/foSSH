@@ -47,8 +47,8 @@ fn insert_one(conn: &Connection, event: &Event) -> Result<i64, StoreError> {
     };
 
     conn.execute(
-        "INSERT INTO events (site_id, ts, kind, name_id, path_id, ref_id, country, browser, os, device, visitor, value)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        "INSERT INTO events (site_id, ts, kind, name_id, path_id, ref_id, country, browser, os, device, value)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             event.site_id.get(),
             event.ts,
@@ -60,7 +60,6 @@ fn insert_one(conn: &Connection, event: &Event) -> Result<i64, StoreError> {
             event.browser.as_u8(),
             event.os.as_u8(),
             event.device.as_u8(),
-            event.visitor.map(|v| v as i64),
             event.value,
         ],
     )?;
@@ -252,6 +251,20 @@ mod tests {
         assert_eq!(browser, BrowserFamily::Edge.as_u8() as i64);
         assert_eq!(os, OsFamily::Ios.as_u8() as i64);
         assert_eq!(device, DeviceClass::Tablet.as_u8() as i64);
+    }
+
+    #[test]
+    fn events_table_has_no_visitor_column_to_query_at_all() {
+        let mut store = Store::open_in_memory().unwrap();
+        store
+            .record_event(&sample_event(1, 1_700_000_000, "pageview"))
+            .unwrap();
+        let result = store
+            .conn
+            .query_row("SELECT visitor FROM events LIMIT 1", [], |r| {
+                r.get::<_, i64>(0)
+            });
+        assert!(result.is_err(), "events.visitor must not exist as a column at all");
     }
 
     #[test]

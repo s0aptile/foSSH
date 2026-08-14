@@ -6,10 +6,10 @@
    certificate + private key, not an OpenPGP key, and nothing before
    this module generated one anywhere in this project — see ADR-0048
    for how that gap was found and the full plan around it (this
-   module is only the first, self-contained piece of that plan; the
-   bootstrap handoff's own wire format still needs to grow to carry a
-   full certificate, and core's Rust side needs its own equivalent —
-   both real, tracked follow-ups, not built here).
+   module was the first, self-contained piece of that plan; the other
+   two — the bootstrap handoff's wire format growing to carry a full
+   certificate, and core's own Rust-side equivalent — are both built
+   too now, see ADR-0049/ADR-0050).
 
    EC P-256, not Ed25519: matches the exact curve `crates/fossh-ipc`'s
    and `watchdog/quic/`'s own tests already proved interoperates

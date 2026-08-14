@@ -277,10 +277,15 @@ pub unsafe extern "C" fn fossh_init(config_path: *const c_char) -> *mut fossh_ct
             Config::from_file(std::path::Path::new(path_str)).ok()?
         };
         let db_path = config.data_dir.join("fossh.db");
-        let store = Store::open(&db_path).ok()?;
         let salt = InMemorySalt::new().ok()?;
+        // §3.8: loaded before `Store::open_encrypted` below, not after
+        // (unlike this function's earlier shape) — the database is now
+        // encrypted under the same per-install key spool frames already
+        // were, so the key has to exist before the store can be opened
+        // at all, not just before the first spool write.
         let data_key =
             fossh_admin::data_key::load_or_generate(&config.data_dir.join(".data_key")).ok()?;
+        let store = Store::open_encrypted(&db_path, &data_key).ok()?;
         let state = CtxState {
             config,
             store,
@@ -861,6 +866,7 @@ mod tests {
             .create_site(
                 "blog",
                 &key_hash,
+                None,
                 &["pageview".to_string(), "signup".to_string()],
                 1_700_000_000,
                 false,
@@ -1255,6 +1261,7 @@ mod tests {
                 .create_site(
                     "blog",
                     &key_hash,
+                    None,
                     &["pageview".to_string()],
                     1_700_000_000,
                     false,

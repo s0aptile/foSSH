@@ -2,7 +2,7 @@
 
 use fossh_store::GroupByField;
 
-use crate::args::{comma_list, flag_value};
+use crate::args::{comma_list, flag_value, wants_help};
 use crate::common::load_config;
 use crate::date::parse_date;
 
@@ -38,6 +38,10 @@ fn field_name(f: GroupByField) -> &'static str {
 }
 
 pub fn run(args: &[String]) -> i32 {
+    if wants_help(args) {
+        println!("{USAGE}");
+        return 0;
+    }
     let Some(slug) = flag_value(args, "--site") else {
         eprintln!("{USAGE}");
         return 2;
@@ -87,12 +91,33 @@ pub fn run(args: &[String]) -> i32 {
         }
     };
 
+    if folded_entirely_into_other(&rows, &group_by) {
+        eprintln!(
+            "note: every group in this result had fewer than {} unique visitor(s) and was \
+folded into a single '(other)' row — this is k-anonymity (P6), not a bug or an empty result. \
+Widen --from/--to, drop a --group-by dimension, or see PRIVACY.md's \"Numbers, not individuals\" \
+section for what this means for a low-traffic site.",
+            config.k_anonymity
+        );
+    }
+
     match format {
         "json" => print_json(&rows, &metrics),
         "csv" => print_csv(&rows, &group_by, &metrics),
         _ => print_table(&rows, &group_by, &metrics), // "table", and the default for anything unrecognized
     }
     0
+}
+
+/// True when the whole result is the single k-anonymity "(other)" fold —
+/// i.e. every real group the query would otherwise have shown was below
+/// the k-anonymity threshold, and there's nothing left to break down by.
+/// Only meaningful with a non-empty `group_by`: with none, a single row's
+/// dims are always empty regardless of whether it was folded, since a
+/// bare total's value doesn't change from folding (P6, `fossh-store`'s
+/// `rollup.rs`).
+fn folded_entirely_into_other(rows: &[fossh_store::GroupRow], group_by: &[GroupByField]) -> bool {
+    !group_by.is_empty() && rows.len() == 1 && rows[0].dims.iter().all(|(_, v)| v == "(other)")
 }
 
 fn metric_value(row: &fossh_store::GroupRow, metric: &str) -> String {
@@ -166,5 +191,74 @@ fn print_json(rows: &[fossh_store::GroupRow], metrics: &[String]) {
     match serde_json::to_string_pretty(&out) {
         Ok(s) => println!("{s}"),
         Err(e) => eprintln!("fossh query: serializing JSON output: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn other_row(group_by: &[GroupByField]) -> fossh_store::GroupRow {
+        fossh_store::GroupRow {
+            dims: group_by
+                .iter()
+                .map(|&f| (f, "(other)".to_string()))
+                .collect(),
+            hits: 3,
+            uniques: 2,
+            p50: 0,
+            p95: 0,
+        }
+    }
+
+    fn real_row(group_by: &[GroupByField], value: &str) -> fossh_store::GroupRow {
+        fossh_store::GroupRow {
+            dims: group_by.iter().map(|&f| (f, value.to_string())).collect(),
+            hits: 347,
+            uniques: 12,
+            p50: 120,
+            p95: 450,
+        }
+    }
+
+    #[test]
+    fn low_traffic_site_folded_wholly_into_other_is_detected() {
+        let group_by = [GroupByField::Path];
+        let rows = vec![other_row(&group_by)];
+        assert!(folded_entirely_into_other(&rows, &group_by));
+    }
+
+    #[test]
+    fn a_real_row_among_others_is_not_flagged_as_wholly_folded() {
+        let group_by = [GroupByField::Path];
+        let rows = vec![real_row(&group_by, "/blog"), other_row(&group_by)];
+        assert!(!folded_entirely_into_other(&rows, &group_by));
+    }
+
+    #[test]
+    fn only_real_rows_are_not_flagged() {
+        let group_by = [GroupByField::Path];
+        let rows = vec![real_row(&group_by, "/blog")];
+        assert!(!folded_entirely_into_other(&rows, &group_by));
+    }
+
+    #[test]
+    fn empty_group_by_is_never_flagged() {
+        // With no --group-by, a single total row's dims are always empty
+        // whether or not it was folded (folding a bare total doesn't
+        // change its hits/uniques) — nothing to warn about here.
+        let rows = vec![fossh_store::GroupRow {
+            dims: vec![],
+            hits: 3,
+            uniques: 2,
+            p50: 0,
+            p95: 0,
+        }];
+        assert!(!folded_entirely_into_other(&rows, &[]));
+    }
+
+    #[test]
+    fn no_rows_at_all_is_not_flagged() {
+        assert!(!folded_entirely_into_other(&[], &[GroupByField::Path]));
     }
 }

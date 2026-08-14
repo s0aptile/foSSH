@@ -19,6 +19,7 @@ type t = {
   mutable child_pid : int option;
   mutable restart_times : float list;
   policy : restart_policy;
+  drop_privileges_to : string option;
   (* §3.4: set by `request_termination` right before it signals the
      currently-tracked child, consumed (read-and-reset) exactly once
      by the main supervision loop's own next `wait_for_exit` — see
@@ -29,12 +30,46 @@ type t = {
   mutable termination_was_requested : bool;
 }
 
-let create ?(policy = default_policy) ~(program : string) (args : string array)
-    : t =
-  { program; args; child_pid = None; restart_times = []; policy; termination_was_requested = false }
+let create ?(policy = default_policy) ?(drop_privileges_to : string option = None)
+    ~(program : string) (args : string array) : t =
+  {
+    program;
+    args;
+    child_pid = None;
+    restart_times = [];
+    policy;
+    drop_privileges_to;
+    termination_was_requested = false;
+  }
+
+let setpriv_path = "/usr/bin/setpriv"
+
+let privdrop_argv ~(user : string) ~(program : string) (args : string array) :
+    string array =
+  Array.concat
+    [
+      [|
+        setpriv_path;
+        "--reuid=" ^ user;
+        "--regid=" ^ user;
+        "--keep-groups";
+        "--bounding-set=-all";
+        "--inh-caps=-all";
+        "--ambient-caps=-all";
+        "--no-new-privs";
+        "--";
+        program;
+      |];
+      Array.sub args 1 (Array.length args - 1);
+    ]
 
 let spawn (t : t) : int =
-  let pid = Unix.create_process t.program t.args Unix.stdin Unix.stdout Unix.stderr in
+  let real_prog, real_args =
+    match t.drop_privileges_to with
+    | None -> (t.program, t.args)
+    | Some user -> (setpriv_path, privdrop_argv ~user ~program:t.program t.args)
+  in
+  let pid = Unix.create_process real_prog real_args Unix.stdin Unix.stdout Unix.stderr in
   t.child_pid <- Some pid;
   pid
 

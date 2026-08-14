@@ -1,12 +1,13 @@
 //! Draining spool files into the store — shared by `fossh-cli maintain`
-//! and (M7) `fossh-fcgi`'s background compactor thread. Safe under a
-//! concurrently-appending CGI process: the live `current.bin` is renamed
-//! aside (atomic on the same filesystem) before being read, so any
-//! append still in flight keeps writing to the same inode under its new
-//! name — POSIX `rename()` doesn't invalidate an open file descriptor or
-//! redirect where its writes land — and any *new* `append_frame` call
-//! opens (and if needed creates) a fresh `current.bin`. No frame is ever
-//! caught mid-write by this drain; at worst, one lands in the next cycle.
+//! and (M7) `fossh-fcgi`'s background compactor thread. `rename()` alone
+//! is not sufficient for safety against a concurrent writer holding an
+//! already-open fd across the rename: a write through that stale fd,
+//! landing after this module's own read-to-EOF but before (or during)
+//! its `remove_file`, would be silently lost once the fd closes. The
+//! rotate-read-drain sequence below therefore holds `spool::lock_path`'s
+//! `spool.lock` exclusively for exactly that sequence; `append_frame`
+//! holds the same lock file shared for its own open-and-write. See
+//! DECISIONS.md for the incident this closed.
 
 use std::fs;
 use std::path::Path;
@@ -43,6 +44,8 @@ pub fn drain_site_spool(
 
     let current = spool_dir.join("current.bin");
     if current.is_file() {
+        let lock = spool::open_lock_file(spool_dir)?;
+        lock.lock()?;
         let staged = spool_dir.join(format!(
             "draining-{}.bin",
             std::time::SystemTime::now()
@@ -54,6 +57,7 @@ pub fn drain_site_spool(
             drain_file(store, &staged, &mut stats, key)?;
             fs::remove_file(&staged).ok();
         }
+        drop(lock);
     }
 
     if let Ok(entries) = fs::read_dir(spool_dir) {
@@ -256,5 +260,46 @@ mod tests {
             "both the pre- and post-rename writes must land in the staged file"
         );
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn concurrent_append_and_drain_forced_start_never_loses_an_event() {
+        for attempt in 0..100u64 {
+            let dir = scratch_dir(&format!("lock-race-{attempt}"));
+            spool::append_frame(&dir, &sample_event(1_000 + attempt as i64), &TEST_KEY).unwrap();
+
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let dir_w = dir.clone();
+            let barrier_w = std::sync::Arc::clone(&barrier);
+            let second_ts = 2_000_000 + attempt as i64;
+            let writer = std::thread::spawn(move || {
+                let ev = sample_event(second_ts);
+                barrier_w.wait();
+                spool::append_frame(&dir_w, &ev, &TEST_KEY)
+            });
+
+            let mut store = Store::open_in_memory().unwrap();
+            barrier.wait();
+            let first_pass = drain_site_spool(&mut store, &dir, &TEST_KEY).unwrap();
+
+            let append_result = writer.join().unwrap();
+            assert!(
+                append_result.is_ok(),
+                "attempt {attempt}: concurrent append must not fail: {append_result:?}"
+            );
+
+            let second_pass = drain_site_spool(&mut store, &dir, &TEST_KEY).unwrap();
+
+            let total_recorded = first_pass.events_recorded + second_pass.events_recorded;
+            let total_corrupt = first_pass.frames_corrupt + second_pass.frames_corrupt;
+            assert_eq!(
+                total_recorded, 2,
+                "attempt {attempt}: both the pre-existing and the concurrently-appended \
+                 event must be recovered, none lost (first pass {first_pass:?}, \
+                 second pass {second_pass:?})"
+            );
+            assert_eq!(total_corrupt, 0, "attempt {attempt}: no frame should be corrupt");
+            fs::remove_dir_all(&dir).ok();
+        }
     }
 }

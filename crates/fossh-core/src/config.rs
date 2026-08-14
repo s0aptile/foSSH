@@ -60,11 +60,42 @@ impl Serialize for CountryDb {
 }
 
 impl CountryDb {
-    fn from_str(s: &str) -> Self {
+    /// `pub` (not just used by `Deserialize`) so `fossh-cgi`/`fossh-fcgi`
+    /// can parse `FOSSH_COUNTRY_DB` with the exact same rules `fossh.toml`
+    /// gets — those binaries deliberately don't call `Config::load` at
+    /// all (see their own `main.rs` doc comments) but must still agree
+    /// with it on what a given string means.
+    pub fn from_str(s: &str) -> Self {
         match s {
             "builtin" => CountryDb::Builtin,
             "none" => CountryDb::None,
             _ => CountryDb::Custom(PathBuf::from(s)),
+        }
+    }
+
+    /// The filesystem path this setting resolves to, or `None` when
+    /// there's nothing to open.
+    ///
+    /// `Custom(p)` is `Some(p)`, obviously. `None` is `None`, equally
+    /// obviously — `country_db = "none"` is an explicit, fully-supported
+    /// "don't do GeoIP resolution at all" (§10), not a placeholder.
+    ///
+    /// `Builtin` is *also* `None` as of this release: it names a future
+    /// package-bundled database (e.g. an RPM that ships one at a fixed
+    /// path), which does not exist yet — no offline country database is
+    /// vendored into this source tree or shipped in any release
+    /// artifact (see `NOTICE`). Until packaging actually bundles one and
+    /// this method is updated to point at it, `Builtin` degrades to
+    /// exactly the same "no database, every country resolves to
+    /// `ZZ`" behavior as `None`. This is why `Config::default()` using
+    /// `Builtin` as its default is safe on a fresh install with no
+    /// database configured: it's a no-op, not a hard requirement, and
+    /// `fossh init` additionally writes an explicit `"none"` into the
+    /// config it generates so this is never an accident.
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            CountryDb::Builtin | CountryDb::None => None,
+            CountryDb::Custom(p) => Some(p.as_path()),
         }
     }
 }
@@ -441,6 +472,18 @@ mod tests {
         assert_eq!(
             CountryDb::from_str("/opt/geo/custom.table"),
             CountryDb::Custom(PathBuf::from("/opt/geo/custom.table"))
+        );
+    }
+
+    #[test]
+    fn country_db_path_only_custom_resolves_to_something() {
+        assert_eq!(CountryDb::None.path(), None);
+        // `Builtin` is `None` too as of this release — see `path()`'s
+        // own doc comment for why (no builtin database is bundled).
+        assert_eq!(CountryDb::Builtin.path(), None);
+        assert_eq!(
+            CountryDb::Custom(PathBuf::from("/opt/geo/custom.table")).path(),
+            Some(Path::new("/opt/geo/custom.table"))
         );
     }
 

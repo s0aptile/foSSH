@@ -227,6 +227,13 @@ pub fn send_one_reload(identity: &TlsIdentity, config: &QuicClientConfig) -> Res
     match command_client::decode_response(&reply_line).map_err(|e| format!("reply: {e}"))? {
         Response::Ok => Ok(()),
         Response::Error(reason) => Err(format!("watchdog refused: {reason}")),
+        // This path only ever sends Reload (see this module's own doc
+        // comment) — a STATUS reply here would mean the watchdog
+        // replied to the wrong command entirely, not a case to `todo!`
+        // on the crash-worthy hot SIGHUP path.
+        Response::Status { .. } => {
+            Err("watchdog sent a status reply to a reload command".to_string())
+        }
     }
 }
 

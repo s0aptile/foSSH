@@ -15,30 +15,49 @@ jobs:
         with:
           components: clippy, rustfmt
       - name: root workspace — test
-        run: cargo test --workspace
+        # --locked: without it, a committed Cargo.lock that has drifted
+        # out of sync with Cargo.toml (a stray hand-edit, a rebase that
+        # dropped a lockfile update, ...) is silently repaired by cargo
+        # and the run passes — the exact "looks clean, isn't" shape this
+        # whole review exists to catch. --locked turns that into a hard
+        # failure instead of a silent rewrite.
+        run: cargo test --workspace --locked
       - name: root workspace — clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: root workspace — fmt
         run: cargo fmt --all -- --check
       - name: fossh-ffi workspace — test
         working-directory: crates/fossh-ffi
-        run: cargo test
+        run: cargo test --locked
       - name: fossh-ffi workspace — clippy
         working-directory: crates/fossh-ffi
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
       - name: fossh-ffi workspace — fmt
         working-directory: crates/fossh-ffi
         run: cargo fmt --all -- --check
-      - name: network-denied test run (P-invariant: zero egress from the ingest path)
+      - name: "network-denied test run (P-invariant: zero egress from the ingest path)"
         # §17: "Test suite passes with network fully denied." A firewall
         # rule proves this far more than an env var a test could ignore.
         run: |
           sudo iptables -I OUTPUT -m owner --uid-owner "$(id -u)" -p tcp --syn -j REJECT
-          cargo test --workspace --offline
+          cargo test --workspace --offline --locked
           sudo iptables -D OUTPUT -m owner --uid-owner "$(id -u)" -p tcp --syn -j REJECT
 
   supply-chain:
-    name: cargo audit + cargo deny (both workspaces)
+    # "both workspaces" was stale: this project has 4 independent Cargo
+    # workspaces (root, fossh-ffi, fossh-quiche-ffi, fossh-ipc — see the
+    # root Cargo.toml's own `exclude` list and each crate's own
+    # single-member [workspace] table), each with its own deny.toml.
+    # Before this fix, only 2 of the 4 were ever actually checked here —
+    # fossh-quiche-ffi (pins the quiche/BoringSSL version the OCaml
+    # watchdog's ctypes bindings link against) and fossh-ipc (the
+    # core<->watchdog QUIC/mTLS IPC channel itself) had zero CI
+    # supply-chain coverage despite both having a real deny.toml,
+    # relying entirely on being re-checked by hand each session
+    # (dev/DURUM.md documents exactly that manual habit). Neither needs
+    # a full build to check — cargo-audit/cargo-deny only resolve the
+    # dependency graph — so there was no build-cost reason for the gap.
+    name: cargo audit + cargo deny (all 4 workspaces)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,6 +69,39 @@ jobs:
         run: cargo audit
       - working-directory: crates/fossh-ffi
         run: cargo deny check
+      - working-directory: crates/fossh-quiche-ffi
+        run: cargo audit
+      - working-directory: crates/fossh-quiche-ffi
+        run: cargo deny check
+      - working-directory: crates/fossh-ipc
+        run: cargo audit
+      - working-directory: crates/fossh-ipc
+        run: cargo deny check
+
+  fuzz-smoke:
+    name: cargo-fuzz smoke run (§3.7, all 5 targets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz --locked
+      - name: json_body
+        run: cargo +nightly fuzz run json_body -- -max_total_time=15
+      - name: query_string
+        run: cargo +nightly fuzz run query_string -- -max_total_time=15
+      - name: forwarded_for
+        run: cargo +nightly fuzz run forwarded_for -- -max_total_time=15
+      - name: fcgi_framing
+        run: cargo +nightly fuzz run fcgi_framing -- -max_total_time=15
+      - name: spool_frame
+        run: cargo +nightly fuzz run spool_frame -- -max_total_time=15
+      - name: confirm no crash artifacts were left behind
+        run: |
+          if find fuzz/artifacts -type f | grep -q .; then
+            echo "FAIL: fuzz/artifacts is non-empty"
+            find fuzz/artifacts -type f
+            exit 1
+          fi
 
   release-hygiene:
     name: identity-hygiene gate (§19.4.12)

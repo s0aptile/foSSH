@@ -26,30 +26,54 @@ fn utc_day(t: SystemTime) -> Result<i64, IngestError> {
 }
 
 fn write_new_salt(path: &Path) -> Result<Zeroizing<[u8; SALT_LEN]>, IngestError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    let dir = path
+        .parent()
+        .ok_or_else(|| IngestError::Io(std::io::Error::other("salt path has no parent directory")))?;
+    fs::create_dir_all(dir)?;
     let random = read_random_bytes(SALT_LEN)?;
     let mut salt = Zeroizing::new([0u8; SALT_LEN]);
     salt.copy_from_slice(&random);
 
+    let tmp_path = dir.join("daily_salt.tmp");
     let mut file = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .mode(0o600)
-        .open(path)?;
+        .open(&tmp_path)?;
     file.write_all(&*salt)?;
     let _ = file.sync_all(); // best-effort — tmpfs has no durability to lose anyway
 
-    // `.mode(0o600)` on OpenOptions only governs a *newly created* file;
-    // enforce it explicitly too in case a file already existed here with
-    // wider permissions from a previous, differently-configured run.
-    let mut perms = fs::metadata(path)?.permissions();
+    let mut perms = fs::metadata(&tmp_path)?.permissions();
     perms.set_mode(0o600);
-    fs::set_permissions(path, perms)?;
+    fs::set_permissions(&tmp_path, perms)?;
+    drop(file);
+    fs::rename(&tmp_path, path)?;
 
     Ok(salt)
+}
+
+fn read_if_fresh(
+    path: &Path,
+    today: i64,
+) -> Result<Option<Zeroizing<[u8; SALT_LEN]>>, IngestError> {
+    match fs::metadata(path) {
+        Ok(meta) => {
+            let mtime = meta.modified()?;
+            if utc_day(mtime)? == today {
+                let mut f = File::open(path)?;
+                let mut buf = Zeroizing::new(vec![0u8; SALT_LEN]);
+                f.read_exact(&mut buf)?;
+                let mut salt = Zeroizing::new([0u8; SALT_LEN]);
+                salt.copy_from_slice(&buf);
+                Ok(Some(salt))
+            } else {
+                Ok(None)
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(IngestError::Io(e)),
+    }
 }
 
 /// Overwrites a file's bytes with zeroes before removing it — a `shred`
@@ -97,24 +121,32 @@ impl SaltManager {
         let path = self.path();
         let today = utc_day(now)?;
 
-        match fs::metadata(&path) {
-            Ok(meta) => {
-                let mtime = meta.modified()?;
-                if utc_day(mtime)? == today {
-                    let mut f = File::open(&path)?;
-                    let mut buf = Zeroizing::new(vec![0u8; SALT_LEN]);
-                    f.read_exact(&mut buf)?;
-                    let mut salt = Zeroizing::new([0u8; SALT_LEN]);
-                    salt.copy_from_slice(&buf);
-                    Ok(salt)
-                } else {
-                    shred(&path)?;
-                    write_new_salt(&path)
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => write_new_salt(&path),
-            Err(e) => Err(IngestError::Io(e)),
+        match read_if_fresh(&path, today)? {
+            Some(salt) => Ok(salt),
+            None => self.create_or_rotate(&path, today),
         }
+    }
+
+    fn create_or_rotate(
+        &self,
+        path: &Path,
+        today: i64,
+    ) -> Result<Zeroizing<[u8; SALT_LEN]>, IngestError> {
+        fs::create_dir_all(&self.salt_dir)?;
+        let lock = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .mode(0o600)
+            .open(self.salt_dir.join("daily_salt.lock"))?;
+        lock.lock()?;
+
+        if let Some(salt) = read_if_fresh(path, today)? {
+            return Ok(salt);
+        }
+        if path.exists() {
+            shred(path)?;
+        }
+        write_new_salt(path)
     }
 }
 

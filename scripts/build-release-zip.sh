@@ -22,11 +22,29 @@ trap 'rm -rf "$work"' EXIT
 stage="$work/stage"
 mkdir -p "$stage/fossh"
 
-# The complete repository tree, per §5/§19.7 — everything git tracks,
-# which already excludes .git/, target/, .env, and every other
-# build/scratch artifact (that's what .gitignore is for), plus
-# PUBLISH.md specifically (also gitignored, per §19.8 — never shipped).
-git ls-files -z | (cd "$stage/fossh" && xargs -0 -I{} sh -c 'mkdir -p "$(dirname "{}")" && cp "'"$project_root"'/{}" "{}"')
+# The complete repository tree, per §5/§19.7 — everything git tracks
+# OR staged-but-uncommitted (a plain `git ls-files -z`, the original
+# approach here, misses untracked new files entirely — a real,
+# reproduced gap: this exact bug silently dropped a whole session's
+# worth of new work, watchdog/lib/operator_*.{ml,mli} included, from a
+# "give out the real source" public release zip, same underlying
+# mistake scripts/build-release-rpm.sh's own git-stash-create gap
+# already found and fixed for the RPM's source tarball). Fixed the same
+# way: a scratch GIT_INDEX_FILE seeded from HEAD then `add -A`'d,
+# which still correctly excludes .git/, target/, .env, and PUBLISH.md
+# (all .gitignore'd, §19.8 — never shipped) without ever touching the
+# real index, HEAD, or the stash list.
+scratch_index=$(mktemp)
+GIT_INDEX_FILE="$scratch_index" git -C "$project_root" read-tree HEAD
+GIT_INDEX_FILE="$scratch_index" git -C "$project_root" add -A
+# RULES.md is tracked (contributors need it) but self-declares as an
+# internal reference doc in its own first line -- it explains the
+# public/private boundary mechanism itself, which is exactly the kind
+# of thing that boundary exists to keep out of what ships. Excluded
+# here, not deleted from the tree.
+GIT_INDEX_FILE="$scratch_index" git -C "$project_root" ls-files -z -- ':!RULES.md' \
+  | (cd "$stage/fossh" && xargs -0 -I{} sh -c 'mkdir -p "$(dirname "{}")" && cp "'"$project_root"'/{}" "{}"')
+rm -f "$scratch_index"
 
 # dist/: what this build environment can actually produce today, not
 # the full §19.7 wish list (musl x86_64+aarch64, an SBOM, a signed
@@ -34,8 +52,14 @@ git ls-files -z | (cd "$stage/fossh" && xargs -0 -I{} sh -c 'mkdir -p "$(dirname
 # why, and the printed checklist below for an explicit, honest miss
 # rather than a silently-absent line).
 mkdir -p "$stage/fossh/dist"
-for f in fossh-0.1.0~alpha.1-1.fc44.x86_64.rpm fossh-0.1.0~alpha.1-1.fc44.src.rpm; do
-  [ -f "$project_root/dist/$f" ] && cp "$project_root/dist/$f" "$stage/fossh/dist/"
+# Copies whatever RPM/SRPM artifacts actually exist in dist/ rather
+# than a hardcoded release number -- the base/watchdog subpackage
+# split (packaging/rpm/fossh.spec) bumped Release and added
+# fossh-watchdog-*.rpm as a second package; hardcoding names here once
+# already went stale silently (found the same day it happened) and
+# would again on the next bump.
+for f in "$project_root"/dist/*.rpm; do
+  [ -f "$f" ] && cp "$f" "$stage/fossh/dist/"
 done
 if [ -f "$project_root/target/release/fossh-cgi" ]; then
   cp "$project_root/target/release/fossh-cgi" "$stage/fossh/dist/fossh-cgi-x86_64-unknown-linux-gnu"

@@ -1,33 +1,25 @@
-//! §8 authentication: HMAC-signed requests (server-side integrations) and
-//! bearer-token mode (browser-beacon usage, where signing is impossible).
+//! §8 authentication: Ed25519-signed requests (server-side integrations)
+//! and bearer-token mode (browser-beacon usage, where signing is
+//! impossible).
 //!
-//! **Signing-key resolution (see DECISIONS.md for the full ADR).** §8
-//! states both "only `BLAKE3(key)` is stored" *and* `sig =
-//! BLAKE3-keyed(write_key, canonical)` — read completely literally, those
-//! two sentences make signed-mode verification impossible: a keyed hash
-//! can only be verified with the same key it was made with, and a
-//! one-way hash of that key isn't the key. The resolution used here,
-//! throughout this crate: the value everyone calls `key_hash` —
-//! `BLAKE3(write_key)`, computed once by the client from the write key
-//! `fossh site create` displayed, and stored server-side in
-//! `sites.key_hash` — *is* the actual signing key for the keyed hash, not
-//! a hash the server would need to reverse. The client signs with
-//! `BLAKE3(write_key)`; the server verifies with the identical
-//! `sites.key_hash` it already has on file. Nobody transmits or stores
-//! the original 32 random bytes past the moment `fossh site create`
-//! prints them. This is the same shape as any system that stores
-//! `hash(secret)` and treats the hash itself as the live verifier — it's
-//! sound because `key_hash` is exactly as secret as `write_key` was
-//! (both require having seen the original credential; `BLAKE3` isn't
-//! invertible), it just isn't the literal bytes the operator copy-pastes.
-//!
-//! Functions below take `signing_key: &[u8; 32]` rather than `write_key`
-//! to name this precisely: callers pass `site.key_hash`, not a raw key.
+//! **Signed mode is asymmetric, not HMAC (see DECISIONS.md, ADR-0015 and
+//! its follow-up).** An earlier design signed with `site.key_hash` —
+//! `BLAKE3(write_key)`, the same value stored server-side as the bearer
+//! verifier — as a symmetric keyed-hash key. That was a pass-the-hash
+//! flaw: the server has to hold `key_hash` in immediately usable form to
+//! check bearer auth, so anyone who read that value (a stolen database, a
+//! leaked `site_cache` JSON file) could compute valid signatures without
+//! ever having seen `write_key` itself. Ed25519 fixes this structurally:
+//! `sites.sign_pubkey` is a public key, useless for producing a
+//! signature, only for checking one. The matching private key lives only
+//! on the client, generated once and never transmitted or stored
+//! server-side.
 
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
+use ed25519_dalek::{Signer, Verifier};
 use subtle::ConstantTimeEq;
 
 use crate::IngestError;
@@ -40,34 +32,46 @@ pub fn canonical_string(method: &str, path: &str, ts: i64, nonce: &str, body: &[
     format!("{method}\n{path}\n{ts}\n{nonce}\n{}", body_hash.to_hex())
 }
 
-/// §8: `sig = BLAKE3-keyed(signing_key, canonical)` — see the module doc
-/// comment for what `signing_key` actually is (`site.key_hash`).
-pub fn sign(signing_key: &[u8; 32], canonical: &str) -> [u8; 32] {
-    *blake3::keyed_hash(signing_key, canonical.as_bytes()).as_bytes()
+pub fn sign(signing_key: &ed25519_dalek::SigningKey, canonical: &str) -> ed25519_dalek::Signature {
+    signing_key.sign(canonical.as_bytes())
 }
 
-/// Constant-time signature check (S5: `subtle::ConstantTimeEq`).
-pub fn verify_signature(signing_key: &[u8; 32], canonical: &str, presented_sig: &[u8; 32]) -> bool {
-    sign(signing_key, canonical).ct_eq(presented_sig).into()
+pub fn verify_signature(
+    verifying_key: &ed25519_dalek::VerifyingKey,
+    canonical: &str,
+    presented_sig: &ed25519_dalek::Signature,
+) -> bool {
+    verifying_key
+        .verify(canonical.as_bytes(), presented_sig)
+        .is_ok()
 }
 
 /// Convenience wrapper for the actual wire format: `X-FoSSH-Sig` arrives
-/// as base32 text, not raw bytes. A malformed (wrong-length or
-/// non-base32) header is just "not a match" — never a distinct error path
-/// an attacker could use to distinguish "bad encoding" from "bad
-/// signature" (S2: fail closed, uniformly).
+/// as base32 text, not raw bytes, and the verifying key as stored
+/// (`site.sign_pubkey`) is raw 32 bytes, not `ed25519_dalek`'s own type.
+/// A malformed header or a pubkey that isn't a valid compressed Edwards
+/// point is just "not a match" — never a distinct error path an attacker
+/// could use to distinguish one failure mode from another (S2: fail
+/// closed, uniformly).
 pub fn verify_signature_b32(
-    signing_key: &[u8; 32],
+    verifying_key_bytes: &[u8; 32],
     canonical: &str,
     presented_sig_b32: &str,
 ) -> bool {
-    match fossh_core::base32::decode(presented_sig_b32) {
-        Some(bytes) => match <[u8; 32]>::try_from(bytes.as_slice()) {
-            Ok(sig) => verify_signature(signing_key, canonical, &sig),
-            Err(_) => false,
-        },
-        None => false,
-    }
+    let Ok(verifying_key) = ed25519_dalek::VerifyingKey::from_bytes(verifying_key_bytes) else {
+        return false;
+    };
+    let Some(bytes) = fossh_core::base32::decode(presented_sig_b32) else {
+        return false;
+    };
+    let Ok(sig_bytes) = <[u8; 64]>::try_from(bytes.as_slice()) else {
+        return false;
+    };
+    verify_signature(
+        &verifying_key,
+        canonical,
+        &ed25519_dalek::Signature::from_bytes(&sig_bytes),
+    )
 }
 
 /// §8: "Reject if `|now − ts| > 300`."
@@ -172,6 +176,7 @@ impl NonceCache {
             .create(true)
             .truncate(false)
             .open(&self.path)?;
+        file.lock()?;
         let needed_len = NONCE_CACHE_SLOTS * SLOT_BYTES as u64;
         if file.metadata()?.len() < needed_len {
             file.set_len(needed_len)?; // sparse-extend; unwritten slots read as zero
@@ -211,51 +216,103 @@ mod tests {
         assert_eq!(parts[4].len(), 64, "blake3 hex digest is 64 chars");
     }
 
+    fn keypair(seed: u8) -> (ed25519_dalek::SigningKey, ed25519_dalek::VerifyingKey) {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+        let verifying_key = signing_key.verifying_key();
+        (signing_key, verifying_key)
+    }
+
     #[test]
     fn sign_and_verify_round_trip() {
-        let key = [7u8; 32];
+        let (signing_key, verifying_key) = keypair(7);
         let canonical = canonical_string("POST", "/e", 1_700_000_000, "n1", b"{}");
-        let sig = sign(&key, &canonical);
-        assert!(verify_signature(&key, &canonical, &sig));
+        let sig = sign(&signing_key, &canonical);
+        assert!(verify_signature(&verifying_key, &canonical, &sig));
     }
 
     #[test]
     fn verify_rejects_wrong_key() {
+        let (signing_key, _) = keypair(7);
+        let (_, wrong_verifying_key) = keypair(8);
         let canonical = canonical_string("POST", "/e", 1_700_000_000, "n1", b"{}");
-        let sig = sign(&[7u8; 32], &canonical);
-        assert!(!verify_signature(&[8u8; 32], &canonical, &sig));
+        let sig = sign(&signing_key, &canonical);
+        assert!(!verify_signature(&wrong_verifying_key, &canonical, &sig));
     }
 
     #[test]
     fn verify_signature_b32_round_trips_the_wire_format() {
-        let key = [7u8; 32];
+        let (signing_key, verifying_key) = keypair(7);
         let canonical = canonical_string("POST", "/e", 1_700_000_000, "n1", b"{}");
-        let sig_b32 = fossh_core::base32::encode(&sign(&key, &canonical));
-        assert!(verify_signature_b32(&key, &canonical, &sig_b32));
+        let sig_b32 = fossh_core::base32::encode(&sign(&signing_key, &canonical).to_bytes());
+        assert!(verify_signature_b32(
+            &verifying_key.to_bytes(),
+            &canonical,
+            &sig_b32
+        ));
     }
 
     #[test]
     fn verify_signature_b32_rejects_malformed_header_without_panicking() {
-        let key = [7u8; 32];
+        let (_, verifying_key) = keypair(7);
+        let pubkey_bytes = verifying_key.to_bytes();
         let canonical = canonical_string("POST", "/e", 1_700_000_000, "n1", b"{}");
         assert!(!verify_signature_b32(
-            &key,
+            &pubkey_bytes,
             &canonical,
             "not-valid-base32!!!"
         ));
-        assert!(!verify_signature_b32(&key, &canonical, "MY")); // valid base32, wrong length
-        assert!(!verify_signature_b32(&key, &canonical, ""));
+        assert!(!verify_signature_b32(&pubkey_bytes, &canonical, "MY")); // valid base32, wrong length
+        assert!(!verify_signature_b32(&pubkey_bytes, &canonical, ""));
+    }
+
+    #[test]
+    fn verify_signature_b32_rejects_a_pubkey_that_is_not_a_valid_point() {
+        // All-0xFF is not a valid compressed Edwards point — must fail
+        // closed (`VerifyingKey::from_bytes` returns `Err`), not panic.
+        let (signing_key, _) = keypair(7);
+        let canonical = canonical_string("POST", "/e", 1_700_000_000, "n1", b"{}");
+        let sig_b32 = fossh_core::base32::encode(&sign(&signing_key, &canonical).to_bytes());
+        assert!(!verify_signature_b32(&[0xFFu8; 32], &canonical, &sig_b32));
     }
 
     #[test]
     fn verify_rejects_tampered_canonical() {
-        let key = [7u8; 32];
+        let (signing_key, verifying_key) = keypair(7);
         let sig = sign(
-            &key,
+            &signing_key,
             &canonical_string("POST", "/e", 1_700_000_000, "n1", b"{}"),
         );
         let tampered = canonical_string("POST", "/e", 1_700_000_000, "n1", b"{\"x\":1}");
-        assert!(!verify_signature(&key, &tampered, &sig));
+        assert!(!verify_signature(&verifying_key, &tampered, &sig));
+    }
+
+    /// B-03 regression: with an asymmetric scheme, the value the server
+    /// stores (`verifying_key.to_bytes()`, what a stolen `sites` table or
+    /// `site_cache` JSON file would actually expose) is a public key —
+    /// signing with it directly, the way the old BLAKE3-keyed-hash design
+    /// let an attacker sign with `key_hash`, must be structurally
+    /// impossible, not just prevented by convention.
+    #[test]
+    fn stolen_verifying_key_bytes_cannot_be_used_to_forge_a_signature() {
+        let (signing_key, verifying_key) = keypair(7);
+        let stolen_pubkey_bytes = verifying_key.to_bytes();
+        drop(signing_key); // the attacker never had this — only the line above
+
+        let forged_canonical =
+            canonical_string("POST", "/e", 1_900_000_000, "attacker-nonce", b"{}");
+
+        // The only "signing" operation an attacker holding just the public
+        // key bytes could even attempt is treating them as if they were a
+        // seed. That produces a self-consistent but *different* keypair —
+        // its signature does not verify against the real, stolen pubkey.
+        let attacker_signing_key = ed25519_dalek::SigningKey::from_bytes(&stolen_pubkey_bytes);
+        let forged_sig = sign(&attacker_signing_key, &forged_canonical);
+        let forged_sig_b32 = fossh_core::base32::encode(&forged_sig.to_bytes());
+
+        assert!(
+            !verify_signature_b32(&stolen_pubkey_bytes, &forged_canonical, &forged_sig_b32),
+            "a signature forged from stolen verifier bytes alone must not verify"
+        );
     }
 
     #[test]
@@ -373,5 +430,34 @@ mod tests {
             "expired nonce is not a replay"
         );
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn two_simultaneous_identical_requests_produce_exactly_one_accept_one_replay() {
+        for attempt in 0..200u32 {
+            let path = scratch_path(&format!("race-{attempt}"));
+            let cache_a = std::sync::Arc::new(NonceCache::new(path.clone()));
+            let cache_b = std::sync::Arc::clone(&cache_a);
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let barrier_b = std::sync::Arc::clone(&barrier);
+
+            let t_b = std::thread::spawn(move || {
+                barrier_b.wait();
+                cache_b.check_and_record(1, "same-nonce", 1_700_000_000)
+            });
+
+            barrier.wait();
+            let result_a = cache_a.check_and_record(1, "same-nonce", 1_700_000_000);
+            let result_b = t_b.join().unwrap();
+
+            let a = result_a.unwrap();
+            let b = result_b.unwrap();
+            assert_ne!(
+                a, b,
+                "attempt {attempt}: exactly one of two simultaneous identical requests \
+                 must be accepted and the other rejected as a replay, got a={a} b={b}"
+            );
+            std::fs::remove_file(&path).ok();
+        }
     }
 }

@@ -66,6 +66,31 @@ let accept_and_reset_immediately ~(socket_path : string) () : unit =
   Unix.close listener;
   Unix.close conn
 
+(* A tight-spin variant of accept_and_reset_immediately: polls via a
+   zero-timeout Unix.select instead of blocking in Unix.accept, so it
+   reacts to a pending connection with as little added latency as
+   possible, then closes without reading or writing anything. Used
+   (many trials, see below) to chase the real race a plain blocking
+   accept_and_reset_immediately can also hit but less reliably: the
+   watchdog's own write, inside send_handoff, landing strictly after
+   this side has already closed — an EPIPE/SIGPIPE condition on the
+   WRITE itself, not just the "peer closed before I could read the
+   reply" condition the *existing* accept_and_reset_immediately test
+   already covers deterministically via the read side. *)
+let fast_accept_and_reset ~(socket_path : string) () : unit =
+  let listener = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  Unix.bind listener (Unix.ADDR_UNIX socket_path);
+  Unix.listen listener 1;
+  let rec spin () =
+    match Unix.select [ listener ] [] [] 0.0 with
+    | [], _, _ -> spin ()
+    | _ ->
+        let conn, _ = Unix.accept listener in
+        Unix.close conn
+  in
+  spin ();
+  Unix.close listener
+
 let () =
   let dir = mkdtemp () in
   Fun.protect
@@ -162,8 +187,25 @@ let () =
           ~cert_pem:fake_watchdog_cert_pem
       in
       Thread.join reset_thread;
-      check "a peer that resets the connection before reading is Recv_failed, not a crash"
-        (match reset_result with Error (Bootstrap.Recv_failed _) -> true | _ -> false);
+      (* Both Recv_failed and Send_failed are correct, non-crashing
+         outcomes here, not just Recv_failed: which one comes back
+         depends on exactly where this side's write lands relative to
+         the peer's close (write completes just before close -> the
+         *next* read sees the reset -> Recv_failed; write itself lands
+         after the close -> Send_failed from the write's own EPIPE).
+         Before this file's SIGPIPE fix (see send_handoff's own header
+         comment and this file's new sigpipe_trial_count-trial test
+         below), only Recv_failed was ever actually observed here — not
+         because Send_failed couldn't happen, but because hitting that
+         exact race used to kill the whole process outright before any
+         result, Send_failed included, could ever be returned. Accepting
+         both here is the correct fix, not a loosened assertion: the
+         narrower original was an artifact of the SIGPIPE bug silently
+         hiding one of its two real, safe outcomes. *)
+      check "a peer that resets the connection before reading is Recv_failed or Send_failed, not a crash"
+        (match reset_result with
+        | Error (Bootstrap.Recv_failed _) | Error (Bootstrap.Send_failed _) -> true
+        | _ -> false);
 
       let oversized_socket_path = Filename.concat dir "oversized.sock" in
       let oversized_thread =
@@ -201,5 +243,65 @@ let () =
       Thread.join oversized_thread;
       check "an oversized reply certificate is Peer_cert_too_large"
         (match oversized_result with Error (Bootstrap.Peer_cert_too_large _) -> true | _ -> false);
+
+      (* Regression test for a real, fresh-sweep SIGPIPE finding:
+         send_handoff writes to a Unix-domain STREAM socket (a real
+         SIGPIPE risk, unlike quic.ml's own UDP sockets) but, unlike
+         Operator_auth_server.run, never ignored SIGPIPE itself — safe
+         only because main.ml's entry point already does, process-wide,
+         before dispatching to the bootstrap-send subcommand that's this
+         function's one real caller. This test calls send_handoff
+         directly, the same way a future embedder (or this very test
+         file, this whole time) would, with no such caller-side
+         protection — before the fix, a real, deterministic reproduction
+         (a hand-rolled probe using this exact write-to-a-freshly-closed-
+         Unix-stream-socket shape) confirmed the process is simply
+         killed outright by SIGPIPE, silently, before any of this
+         module's own Sys_error handling ever runs (exit via signal, no
+         output at all) — not a Recv_failed/Send_failed result, no
+         result at all. Fixed by ignoring SIGPIPE at the top of
+         send_handoff itself, the same defensive posture
+         Operator_auth_server.run already established for the identical
+         reason.
+
+         fast_accept_and_reset's own accept-via-select spin loop chases
+         the real race (this side's write landing strictly after the
+         peer has already closed) more reliably than a plain blocking
+         accept would, but the exact interleaving is still real OS
+         thread scheduling, not something forced deterministically
+         through send_handoff's own black-box API (it owns connect,
+         write, and read as one call, with no seam to synchronize a test
+         against in between) — so this runs many real trials rather than
+         asserting a single one. If SIGPIPE were still unguarded, ANY
+         one trial hitting the write-after-close race would kill this
+         entire test binary outright (no partial credit, no later
+         "checks passed" line at all, exactly as reproduced standalone)
+         — every trial in this loop actually running to completion and
+         producing a definite, non-Ok result is itself the evidence the
+         fix holds, independent of which exact Bootstrap.error variant
+         any single trial happens to land on. *)
+      let sigpipe_trial_count = 25 in
+      let sigpipe_trial_results = ref [] in
+      for i = 0 to sigpipe_trial_count - 1 do
+        let trial_socket_path = Filename.concat dir (Printf.sprintf "sigpipe-trial-%d.sock" i) in
+        let trial_thread =
+          Thread.create (fun () -> fast_accept_and_reset ~socket_path:trial_socket_path ()) ()
+        in
+        Unix.sleepf 0.01;
+        let result =
+          Bootstrap.send_handoff ~socket_path:trial_socket_path ~fingerprint:"x"
+            ~cert_pem:fake_watchdog_cert_pem
+        in
+        Thread.join trial_thread;
+        sigpipe_trial_results := result :: !sigpipe_trial_results
+      done;
+      check
+        (Printf.sprintf
+           "%d/%d send_handoff calls against a peer closing without reading all completed \
+            (none crashed the process via SIGPIPE)"
+           sigpipe_trial_count sigpipe_trial_count)
+        (List.length !sigpipe_trial_results = sigpipe_trial_count);
+      check "every one of those calls returned a definite Error, never a false Ok"
+        (List.for_all (function Error _ -> true | Ok _ -> false) !sigpipe_trial_results);
 
       summarize ())

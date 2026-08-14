@@ -6,8 +6,8 @@
    Auth/Manifest/Session are all pure logic too, tested without a live
    network connection. Wiring this onto real quic.ml streams — which
    side listens vs connects, QUIC stream ID allocation, concurrent
-   command handling — is a separate, not-yet-built piece; see
-   dev/DURUM.md's §3.4 row for exactly what is and isn't connected.
+   command handling — is built too, in quic/quic_command_server.ml;
+   see ADR-0050 and dev/DURUM.md's §3.4 row for exactly what's connected.
 
    Session model: whichever side accepts commands (the "responder")
    issues one fresh Session token per QUIC connection, sent once as
@@ -40,13 +40,43 @@
 
 type session_token = Issued_token of string
 
-type command = Restart | Reload
+type command = Restart | Reload | Status
 
-let command_name = function Restart -> "restart" | Reload -> "reload"
+let command_name = function Restart -> "restart" | Reload -> "reload" | Status -> "status"
 
 let command_of_name = function
   | "restart" -> Some Restart
   | "reload" -> Some Reload
+  | "status" -> Some Status
+  | _ -> None
+
+(* The two fixed-keyword fields a STATUS reply carries — see
+   encode_status/decode_response below. Kept as fixed keywords rather
+   than free text specifically so both sides' parsers stay the simple,
+   single-token-per-field shape ADR-0050 (finding 4) already found a
+   real trim-divergence bug in once for the OK/ERROR shape; a dynamic
+   reason string here would reopen the same class of risk for no real
+   benefit — a human operator wanting the actual tamper-check detail
+   already has it in this process's own stderr log. *)
+type child_state = Child_running | Child_stopped
+type tamper_state = Tamper_clean | Tamper_tampered | Tamper_unknown
+
+let describe_child_state = function Child_running -> "running" | Child_stopped -> "stopped"
+
+let child_state_of_name = function
+  | "running" -> Some Child_running
+  | "stopped" -> Some Child_stopped
+  | _ -> None
+
+let describe_tamper_state = function
+  | Tamper_clean -> "clean"
+  | Tamper_tampered -> "tampered"
+  | Tamper_unknown -> "unknown"
+
+let tamper_state_of_name = function
+  | "clean" -> Some Tamper_clean
+  | "tampered" -> Some Tamper_tampered
+  | "unknown" -> Some Tamper_unknown
   | _ -> None
 
 type error = Malformed_message of string | Unknown_command of string | Session_invalid
@@ -141,12 +171,25 @@ let verify_command ~(expected_token : session_token) ~(presented_token : string)
 let encode_ok () : string = "OK\n"
 let encode_error (e : error) : string = "ERROR " ^ describe_error e ^ "\n"
 
-type response = Ok_response | Error_response of string
+(* [child]/[tamper] are the QUIC command server's own live read of
+   `Supervisor.t`'s currently-tracked child and a fresh, on-demand
+   re-run of the same `Manifest.check` gate `Supervisor` already runs
+   before every real spawn/restart — see quic_command_server.ml's own
+   dispatch for exactly what "live" means here. *)
+let encode_status (child : child_state) (tamper : tamper_state) : string =
+  Printf.sprintf "STATUS %s %s\n" (describe_child_state child) (describe_tamper_state tamper)
+
+type response = Ok_response | Error_response of string | Status_response of child_state * tamper_state
 
 let decode_response (line : string) : (response, error) result =
   let trimmed = String.trim line in
   if String.equal trimmed "OK" then Ok Ok_response
+  else if String.length trimmed >= 6 && String.sub trimmed 0 6 = "ERROR " then
+    Ok (Error_response (String.sub trimmed 6 (String.length trimmed - 6)))
   else
-    match String.length trimmed >= 6 && String.sub trimmed 0 6 = "ERROR " with
-    | true -> Ok (Error_response (String.sub trimmed 6 (String.length trimmed - 6)))
-    | false -> Error (Malformed_message line)
+    match String.split_on_char ' ' trimmed with
+    | [ "STATUS"; child_tok; tamper_tok ] -> (
+        match (child_state_of_name child_tok, tamper_state_of_name tamper_tok) with
+        | Some child, Some tamper -> Ok (Status_response (child, tamper))
+        | _ -> Error (Malformed_message line))
+    | _ -> Error (Malformed_message line)

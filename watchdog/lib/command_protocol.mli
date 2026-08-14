@@ -8,13 +8,18 @@
 
 type session_token
 
-type command = Restart | Reload
+type command = Restart | Reload | Status
 
 type error = Malformed_message of string | Unknown_command of string | Session_invalid
+
+type child_state = Child_running | Child_stopped
+type tamper_state = Tamper_clean | Tamper_tampered | Tamper_unknown
 
 val describe_error : error -> string
 val command_name : command -> string
 val command_of_name : string -> command option
+val describe_child_state : child_state -> string
+val describe_tamper_state : tamper_state -> string
 
 val issue_session : ?lifetime_seconds:float -> unit -> session_token
 val revoke_session : session_token -> unit
@@ -28,7 +33,8 @@ val verify_command : expected_token:session_token -> presented_token:string -> (
 
 val encode_ok : unit -> string
 val encode_error : error -> string
+val encode_status : child_state -> tamper_state -> string
 
-type response = Ok_response | Error_response of string
+type response = Ok_response | Error_response of string | Status_response of child_state * tamper_state
 
 val decode_response : string -> (response, error) result

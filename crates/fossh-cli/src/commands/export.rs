@@ -1,15 +1,15 @@
-//! `fossh export --site <slug> --format ndjson` (§9): aggregates only,
+//! `fossh export --site <slug> --format ndjson|csv` (§9): aggregates only,
 //! never raw rows — trivially true here, since the rollup table this
 //! reads from structurally cannot hold a raw per-visitor row (P1/ADR-0009).
 
 use fossh_store::GroupByField;
 
-use crate::args::flag_value;
+use crate::args::{flag_value, wants_help};
 use crate::common::load_config;
 use crate::date::parse_date;
 
-const USAGE: &str =
-    "usage: fossh export --site <slug> --format ndjson [--from YYYY-MM-DD] [--to YYYY-MM-DD]";
+const USAGE: &str = "usage: fossh export --site <slug> --format ndjson|csv \
+[--from YYYY-MM-DD] [--to YYYY-MM-DD]";
 
 /// Full granularity — every dimension the rollup table has — since export
 /// has no `--group-by` of its own; k-anonymity (P6) still applies at
@@ -37,13 +37,17 @@ fn field_name(f: GroupByField) -> &'static str {
 }
 
 pub fn run(args: &[String]) -> i32 {
+    if wants_help(args) {
+        println!("{USAGE}");
+        return 0;
+    }
     let Some(slug) = flag_value(args, "--site") else {
         eprintln!("{USAGE}");
         return 2;
     };
     let format = flag_value(args, "--format").unwrap_or("ndjson");
-    if format != "ndjson" {
-        eprintln!("fossh export: only --format ndjson is supported");
+    if format != "ndjson" && format != "csv" {
+        eprintln!("fossh export: --format must be ndjson or csv");
         return 2;
     }
     let from = flag_value(args, "--from")
@@ -75,7 +79,16 @@ pub fn run(args: &[String]) -> i32 {
         }
     };
 
-    for row in &rows {
+    if format == "csv" {
+        print_csv(&rows);
+    } else {
+        print_ndjson(&rows);
+    }
+    0
+}
+
+fn print_ndjson(rows: &[fossh_store::GroupRow]) {
+    for row in rows {
         let mut obj = serde_json::Map::new();
         for (field, value) in &row.dims {
             obj.insert(
@@ -92,5 +105,127 @@ pub fn run(args: &[String]) -> i32 {
             Err(e) => eprintln!("fossh export: serializing a row: {e}"),
         }
     }
-    0
+}
+
+fn csv_field(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+fn csv_row(rows: &[fossh_store::GroupRow]) -> Vec<String> {
+    let mut header: Vec<String> = ALL_DIMS
+        .iter()
+        .map(|&f| field_name(f).to_string())
+        .collect();
+    header.extend(["hits", "uniques", "p50", "p95"].map(String::from));
+    let mut lines = vec![header.join(",")];
+    for row in rows {
+        let mut cols: Vec<String> = row.dims.iter().map(|(_, v)| csv_field(v)).collect();
+        cols.push(row.hits.to_string());
+        cols.push(row.uniques.to_string());
+        cols.push(row.p50.to_string());
+        cols.push(row.p95.to_string());
+        lines.push(cols.join(","));
+    }
+    lines
+}
+
+fn print_csv(rows: &[fossh_store::GroupRow]) {
+    for line in csv_row(rows) {
+        println!("{line}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fossh_store::GroupByField;
+
+    fn row(
+        dims: &[(GroupByField, &str)],
+        hits: i64,
+        uniques: u64,
+        p50: i64,
+        p95: i64,
+    ) -> fossh_store::GroupRow {
+        fossh_store::GroupRow {
+            dims: dims.iter().map(|&(f, v)| (f, v.to_string())).collect(),
+            hits,
+            uniques,
+            p50,
+            p95,
+        }
+    }
+
+    #[test]
+    fn csv_header_matches_all_dims_plus_metrics() {
+        let lines = csv_row(&[]);
+        assert_eq!(
+            lines[0],
+            "kind,name,path,country,browser,os,device,hits,uniques,p50,p95"
+        );
+    }
+
+    #[test]
+    fn csv_row_renders_dims_then_metrics_in_order() {
+        let rows = vec![row(
+            &[
+                (GroupByField::Kind, "pageview"),
+                (GroupByField::Name, "pageview"),
+                (GroupByField::Path, "/blog"),
+                (GroupByField::Country, "TR"),
+                (GroupByField::Browser, "Firefox"),
+                (GroupByField::Os, "Linux"),
+                (GroupByField::Device, "Desktop"),
+            ],
+            347,
+            12,
+            120,
+            450,
+        )];
+        let lines = csv_row(&rows);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[1],
+            "pageview,pageview,/blog,TR,Firefox,Linux,Desktop,347,12,120,450"
+        );
+    }
+
+    #[test]
+    fn csv_field_quotes_values_containing_commas() {
+        assert_eq!(csv_field("a,b"), "\"a,b\"");
+        assert_eq!(csv_field("plain"), "plain");
+        assert_eq!(csv_field("has \"quote\""), "\"has \"\"quote\"\"\"");
+    }
+
+    #[test]
+    fn csv_row_folds_other_bucket_the_same_as_any_other_row() {
+        // The k-anonymity "(other)" fold (fossh-store's rollup.rs) is just
+        // another GroupRow by the time it reaches this formatter — export
+        // has no special-case path that could accidentally skip or
+        // mis-render it.
+        let rows = vec![row(
+            &[
+                (GroupByField::Kind, "(other)"),
+                (GroupByField::Name, "(other)"),
+                (GroupByField::Path, "(other)"),
+                (GroupByField::Country, "(other)"),
+                (GroupByField::Browser, "(other)"),
+                (GroupByField::Os, "(other)"),
+                (GroupByField::Device, "(other)"),
+            ],
+            3,
+            2,
+            0,
+            0,
+        )];
+        let lines = csv_row(&rows);
+        assert_eq!(
+            lines[1],
+            "(other),(other),(other),(other),(other),(other),(other),3,2,0,0"
+        );
+    }
 }

@@ -4,8 +4,22 @@
 # up too) after `semodule -i fossh.pp`. The RPM's %post (chapter §3.11)
 # runs this automatically — see packaging/rpm/fossh.spec.
 #
-/usr/bin/fossh-cgi		--	gen_context(system_u:object_r:fossh_cgi_exec_t,s0)
+# Literal `user:role:type:level` contexts, not the `gen_context(...)`
+# M4 macro fossh.te's own header explains this module deliberately
+# avoids depending on (no selinux-policy-devel M4 library assumed
+# available). `checkmodule`/`semodule_package` never validate .fc
+# syntax at build time — only bundle it — so an unexpanded
+# `gen_context(...)` call here compiled and packaged "successfully"
+# every time, and only a real `semodule -i` on a target system ever
+# actually parsed it, failing with "Invalid syntax / Bad context / Bad
+# filecon declaration". Found by this project's first real clean-VM
+# install verification. Expansion confirmed against this machine's own
+# real, live /etc/selinux/targeted/contexts/files/file_contexts
+# entries (e.g. `/usr/bin/gpg -- system_u:object_r:gpg_exec_t:s0`),
+# not assumed from the macro's documented behavior alone.
+/usr/bin/fossh-cgi		--	system_u:object_r:fossh_cgi_exec_t:s0
+/usr/bin/fossh-fcgi		--	system_u:object_r:fossh_fcgi_exec_t:s0
 
-/var/lib/fossh(/.*)?			gen_context(system_u:object_r:fossh_data_t,s0)
+/var/lib/fossh(/.*)?			system_u:object_r:fossh_data_t:s0
 
-/run/fossh(/.*)?			gen_context(system_u:object_r:fossh_var_run_t,s0)
+/run/fossh(/.*)?			system_u:object_r:fossh_var_run_t:s0

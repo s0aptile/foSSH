@@ -6,10 +6,18 @@ use std::path::PathBuf;
 
 use fossh_core::config::{Config, CountryDb};
 
-use crate::args::flag_value;
+use crate::args::{flag_value, wants_help};
 use crate::common::db_path;
 
+const HELP: &str = "usage: fossh init [--dir PATH]\n\n\
+Initialize a data directory (default /var/lib/fossh) and write a default\n\
+./fossh.toml, if one doesn't already exist.";
+
 pub fn run(args: &[String]) -> i32 {
+    if wants_help(args) {
+        println!("{HELP}");
+        return 0;
+    }
     let dir = flag_value(args, "--dir")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/var/lib/fossh"));
@@ -23,8 +31,22 @@ pub fn run(args: &[String]) -> i32 {
         return 1;
     }
 
-    // Opening the store runs its schema migration as a side effect.
-    if let Err(e) = fossh_store::Store::open(&db_path(&dir)) {
+    // §3.8: the per-install data-encryption key, generated here on a
+    // brand-new install if it doesn't exist yet — the same key
+    // `fossh-cgi` already generates first for the spool, shared (not
+    // duplicated) with the database below.
+    let data_key = match fossh_admin::data_key::load_or_generate(&dir.join(".data_key")) {
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("fossh init: could not load data-encryption key: {e}");
+            return 1;
+        }
+    };
+
+    // Opening the store runs its schema migration as a side effect, and
+    // is also where a brand-new `fossh.db` first gets encrypted under
+    // the key above.
+    if let Err(e) = fossh_store::Store::open_encrypted(&db_path(&dir), &data_key) {
         eprintln!("fossh init: initializing database: {e}");
         return 1;
     }

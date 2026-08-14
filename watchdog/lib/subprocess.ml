@@ -5,6 +5,33 @@
    metacharacter injection surface, matching the same discipline the
    Rust side of this project holds itself to for SQL/shell contexts. *)
 
+(* Live-run finding (real repro): `Unix.WSIGNALED`/`WSTOPPED` carry
+   OCaml's own portable internal signal encoding (small negative ints,
+   e.g. `Sys.sigkill = -7`), not the real OS signal number -- a real
+   `kill -9` logged as "killed by signal -7", not "9", confusing for
+   an operator or an alerting rule grepping log output. Translates the
+   common process-supervision-relevant signals back to their real
+   Linux numbers by matching against OCaml's own named `Sys.sig*`
+   constants (portable across OCaml versions/platforms by
+   construction, since those constants are whatever this runtime
+   actually uses) rather than hardcoding assumed values; anything not
+   in this short list still shows the raw OCaml int, labeled as such
+   rather than presented as if it were the real number. *)
+let describe_signal (n : int) : string =
+  let named =
+    [
+      (Sys.sigkill, "SIGKILL", 9); (Sys.sigterm, "SIGTERM", 15);
+      (Sys.sigsegv, "SIGSEGV", 11); (Sys.sigabrt, "SIGABRT", 6);
+      (Sys.sigint, "SIGINT", 2); (Sys.sigquit, "SIGQUIT", 3);
+      (Sys.sighup, "SIGHUP", 1); (Sys.sigpipe, "SIGPIPE", 13);
+      (Sys.sigbus, "SIGBUS", 7); (Sys.sigfpe, "SIGFPE", 8);
+      (Sys.sigill, "SIGILL", 4);
+    ]
+  in
+  match List.find_opt (fun (ocaml_n, _, _) -> ocaml_n = n) named with
+  | Some (_, name, real_n) -> Printf.sprintf "%s (%d)" name real_n
+  | None -> Printf.sprintf "OCaml internal signal %d" n
+
 (* Every pipe end not explicitly handed to the child is close-on-exec.
    `gpg` spawns `gpg-agent`, a lingering background daemon, as a side
    effect of some operations; without this, `gpg-agent` inherits our
@@ -97,6 +124,6 @@ let run ~(prog : string) ~(argv : string array) ~(stdin_content : string) :
         (Printf.sprintf "%s exited %d: %s" (Filename.basename prog) code
            (String.trim o.stderr))
   | Unix.WSIGNALED n ->
-      Error (Printf.sprintf "%s killed by signal %d" (Filename.basename prog) n)
+      Error (Printf.sprintf "%s killed by signal %s" (Filename.basename prog) (describe_signal n))
   | Unix.WSTOPPED n ->
-      Error (Printf.sprintf "%s stopped by signal %d" (Filename.basename prog) n)
+      Error (Printf.sprintf "%s stopped by signal %s" (Filename.basename prog) (describe_signal n))

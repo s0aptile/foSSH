@@ -1,6 +1,7 @@
-//! Real data the dashboard can show today, independent of the (not
-//! yet built) watchdog: a per-site telemetry summary read straight
-//! from the same `fossh-store` database `fossh-cli query` reads.
+//! Real data for the telemetry screen, independent of the watchdog
+//! (whose own live status is `watchdog_status.rs`'s job instead): a
+//! per-site telemetry summary read straight from the same
+//! `fossh-store` database `fossh-cli query` reads.
 
 use std::path::{Path, PathBuf};
 
@@ -36,7 +37,9 @@ pub fn load_summary(
     now: i64,
     k_anonymity: u32,
 ) -> Result<Vec<SiteSummary>, String> {
-    let store = Store::open(&db_path(data_dir)).map_err(|e| e.to_string())?;
+    let key = fossh_admin::data_key::load_or_generate(&data_dir.join(".data_key"))
+        .map_err(|e| e.to_string())?;
+    let store = Store::open_encrypted(&db_path(data_dir), &key).map_err(|e| e.to_string())?;
     let sites = store.list_sites().map_err(|e| e.to_string())?;
     let from = start_of_today(now);
 
@@ -109,11 +112,19 @@ mod tests {
     fn a_created_site_shows_up_with_zero_activity() {
         let dir = scratch_dir("one-site");
         {
-            let store = Store::open(&db_path(&dir)).unwrap();
+            // Same key `load_summary` will derive below: `load_or_generate`
+            // is idempotent on the same `.data_key` path, so seeding the
+            // store here through the real encrypted API (not plain
+            // `Store::open`) exercises exactly the path a real caller
+            // takes, rather than relying on `open_encrypted`'s plaintext-
+            // migration fallback to paper over a mismatched test setup.
+            let key = fossh_admin::data_key::load_or_generate(&dir.join(".data_key")).unwrap();
+            let store = Store::open_encrypted(&db_path(&dir), &key).unwrap();
             store
                 .create_site(
                     "blog",
                     &[7u8; 32],
+                    None,
                     &["pageview".to_string()],
                     1_700_000_000,
                     false,

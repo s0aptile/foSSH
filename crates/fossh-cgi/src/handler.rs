@@ -13,6 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use fossh_core::types::SiteId;
+use fossh_ingest::geoip::GeoipReader;
 use fossh_ingest::ingest::{self, IngestDecision};
 use fossh_ingest::spool;
 
@@ -67,6 +68,11 @@ pub struct HandleParams<'a> {
     pub rate_limit_burst: u32,
     pub respect_optout_signals: bool,
     pub now: i64,
+    /// Built once in `main.rs` from `Config.country_db` and reused
+    /// across requests (this is CGI: one process per request, but the
+    /// database is still opened only once for this run, not per lookup)
+    /// — see `fossh_ingest::geoip`.
+    pub country_db: &'a GeoipReader,
 }
 
 /// `POST /e` and `GET /e.gif` — everything from auth through spooling.
@@ -80,6 +86,7 @@ pub fn handle_ingest(params: &HandleParams) -> CgiResponse {
         rate_limit_burst: params.rate_limit_burst,
         respect_optout_signals: params.respect_optout_signals,
         now: params.now,
+        country_db: params.country_db,
     });
 
     match decision {
@@ -166,6 +173,7 @@ mod tests {
             id: SiteId::new(1),
             slug: slug.to_string(),
             key_hash,
+            sign_pubkey: None,
             allowlist: allowlist.iter().map(|s| s.to_string()).collect(),
             created_at: 1_700_000_000,
             disabled: false,
@@ -204,6 +212,7 @@ mod tests {
             rate_limit_burst: 600,
             respect_optout_signals: true,
             now: 1_700_000_000,
+            country_db: &GeoipReader::none(),
         });
         assert_eq!(resp.status, 204);
     }
@@ -221,6 +230,7 @@ mod tests {
             rate_limit_burst: 600,
             respect_optout_signals: true,
             now: 1_700_000_000,
+            country_db: &GeoipReader::none(),
         });
         assert_eq!(resp.status, 401);
         assert!(!resp.spool_write_failed);
@@ -249,6 +259,7 @@ mod tests {
             rate_limit_burst: 600,
             respect_optout_signals: true,
             now: 1_700_000_000,
+            country_db: &GeoipReader::none(),
         });
         assert_eq!(resp.status, 204);
         assert!(!resp.spool_write_failed);
@@ -288,6 +299,7 @@ mod tests {
             rate_limit_burst: 600,
             respect_optout_signals: true,
             now: 1_700_000_000,
+            country_db: &GeoipReader::none(),
         });
         assert_eq!(resp.status, 204);
         assert!(!resp.spool_write_failed);

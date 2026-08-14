@@ -242,6 +242,21 @@ pub fn decode_event(buf: &[u8]) -> Result<Event, IngestError> {
     })
 }
 
+/// Path of the per-spool-dir advisory lock file `append_frame` and
+/// `compact::drain_site_spool` both take, in shared/exclusive mode
+/// respectively, around the sections that touch `current.bin`'s identity.
+fn lock_path(dir: &Path) -> std::path::PathBuf {
+    dir.join("spool.lock")
+}
+
+pub(crate) fn open_lock_file(dir: &Path) -> std::io::Result<File> {
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .open(lock_path(dir))
+}
+
 /// Appends one event to `dir/current.bin` as a single `write()` call
 /// (see the module doc comment). Rotates `current.bin` to a
 /// timestamp-named file first if it's already at or past
@@ -254,6 +269,8 @@ pub fn decode_event(buf: &[u8]) -> Result<Event, IngestError> {
 /// payload is ciphertext, not the plaintext `encode_event` produces.
 pub fn append_frame(dir: &Path, event: &Event, key: &[u8; 32]) -> Result<(), IngestError> {
     fs::create_dir_all(dir)?;
+    let lock = open_lock_file(dir)?;
+    lock.lock_shared()?;
     let current = dir.join("current.bin");
 
     if let Ok(meta) = fs::metadata(&current)
@@ -266,7 +283,11 @@ pub fn append_frame(dir: &Path, event: &Event, key: &[u8; 32]) -> Result<(), Ing
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         );
-        fs::rename(&current, dir.join(rotated_name))?;
+        match fs::rename(&current, dir.join(rotated_name)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(IngestError::Io(e)),
+        }
     }
 
     let payload = crate::crypto::seal(key, &encode_event(event))?;

@@ -55,7 +55,7 @@ let () =
                (Command_protocol.command_name cmd))
             (decoded_cmd = cmd)
       | Error e -> check ("command decode failed: " ^ Command_protocol.describe_error e) false)
-    [ Command_protocol.Restart; Command_protocol.Reload ];
+    [ Command_protocol.Restart; Command_protocol.Reload; Command_protocol.Status ];
 
   (* Command: unknown command name. *)
   (match Command_protocol.decode_command (Printf.sprintf "COMMAND %s launch_the_missiles\n" token_str) with
@@ -146,6 +146,39 @@ let () =
   (match Command_protocol.decode_response "garbage\n" with
   | Error (Command_protocol.Malformed_message _) -> check "a garbage response line is rejected" true
   | _ -> check "a garbage response line should be rejected" false);
+
+  (* Status round trip: every (child_state, tamper_state) combination. *)
+  List.iter
+    (fun (child, tamper) ->
+      let line = Command_protocol.encode_status child tamper in
+      match Command_protocol.decode_response line with
+      | Ok (Command_protocol.Status_response (decoded_child, decoded_tamper)) ->
+          check
+            (Printf.sprintf "status round-trip preserves child=%s tamper=%s"
+               (Command_protocol.describe_child_state child) (Command_protocol.describe_tamper_state tamper))
+            (decoded_child = child && decoded_tamper = tamper)
+      | _ ->
+          check
+            (Printf.sprintf "status round-trip should preserve child=%s tamper=%s"
+               (Command_protocol.describe_child_state child) (Command_protocol.describe_tamper_state tamper))
+            false)
+    [
+      (Command_protocol.Child_running, Command_protocol.Tamper_clean);
+      (Command_protocol.Child_running, Command_protocol.Tamper_tampered);
+      (Command_protocol.Child_stopped, Command_protocol.Tamper_unknown);
+    ];
+
+  (* Status: malformed tokens in either field are rejected, not
+     silently mapped to some default state. *)
+  List.iter
+    (fun bad_line ->
+      match Command_protocol.decode_response bad_line with
+      | Error (Command_protocol.Malformed_message _) -> check ("rejects: " ^ String.trim bad_line) true
+      | _ -> check ("should reject: " ^ String.trim bad_line) false)
+    [
+      "STATUS running\n"; "STATUS not-a-real-state clean\n"; "STATUS running not-a-real-state\n";
+      "STATUS running clean extra\n"; "STATUS\n";
+    ];
 
   (* A malformed line longer than the truncation threshold doesn't
      blow up describe_error/encode_error, and the echoed error stays

@@ -14,3 +14,9 @@ __MACOSX/
 *.env
 /fuzz/corpus
 /fuzz/artifacts
+
+# Operator-downloaded GeoIP database (see NOTICE, README's "Country
+# resolution (GeoIP)"): never vendored into the source tree or a
+# release artifact, so it must never be committed either.
+/assets/geoip/*.mmdb
+/assets/geoip/*.mmdb.gz

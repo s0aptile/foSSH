@@ -174,4 +174,140 @@ let () =
         !all_completed;
       let (_ : Supervisor.wait_outcome) = Supervisor.wait_for_exit t8 in
 
+      (* §2.3 regression: `spawn` used to exec fossh-fcgi with no
+         privilege drop at all, inheriting fossh-watchdog's own uid.
+         See `Supervisor.privdrop_argv`'s doc for the mechanism. *)
+
+      (* Pure: catches a missing flag, especially the three
+         capability-clearing ones, whose absence would leak this
+         process's own ambient capabilities into the dropped child. *)
+      check "privdrop_argv builds the exact expected setpriv invocation"
+        (Supervisor.privdrop_argv ~user:"fossh-svc" ~program:"/usr/bin/fossh-fcgi"
+           [| "/usr/bin/fossh-fcgi"; "--extra-flag" |]
+        = [|
+            "/usr/bin/setpriv"; "--reuid=fossh-svc"; "--regid=fossh-svc";
+            "--keep-groups"; "--bounding-set=-all"; "--inh-caps=-all";
+            "--ambient-caps=-all"; "--no-new-privs"; "--";
+            "/usr/bin/fossh-fcgi"; "--extra-flag";
+          |]);
+
+      (* Real, executed end to end through the real, installed
+         setpriv, not a stub. Unprivileged, this process should see
+         setpriv itself refuse (exit 127, confirmed directly against a
+         standalone invocation before writing this test) rather than
+         silently fall back to running the child as its own identity
+         -- fail closed, not open. As real root, expect the drop to
+         actually succeed. *)
+      let is_root = Unix.geteuid () = 0 in
+      let t9 =
+        Supervisor.create ~drop_privileges_to:(Some "fossh-svc") ~program:"/bin/true"
+          [| "/bin/true" |]
+      in
+      let (_ : int) = Supervisor.spawn t9 in
+      (match Supervisor.wait_for_exit t9 with
+      | Exited 127 when not is_root ->
+          check
+            "spawn with drop_privileges_to refuses closed (setpriv exits 127) rather than \
+             silently running the child as this process's own identity, when this process \
+             lacks CAP_SETUID/CAP_SETGID"
+            true
+      | Exited 0 when is_root ->
+          check "spawn with drop_privileges_to succeeds when this test process is real root"
+            true
+      | _ ->
+          check
+            "spawn with drop_privileges_to refuses closed (setpriv exits 127) rather than \
+             silently running the child as this process's own identity, when this process \
+             lacks CAP_SETUID/CAP_SETGID"
+            false);
+
+      (* Same program, no drop_privileges_to: proves the 127 above is
+         caused by the setpriv wrapping, not by /bin/true itself. *)
+      let t10 = Supervisor.create ~program:"/bin/true" [| "/bin/true" |] in
+      let (_ : int) = Supervisor.spawn t10 in
+      (match Supervisor.wait_for_exit t10 with
+      | Exited 0 ->
+          check
+            "the same program without drop_privileges_to still exits 0 as before -- the 127 \
+             above is caused by the privilege-drop wrapping, not by /bin/true itself"
+            true
+      | _ ->
+          check
+            "the same program without drop_privileges_to still exits 0 as before -- the 127 \
+             above is caused by the privilege-drop wrapping, not by /bin/true itself"
+            false);
+
+      (* Real root only: inspect the live child's /proc/<pid>/status
+         to confirm it's really running as fossh-svc's uid/gid, and
+         that CapEff is all zero (mirrors privdrop.rs's own "verify
+         the drop stuck by trying to reclaim" -- there's no single
+         syscall to retry here, so "holds no capability at all" is the
+         equivalent property). Genuinely can't run without real root
+         or CAP_SETUID/CAP_SETGID -- see the hardening report for what
+         was and wasn't verified in the environment this actually ran
+         in. *)
+      if is_root then (
+        let t11 =
+          Supervisor.create ~drop_privileges_to:(Some "fossh-svc") ~program:"/bin/sleep"
+            [| "/bin/sleep"; "5" |]
+        in
+        let pid = Supervisor.spawn t11 in
+        let comm_path = Printf.sprintf "/proc/%d/comm" pid in
+        let rec wait_for_exec attempts_left =
+          if attempts_left <= 0 then ()
+          else
+            match Fileutil.read_all_bytes comm_path with
+            | s when String.trim s = "sleep" -> ()
+            | _ | (exception Sys_error _) ->
+                Unix.sleepf 0.05;
+                wait_for_exec (attempts_left - 1)
+        in
+        wait_for_exec 100;
+        let status = Fileutil.read_all_bytes (Printf.sprintf "/proc/%d/status" pid) in
+        let field_values prefix =
+          String.split_on_char '\n' status
+          |> List.find_opt (fun line ->
+                 String.length line >= String.length prefix
+                 && String.sub line 0 (String.length prefix) = prefix)
+          |> Option.map (fun line ->
+                 String.sub line (String.length prefix) (String.length line - String.length prefix)
+                 |> String.split_on_char '\t'
+                 |> List.filter (fun s -> String.trim s <> ""))
+        in
+        let fossh_svc = Unix.getpwnam "fossh-svc" in
+        let expect_all_uid_gid_fields prefix expected_id =
+          match field_values prefix with
+          | Some values when values <> [] ->
+              List.for_all (fun v -> int_of_string_opt (String.trim v) = Some expected_id) values
+          | _ -> false
+        in
+        check
+          (Printf.sprintf
+             "the real spawned child's /proc/%d/status Uid line is fossh-svc's uid (%d) across \
+              real/effective/saved/fs, not fossh-watchdog's"
+             pid fossh_svc.Unix.pw_uid)
+          (expect_all_uid_gid_fields "Uid:" fossh_svc.Unix.pw_uid);
+        check
+          (Printf.sprintf
+             "the real spawned child's /proc/%d/status Gid line is fossh-svc's gid (%d) across \
+              real/effective/saved/fs, not fossh-watchdog's"
+             pid fossh_svc.Unix.pw_gid)
+          (expect_all_uid_gid_fields "Gid:" fossh_svc.Unix.pw_gid);
+        check
+          "the real spawned child holds no effective capabilities (CapEff all zero) -- it \
+           cannot regain any identity, fossh-watchdog's or otherwise"
+          (match field_values "CapEff:" with
+          | Some [ hex ] -> String.trim hex = String.make (String.length (String.trim hex)) '0'
+          | _ -> false);
+        Supervisor.request_termination t11;
+        let (_ : Supervisor.wait_outcome) = Supervisor.wait_for_exit t11 in
+        ())
+      else
+        Printf.eprintf
+          "skip: real /proc/<pid>/status uid/gid + capability verification of a dropped child \
+           needs this test process to itself run as root (or hold CAP_SETUID/CAP_SETGID) -- not \
+           available in this environment; the argv-construction and refuses-closed-without-\
+           privilege checks above still ran for real.\n\
+           %!";
+
       summarize ())

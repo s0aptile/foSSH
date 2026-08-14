@@ -109,6 +109,50 @@ let detach_sign (k : key) (data : string) : string =
 
 let cleanup (k : key) : unit = rm_rf k.gnupghome
 
+(* A real countdown latch, not a sleep-based stagger: every
+   participating thread calls [arrive_and_wait l n], blocking until
+   all [n] have arrived, then all are released together. A sleep-based
+   stagger only makes overlapping execution *likely*; this makes every
+   participant's post-latch work start from the same instant, every
+   run -- the difference that actually found the real thread-collision
+   bug in Operator_key.enroll's temp-gnupghome naming (see
+   test_operator_key.ml and test_setup_token.ml's own latch-based
+   scenarios), which two-threads-and-hope testing had not caught. *)
+type latch = { mutex : Mutex.t; cond : Condition.t; mutable arrived : int }
+
+let make_latch () : latch = { mutex = Mutex.create (); cond = Condition.create (); arrived = 0 }
+
+let arrive_and_wait (l : latch) (n : int) : unit =
+  Mutex.lock l.mutex;
+  l.arrived <- l.arrived + 1;
+  if l.arrived >= n then Condition.broadcast l.cond
+  else while l.arrived < n do Condition.wait l.cond l.mutex done;
+  Mutex.unlock l.mutex
+
+(* Deterministic, in-process fd-exhaustion fault injection — the same
+   real trigger this project has already found and fixed one Sys_error
+   escape with (Nonce.generate's own open_in_bin "/dev/urandom", per
+   DECISIONS.md: "reproduced directly under a real ulimit -n 256").
+   `dup`ing one already-open fd is far cheaper than repeatedly opening a
+   real path, and doesn't need an external `ulimit` wrapper process (a
+   plain [Unix.putenv "TMPDIR" ...] mid-process was tried and confirmed
+   NOT to work for this purpose: [Filename.get_temp_dir_name] reads the
+   environment once, cached for the life of the process, not on every
+   call — confirmed directly against the stdlib before settling on this
+   approach). Returns the fds to pass to [release_exhausted_fds]. *)
+let exhaust_fds () : Unix.file_descr list =
+  let base = Unix.openfile "/dev/null" [ Unix.O_RDONLY ] 0 in
+  let acquired = ref [ base ] in
+  (try
+     while true do
+       acquired := Unix.dup base :: !acquired
+     done
+   with Unix.Unix_error (Unix.EMFILE, _, _) -> ());
+  !acquired
+
+let release_exhausted_fds (fds : Unix.file_descr list) : unit =
+  List.iter (fun fd -> try Unix.close fd with Unix.Unix_error _ -> ()) fds
+
 let checks_run = ref 0
 let checks_failed = ref 0
 

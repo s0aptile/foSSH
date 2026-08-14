@@ -65,7 +65,17 @@ RemoveIPC=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
 SystemCallFilter=@system-service
+# See fossh-fcgi.service's own comment on this same pair of lines —
+# identical reasoning, identical measured effect (1.2 OK -> 0.2 SAFE
+# via `systemd-analyze security --offline=true`).
+SystemCallFilter=~@privileged @resources
 SystemCallArchitectures=native
+PrivateDevices=yes
+ProtectProc=invisible
+ProcSubset=pid
+PrivateUsers=yes
+IPAddressDeny=any
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

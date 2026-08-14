@@ -43,7 +43,6 @@ CREATE TABLE events (
   browser INTEGER NOT NULL,
   os INTEGER NOT NULL,
   device INTEGER NOT NULL,
-  visitor INTEGER,
   value INTEGER
 ) STRICT;
 
@@ -92,11 +91,19 @@ CREATE TABLE sites (
 ) STRICT;
 ";
 
+const SCHEMA_V2: &str = "
+ALTER TABLE sites ADD COLUMN sign_pubkey BLOB;
+";
+
 pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if version < 1 {
         conn.execute_batch(SCHEMA_V1)?;
         conn.execute_batch("PRAGMA user_version = 1;")?;
+    }
+    if version < 2 {
+        conn.execute_batch(SCHEMA_V2)?;
+        conn.execute_batch("PRAGMA user_version = 2;")?;
     }
     Ok(())
 }
@@ -104,6 +111,7 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
 #[cfg(test)]
 mod tests {
     use crate::Store;
+    use super::{PRAGMAS, SCHEMA_V1};
 
     fn columns_of(conn: &rusqlite::Connection, table: &str) -> Vec<(String, String, bool)> {
         let mut stmt = conn
@@ -144,7 +152,6 @@ mod tests {
             ("browser".to_string(), "INTEGER".to_string(), true),
             ("os".to_string(), "INTEGER".to_string(), true),
             ("device".to_string(), "INTEGER".to_string(), true),
-            ("visitor".to_string(), "INTEGER".to_string(), false),
             ("value".to_string(), "INTEGER".to_string(), false),
         ];
         assert_eq!(
@@ -196,7 +203,8 @@ mod tests {
                 "allowlist",
                 "created_at",
                 "disabled",
-                "public"
+                "public",
+                "sign_pubkey"
             ]
         );
     }
@@ -243,7 +251,40 @@ mod tests {
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
+    }
+
+    #[test]
+    fn v1_to_v2_migration_adds_sign_pubkey_without_disturbing_existing_sites() {
+        // A raw connection standing in for a pre-existing on-disk database
+        // that was created before `sign_pubkey` existed — `Store::open`
+        // itself always migrates straight to the latest version, so this
+        // simulates the actual upgrade path by building schema v1 by hand
+        // first, exactly like a real pre-fix install would have on disk.
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(PRAGMAS).unwrap();
+        conn.execute_batch(SCHEMA_V1).unwrap();
+        conn.execute_batch("PRAGMA user_version = 1;").unwrap();
+        conn.execute(
+            "INSERT INTO sites (slug, key_hash, allowlist, created_at, disabled, public) VALUES ('blog', X'42', '[]', 1700000000, 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        super::migrate(&conn).unwrap();
+
+        let (key_hash, sign_pubkey): (Vec<u8>, Option<Vec<u8>>) = conn
+            .query_row(
+                "SELECT key_hash, sign_pubkey FROM sites WHERE slug = 'blog'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(key_hash, vec![0x42]);
+        assert_eq!(
+            sign_pubkey, None,
+            "a site migrated from v1 has no signing key yet — opt-in via rotate-signing-key"
+        );
     }
 
     #[test]

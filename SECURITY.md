@@ -20,4 +20,4 @@ foSSH's own security invariants are documented in `THREAT_MODEL.md` — a report
 
 ## Supported versions
 
-This is Open Alpha (`0.1.0-alpha.1`). There is no long-term-support branch and no guarantee that a fix lands anywhere but the current alpha line — see `tos.md` §5.
+This is Open Alpha (`0.1.3_oa`). There is no long-term-support branch and no guarantee that a fix lands anywhere but the current alpha line — see `tos.md` §5.

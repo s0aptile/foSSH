@@ -1,7 +1,10 @@
 (* §3.4: the watchdog's half of the real, running QUIC command server —
    accepts connections from core, issues a fresh session, verifies one
-   `restart`/`reload` command per connection, and dispatches it to
-   `Supervisor.request_termination`. See DECISIONS.md (ADR-0050) for
+   command per connection, and dispatches it: `restart`/`reload` to
+   `Supervisor.request_termination`, `status` to a live re-read of the
+   currently-supervised child and a fresh on-demand tamper recheck
+   (see `live_child_state`/`live_tamper_state` below). See DECISIONS.md
+   (ADR-0050) for
    the full design: one command per connection rather than a held-open
    channel (sidesteps needing reconnection-handling logic entirely);
    why `Restart` and `Reload` both currently dispatch to the exact same
@@ -36,6 +39,59 @@ let log fmt = Printf.eprintf ("fossh-watchdog(quic): " ^^ fmt ^^ "\n%!")
 
 let deadline_in (seconds : float) : float = Unix.gettimeofday () +. seconds
 
+type config = {
+  tls_dir : string;
+  core_cert_pin_path : string;
+  listen_addr : Unix.sockaddr;
+  (* Everything a live Status query needs to re-run the exact same
+     tamper gate `Supervisor.spawn_if_safe`/`restart_if_safe` already
+     run before every real spawn/restart — see `live_tamper_state`
+     below. Not carried on `Supervisor.t` itself: that type's own job
+     is process supervision, and every existing caller already threads
+     these three values through explicitly at each spawn/restart call
+     site rather than storing them, a shape this reuses rather than
+     changes. *)
+  gnupghome : string;
+  expected_key_fingerprint : string;
+  manifest_path : string;
+}
+
+(* Supervisor.t's own `child_pid` field is read directly here, cross-
+   thread, with no lock — safe for the identical reason
+   `Supervisor.request_termination`'s own doc comment already
+   documents for its own cross-thread pid read: this project's OCaml
+   threads are `Thread`-module systhreads on one cooperatively
+   scheduled OCaml 5 domain, and the QUIC command server only ever
+   processes one connection at a time. *)
+let live_child_state (supervisor : Supervisor.t) : Command_protocol.child_state =
+  match supervisor.child_pid with
+  | Some _ -> Command_protocol.Child_running
+  | None -> Command_protocol.Child_stopped
+
+(* Answers "would a restart be allowed right now", not a cached belief
+   from whenever the child last actually spawned — re-reads the
+   manifest file and re-runs `Supervisor.tamper_check` fresh, on every
+   query, the same fail-closed gate every real spawn/restart already
+   goes through. `Tamper_unknown` (not a crash, not a false "clean")
+   covers every way this can't produce a real answer: the manifest is
+   currently unreadable, or the check itself raises (an operator
+   deleting the manifest mid-query, or a `Unix_error` from the
+   underlying `sha256sum`/`gpg` subprocesses, e.g. under fd
+   exhaustion — the exact class of failure ADR-0050's finding #1
+   already found reachable from this same connection-handling path). *)
+let live_tamper_state (supervisor : Supervisor.t) (config : config) : Command_protocol.tamper_state =
+  match Manifest.read_from_path config.manifest_path with
+  | Error _ -> Command_protocol.Tamper_unknown
+  | Ok clearsigned_manifest -> (
+      try
+        match
+          Supervisor.tamper_check supervisor ~gnupghome:config.gnupghome
+            ~expected_key_fingerprint:config.expected_key_fingerprint ~clearsigned_manifest
+        with
+        | Ok () -> Command_protocol.Tamper_clean
+        | Error _ -> Command_protocol.Tamper_tampered
+      with Unix.Unix_error _ -> Command_protocol.Tamper_unknown)
+
 (* One connection's worth of work: issue a session, read one verified
    command, dispatch it, reply. Every failure here is caught and
    turned into either an ERROR reply (if the connection is still
@@ -43,7 +99,7 @@ let deadline_in (seconds : float) : float = Unix.gettimeofday () +. seconds
    never raise, since it runs inside the long-lived accept loop below,
    and one misbehaving connection must not end that loop for every
    connection after it. *)
-let handle_one_connection (state : Quic.t) (supervisor : Supervisor.t) : unit =
+let handle_one_connection (state : Quic.t) (supervisor : Supervisor.t) (config : config) : unit =
   let session = Command_protocol.issue_session () in
   Fun.protect
     ~finally:(fun () -> Command_protocol.revoke_session session)
@@ -64,10 +120,19 @@ let handle_one_connection (state : Quic.t) (supervisor : Supervisor.t) : unit =
                 | Ok (presented_token, cmd) -> (
                     match Command_protocol.verify_command ~expected_token:session ~presented_token with
                     | Error e -> Command_protocol.encode_error e
-                    | Ok () ->
-                        Supervisor.request_termination supervisor;
-                        log "dispatched a verified %s command" (Command_protocol.command_name cmd);
-                        Command_protocol.encode_ok ())
+                    | Ok () -> (
+                        match cmd with
+                        | Command_protocol.Status ->
+                            let child = live_child_state supervisor in
+                            let tamper = live_tamper_state supervisor config in
+                            log "dispatched a verified status query (child=%s tamper=%s)"
+                              (Command_protocol.describe_child_state child)
+                              (Command_protocol.describe_tamper_state tamper);
+                            Command_protocol.encode_status child tamper
+                        | Command_protocol.Restart | Command_protocol.Reload ->
+                            Supervisor.request_termination supervisor;
+                            log "dispatched a verified %s command" (Command_protocol.command_name cmd);
+                            Command_protocol.encode_ok ()))
               in
               (match
                  Quic.send_on_stream state ~stream_id:command_stream ~data:reply ~fin:true
@@ -75,12 +140,6 @@ let handle_one_connection (state : Quic.t) (supervisor : Supervisor.t) : unit =
                with
               | Ok () -> ()
               | Error e -> log "could not send reply: %s" (Quic.describe_error e))))
-
-type config = {
-  tls_dir : string;
-  core_cert_pin_path : string;
-  listen_addr : Unix.sockaddr;
-}
 
 (* Blocks forever, accepting and handling one connection at a time —
    this channel is exactly one watchdog and exactly one core, never a
@@ -119,7 +178,7 @@ let rec serve_forever (config : config) (tls : Quic.tls_paths) (supervisor : Sup
       (try
          Fun.protect
            ~finally:(fun () -> Quic.close state)
-           (fun () -> handle_one_connection state supervisor)
+           (fun () -> handle_one_connection state supervisor config)
        with exn ->
          log "connection handling raised an unexpected exception: %s (continuing to serve future connections)"
            (Printexc.to_string exn));

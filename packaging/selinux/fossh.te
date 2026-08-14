@@ -33,7 +33,7 @@
 # -i`, needs root) against a real running `fossh-cgi`/`fcgiwrap`. See
 # the note on `unconfined_service_t` below for the one architectural
 # question that specifically needs that live check.
-module fossh 1.0.0;
+module fossh 1.1.0;
 
 require {
     type httpd_t;
@@ -52,13 +52,25 @@ require {
     role system_r;
 
     class dir { read search getattr open add_name remove_name write };
-    class file { read write open getattr create unlink append execute execute_no_trans entrypoint map };
+    class file { read write open getattr create unlink append execute execute_no_trans entrypoint map lock };
     class lnk_file { read getattr };
     class chr_file { read write getattr open ioctl };
     class fd use;
     class fifo_file { read write getattr open ioctl };
     class process { transition sigchld noatsecure siginh rlimitinh fork signal };
     class capability { setuid setgid };
+    # New in 1.1.0, for fossh_fcgi_t below only — fossh_cgi_t never
+    # opens a socket of its own (see that domain's "zero outbound"
+    # comment further down); fossh_fcgi_t binds its own
+    # /run/fossh/fcgi.sock (fossh-fcgi.service's FOSSH_FCGI_SOCKET)
+    # and opens /var/lib/fossh/fossh.db directly with SQLite's WAL
+    # journal mode, which needs `lock` (POSIX advisory locking on the
+    # main db file) and `file:map` (SQLite WAL mode mmaps its -shm
+    # file even with no explicit `PRAGMA mmap_size` — confirmed
+    # against `crates/fossh-store/src/schema.rs`'s own `PRAGMA
+    # journal_mode = WAL;`), neither of which fossh_cgi_t needs.
+    class sock_file { create unlink getattr read write };
+    class unix_stream_socket { create bind listen accept read write getattr setopt shutdown };
 }
 
 # --- Types this module owns ---
@@ -176,3 +188,116 @@ allow fossh_cgi_t fossh_data_t:dir { read search getattr add_name remove_name wr
 allow fossh_cgi_t fossh_data_t:file { read write open getattr create unlink append };
 allow fossh_cgi_t fossh_var_run_t:dir { read search getattr add_name remove_name write };
 allow fossh_cgi_t fossh_var_run_t:file { read write open getattr create unlink append };
+
+# --- fossh_fcgi_t (new in 1.1.0): closes the gap `packaging/systemd/
+# fossh-fcgi.service`'s and `fossh-watchdog.service`'s own header
+# comments, and dev/DURUM.md's §3.2 retrospective, already documented
+# as open — `fossh-fcgi` (the persistent FastCGI listener that opens
+# `fossh.db` directly, unlike `fossh-cgi`) had no SELinux domain of
+# its own at all, so it ran in whatever unconfined the execing
+# domain's own confinement happened to be (typically
+# `unconfined_service_t` on a Fedora targeted policy for a systemd
+# unit with no `SELinuxContext=`) — functional, but zero real MAC
+# confinement for the one process in this codebase that touches the
+# actual database directly. This block gives it real confinement,
+# deliberately narrower than fossh_cgi_t in one respect (no
+# self:capability { setuid setgid } — `fossh-fcgi` has no privdrop.rs
+# equivalent of its own; both its real launch paths, fossh-fcgi.service
+# and fossh-watchdog.service, already start it unprivileged via the
+# unit's own User=/exec-inherited-UID, so this domain never needs to
+# drop privileges itself) and broader in another (SQLite `lock`/`map`
+# on the data file, its own /run/fossh/fcgi.sock listener) — see the
+# `require{}` block's own comment on the two new object classes this
+# needed.
+type fossh_fcgi_exec_t;
+type fossh_fcgi_t;
+role system_r types fossh_fcgi_t;
+
+# Two source domains, matching fossh_cgi_t's own `unconfined_service_t`
+# reasoning exactly (see that block's header comment above) — but only
+# two, not three: `fossh-fcgi` is never exec'd from `httpd_t` (no
+# classic-CGI/mod_cgi deployment shape execs it; both real units start
+# it via systemd, or the watchdog forks/execs it directly from
+# whatever domain the watchdog process itself is running in, which
+# today is also `unconfined_service_t` by default — the watchdog has
+# no SELinux domain of its own yet either, a further, separately
+# tracked gap, not silently assumed covered by this pass). `init_t`
+# covers the direct fossh-fcgi.service case; `unconfined_service_t`
+# covers both the "unit has no SELinuxContext=" case and the
+# watchdog-supervised case, as they resolve to the same source domain
+# today. NOT yet verified by a real `semodule -i` + service start
+# (same open item as fossh_cgi_t's own — needs root to confirm which
+# domain actually execs this in practice).
+allow init_t fossh_fcgi_exec_t:file { getattr open read execute execute_no_trans map };
+allow init_t fossh_fcgi_t:process { transition siginh rlimitinh noatsecure };
+allow fossh_fcgi_t init_t:fd use;
+allow fossh_fcgi_t init_t:process sigchld;
+allow fossh_fcgi_t init_t:fifo_file { read write getattr ioctl };
+type_transition init_t fossh_fcgi_exec_t:process fossh_fcgi_t;
+
+allow unconfined_service_t fossh_fcgi_exec_t:file { getattr open read execute execute_no_trans map };
+allow unconfined_service_t fossh_fcgi_t:process { transition siginh rlimitinh noatsecure };
+allow fossh_fcgi_t unconfined_service_t:fd use;
+allow fossh_fcgi_t unconfined_service_t:process sigchld;
+allow fossh_fcgi_t unconfined_service_t:fifo_file { read write getattr ioctl };
+type_transition unconfined_service_t fossh_fcgi_exec_t:process fossh_fcgi_t;
+
+# --- What fossh_fcgi_t may do once running ---
+
+allow fossh_fcgi_t self:process { fork signal };
+allow fossh_fcgi_t fossh_fcgi_exec_t:file entrypoint;
+
+# Dynamic linking — identical need to fossh_cgi_t, same grants.
+allow fossh_fcgi_t ld_so_t:file { read getattr open execute map };
+allow fossh_fcgi_t ld_so_cache_t:file { read getattr open map };
+allow fossh_fcgi_t lib_t:file { read getattr open execute map };
+allow fossh_fcgi_t lib_t:lnk_file { read getattr };
+allow fossh_fcgi_t lib_t:dir { read search getattr };
+
+# Ancestor directories — identical need to fossh_cgi_t, same grants.
+allow fossh_fcgi_t etc_t:dir { read search getattr };
+allow fossh_fcgi_t usr_t:dir { read search getattr };
+allow fossh_fcgi_t var_t:dir { read search getattr };
+allow fossh_fcgi_t var_lib_t:dir { read search getattr };
+allow fossh_fcgi_t var_run_t:dir { read search getattr };
+
+# `/dev/urandom` — `fossh-ingest::random` is shared code between
+# `fossh-cgi` and `fossh-fcgi` (§M3's trust-boundary centralization,
+# `fossh_ingest::ingest::decide()`), so the same salt-rotation need
+# applies here too.
+allow fossh_fcgi_t urandom_device_t:chr_file { read write getattr open ioctl };
+
+# The data directory: unlike fossh_cgi_t, this domain opens fossh.db
+# itself, in WAL mode — needs `lock` (SQLite's own POSIX advisory
+# locking) and `map` (WAL mode's -shm file) in addition to the plain
+# read/write/create/unlink/append fossh_cgi_t already has for its own
+# spool/cache files. `add_name`/`remove_name` on the directory cover
+# SQLite creating and removing its -wal/-shm/-journal sibling files
+# alongside fossh.db itself.
+allow fossh_fcgi_t fossh_data_t:dir { read search getattr add_name remove_name write };
+allow fossh_fcgi_t fossh_data_t:file { read write open getattr create unlink append lock map };
+
+# The runtime directory: this domain's own /run/fossh/fcgi.sock
+# listener (`FOSSH_FCGI_SOCKET`) needs the dedicated `sock_file` and
+# `unix_stream_socket` classes fossh_cgi_t never needed (it opens no
+# sockets of its own at all — see that domain's "zero outbound"
+# comment). Deliberately still no network socket classes (tcp_socket,
+# udp_socket, ...) here — same "SELinux is default-deny, simply never
+# granting is the enforcement" reasoning as fossh_cgi_t. Real, open
+# follow-up, not silently covered: when built with the optional `quic`
+# Cargo feature (`fossh-fcgi/quic`, now part of the actual release
+# build per dev/DURUM.md), a background thread
+# (`fossh-fcgi::quic_client`) may open a loopback UDP socket to the
+# watchdog once §2.4's bootstrap handoff exists on disk — this pass
+# deliberately does not grant `udp_socket`/`AF_INET` permissions for
+# that path, since the exact runtime conditions under which it
+# actually attempts to bind/connect couldn't be live-verified here
+# (no root, no VM access this pass) and guessing at `self:udp_socket`
+# permissions without that verification risks either a silent denial
+# of a real feature or an unjustified grant — needs a real `semodule
+# -i` + running QUIC-enabled fossh-fcgi to get right, tracked here
+# rather than assumed either way.
+allow fossh_fcgi_t fossh_var_run_t:dir { read search getattr add_name remove_name write };
+allow fossh_fcgi_t fossh_var_run_t:file { read write open getattr create unlink append };
+allow fossh_fcgi_t fossh_var_run_t:sock_file { create unlink getattr read write };
+allow fossh_fcgi_t self:unix_stream_socket { create bind listen accept read write getattr setopt shutdown };

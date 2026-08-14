@@ -57,8 +57,25 @@ pub fn detect_glibc_version() -> Result<(u32, u32), String> {
         .ok_or_else(|| format!("could not parse `ldd --version` output: {stdout:?}"))
 }
 
+/// §3.8: loads the same per-install data-encryption key
+/// `fossh-cgi`/`fossh-fcgi` seal spool frames and the database under —
+/// one secret shared by every on-disk use, not a separate one per
+/// purpose. Process-fatal on failure, matching `open_store`'s own
+/// posture below: every subcommand that reaches this needs a real key
+/// to do anything useful, so there's nothing safer to fall back to.
+pub fn load_data_key(data_dir: &Path) -> zeroize::Zeroizing<[u8; 32]> {
+    match fossh_admin::data_key::load_or_generate(&data_dir.join(".data_key")) {
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("fossh: could not load data-encryption key: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 pub fn open_store(data_dir: &Path) -> fossh_store::Store {
-    match fossh_store::Store::open(&db_path(data_dir)) {
+    let key = load_data_key(data_dir);
+    match fossh_store::Store::open_encrypted(&db_path(data_dir), &key) {
         Ok(s) => s,
         Err(e) => {
             eprintln!(

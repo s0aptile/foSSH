@@ -107,6 +107,25 @@ let sign ~(gnupghome : string) ~(key_id : string) ~(passphrase : string) (conten
       |]
     ~stdin_content:content
 
+(* One-shot admin bootstrap step for §3.6: hash every path in [paths],
+   render, and sign with the watchdog's own key — the single composed
+   operation `fossh-watchdog generate-manifest` (bin/main.ml) exposes
+   as a real CLI action. This is the only place a manifest is ever
+   produced; the supervision loop (Supervisor, via `check` above) only
+   ever reads and verifies one, never writes one — see this module's
+   header comment. Found necessary, not theoretical: a totally fresh
+   install has no manifest at all (nothing in packaging/rpm/fossh.spec
+   ever created one, and this file's own `check`/`read_from_path` only
+   consume an existing one), so `fossh-watchdog.service`'s first-ever
+   start refused to launch and exited before its own setup-token/
+   operator-auth listener could stay up — caught live in the 0.1.3
+   clean-VM re-verification, not by inspection. *)
+let generate_and_sign ~(gnupghome : string) ~(key_id : string) ~(passphrase : string)
+    (paths : string list) : (string, string) result =
+  match hash_all paths with
+  | Error e -> Error e
+  | Ok entries -> sign ~gnupghome ~key_id ~passphrase (render entries)
+
 (* `gpg --decrypt` on a clear-signed (not actually encrypted) message
    verifies the signature and emits the original text on stdout — the
    standard way gpg itself handles this message type, not a special
@@ -115,30 +134,49 @@ let sign ~(gnupghome : string) ~(key_id : string) ~(passphrase : string) (conten
    clearsigned by a since-revoked or expired watchdog key must not be
    trusted just because the cryptographic math still checks out — see
    this module's header comment and ADR-0041. *)
+(* Adversarial review (fresh sweep, real repro): both `Tempfile.with_contents`'s
+   own write (creating `status_path`) and `Fileutil.read_all_bytes`'s read of it
+   back are `Stdlib` channel ops — raise `Sys_error`, not `Unix.Unix_error` —
+   the same "Stdlib channel op raises `Sys_error`, escapes as an uncaught
+   exception" bug class already found and fixed four times elsewhere in this
+   codebase (`bootstrap.ml`, `core_pin.ml`, `main.ml`'s cert-path read,
+   `Setup_token`'s hashing path). This is the fifth, and the most
+   safety-critical: reached from `Manifest.check`, which `Supervisor.tamper_check`
+   runs on EVERY spawn and EVERY restart, and every one of `main.ml`'s call
+   sites around that path only catches `Unix.Unix_error`, not `Sys_error`. An
+   uncaught `Sys_error` here (fd exhaustion, a transient unwritable/unreadable
+   temp dir — the same real triggers already reproduced for the other four
+   instances) would have crashed the entire watchdog process on the one
+   function that exists specifically to keep it trustworthy, not just refused
+   a single restart. Guarded the same way `Setup_token.sha256_hex_of_string`
+   already is: the whole body, not just the inner read, since the *write* half
+   of `Tempfile.with_contents` can raise exactly the same way. *)
 let verify_and_extract ~(gnupghome : string) ~(expected_key_fingerprint : string)
     (clearsigned : string) : (string, string) result =
-  Tempfile.with_contents "" (fun status_path ->
-      match
-        Subprocess.run ~prog:gpg_path
-          ~argv:
-            [|
-              "gpg"; "--batch"; "--homedir"; gnupghome; "--status-file";
-              status_path; "--decrypt";
-            |]
-          ~stdin_content:clearsigned
-      with
-      | Error e -> Error e
-      | Ok body -> (
-          match Gpg_status.parse (Fileutil.read_all_bytes status_path) with
-          | Good_signature_by key_id ->
-              if
-                Gpg_status.key_id_matches_fingerprint ~key_id
-                  ~fingerprint:expected_key_fingerprint
-              then Ok body
-              else Error "clearsign verified against an unexpected key"
-          | Revoked_key -> Error "manifest signed by a revoked key"
-          | Expired_key -> Error "manifest signed by an expired key"
-          | No_good_signature -> Error "no good signature on manifest"))
+  try
+    Tempfile.with_contents "" (fun status_path ->
+        match
+          Subprocess.run ~prog:gpg_path
+            ~argv:
+              [|
+                "gpg"; "--batch"; "--homedir"; gnupghome; "--status-file";
+                status_path; "--decrypt";
+              |]
+            ~stdin_content:clearsigned
+        with
+        | Error e -> Error e
+        | Ok body -> (
+            match Gpg_status.parse (Fileutil.read_all_bytes status_path) with
+            | Good_signature_by key_id ->
+                if
+                  Gpg_status.key_id_matches_fingerprint ~key_id
+                    ~fingerprint:expected_key_fingerprint
+                then Ok body
+                else Error "clearsign verified against an unexpected key"
+            | Revoked_key -> Error "manifest signed by a revoked key"
+            | Expired_key -> Error "manifest signed by an expired key"
+            | No_good_signature -> Error "no good signature on manifest"))
+  with Sys_error msg -> Error (Printf.sprintf "could not read gpg status output: %s" msg)
 
 type check_result =
   | Ok_manifest of entry list
@@ -179,3 +217,31 @@ let check ~(gnupghome : string) ~(expected_key_fingerprint : string)
                           { path = e.path; expected = e.expected_sha256; actual })
             in
             check_entries entries)
+
+(* Moved here from bin/main.ml (which used it only for the initial
+   spawn/every restart) so watchdog/quic/quic_command_server.ml can
+   re-read the manifest fresh for a live Status query too, without a
+   second, drifting copy of the same read-with-a-size-cap logic. *)
+type read_error = Missing | Not_a_file | Too_large of int | Unreadable of string
+
+(* 1 MiB is generous for any real manifest (see hash_all's own large-
+   manifest test) while still bounding the worst case an oversized or
+   misconfigured manifest path could do to whichever process reads it. *)
+let max_manifest_bytes = 1 * 1024 * 1024
+
+let describe_read_error = function
+  | Missing -> "manifest file does not exist"
+  | Not_a_file -> "manifest path is not a regular file"
+  | Too_large n -> Printf.sprintf "manifest file too large (%d bytes, cap %d)" n max_manifest_bytes
+  | Unreadable msg -> Printf.sprintf "could not read manifest: %s" msg
+
+let read_from_path (path : string) : (string, read_error) result =
+  match Unix.stat path with
+  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Error Missing
+  | exception Unix.Unix_error (e, _, _) -> Error (Unreadable (Unix.error_message e))
+  | { Unix.st_kind = Unix.S_REG; st_size; _ } when st_size > max_manifest_bytes ->
+      Error (Too_large st_size)
+  | { Unix.st_kind = Unix.S_REG; _ } -> (
+      try Ok (Fileutil.read_all_bytes path)
+      with Sys_error msg -> Error (Unreadable msg))
+  | _ -> Error Not_a_file

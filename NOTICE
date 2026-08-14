@@ -19,17 +19,52 @@ with the import, export, and use regulations of your own jurisdiction.
 
 BUNDLED THIRD-PARTY CODE
 
-SQLite (via the `libsqlite3-sys` crate's `bundled` feature, which
-vendors and compiles the SQLite amalgamation source directly into the
-binary): SQLite is public domain. See https://www.sqlite.org/copyright.html.
-No separate attribution is required by SQLite's own terms; noted here
-for completeness.
+SQLite (via the `libsqlite3-sys` crate's `bundled-sqlcipher` feature,
+which vendors and compiles the SQLite amalgamation source directly
+into the binary): SQLite is public domain. See
+https://www.sqlite.org/copyright.html. No separate attribution is
+required by SQLite's own terms; noted here for completeness.
 
-No offline country/GeoIP database is bundled as of this release —
-`country` resolution is not yet wired up (tracked in DECISIONS.md /
-dev/DURUM.md); when one is added, its required attribution will be
-reproduced here exactly as that database's license mandates, per
-§19.4.8.
+SQLCipher (the same `bundled-sqlcipher` feature vendors SQLCipher's
+own C source alongside SQLite's, providing the transparent page-level
+encryption `fossh-store`'s database uses — see DECISIONS.md for the
+per-install key model): BSD-3-Clause-style license. See
+https://www.zetetic.net/sqlcipher/license/. Links against the host
+system's OpenSSL (`openssl-devel` at build time) rather than vendoring
+its own, so no separate OpenSSL attribution is added here beyond what
+a standard system OpenSSL install already carries.
+
+------------------------------------------------------------------------
+
+IP TO COUNTRY DATA NOTICE (not bundled — see below)
+
+`country` resolution (§10's `country_db` setting) reads an offline
+IP-to-country database in the MMDB binary format, via the `maxminddb`
+crate listed below. No such database is bundled, vendored into this
+source tree, or shipped in any release artifact (zip, RPM, or
+otherwise) — unlike SQLite/SQLCipher above, this is not third-party
+code linked into a foSSH binary. It is data the operator downloads
+separately and points `country_db` at (`fossh.toml`, or
+`FOSSH_COUNTRY_DB`); an install with nothing configured there does no
+GeoIP resolution at all and is unaffected by anything in this section.
+
+The database this project's own default configuration guidance points
+operators at is db-ip.com's free "IP to Country Lite" database,
+licensed under a Creative Commons Attribution 4.0 International
+License (CC BY 4.0). Per db-ip.com's own license terms: "You are free
+to use this IP to Country Lite database in your application, provided
+you give attribution to DB-IP.com for the data." Accordingly:
+
+IP Geolocation by DB-IP — https://db-ip.com
+
+This attribution covers use of DB-IP's data by any foSSH deployment
+that has configured `country_db` to point at a db-ip.com-sourced
+database; it is not a claim that DB-IP's data or service is bundled
+with or endorses foSSH itself. An operator who instead points
+`country_db` at a different MMDB-format database (e.g. a
+commercially-licensed MaxMind GeoIP2 database) is responsible for that
+database's own attribution/license terms, which are between the
+operator and that database's publisher, not covered here.
 
 ------------------------------------------------------------------------
 
@@ -92,6 +127,7 @@ indexmap 2.14.0 (Apache-2.0 OR MIT)
 indoc 2.0.7 (MIT OR Apache-2.0)
 inout 0.1.4 (MIT OR Apache-2.0)
 instability 0.3.12 (MIT)
+ipnetwork 0.21.1 (MIT OR Apache-2.0)
 itertools 0.14.0 (MIT OR Apache-2.0)
 itoa 1.0.18 (MIT OR Apache-2.0)
 kasuari 0.4.12 (MIT OR Apache-2.0)
@@ -103,6 +139,7 @@ litrs 1.0.0 (MIT OR Apache-2.0)
 lock_api 0.4.14 (MIT OR Apache-2.0)
 log 0.4.33 (MIT OR Apache-2.0)
 lru 0.18.1 (MIT)
+maxminddb 0.30.0 (ISC)
 memchr 2.8.3 (Unlicense OR MIT)
 mio 1.2.2 (MIT)
 nix 0.29.0 (MIT)
@@ -177,6 +214,7 @@ TRADEMARK
 
 The name "foSSH" and the handle "$0aptile" are not registered
 trademarks. No trademark is claimed or granted by this NOTICE, the
-license, or any other document in this repository. Neither may be used
-to endorse or promote derived works without permission (Apache
-License 2.0 §6).
+license, or any other document in this repository — the MIT License
+itself is silent on trademarks, so this states the position directly
+rather than restating one. Neither name nor handle may be used to
+endorse or promote a derived work without permission.
