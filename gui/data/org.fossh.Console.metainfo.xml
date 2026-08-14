@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.fossh.Console</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>foSSH Console</name>
+  <summary>Administer a self-hosted, privacy-preserving analytics install</summary>
+
+  <description>
+    <p>
+      foSSH Console is the local administration interface for a foSSH install.
+      It shows what your sites recorded today, runs real queries against the
+      rollup store, manages external services you have added, and drives
+      first-run operator enrollment.
+    </p>
+    <p>
+      foSSH itself is self-hosted site analytics that does not trade your
+      visitors' privacy for your dashboard. There is no cross-site identity,
+      no cookies, no device fingerprinting, no raw IP addresses at rest, and
+      no third-party egress from the ingest path. Reported groups are
+      k-anonymised before they reach any read path, so a breakdown cannot
+      single out an individual visitor.
+    </p>
+    <p>
+      The console talks to a local helper process over a pipe. It never
+      listens on a socket, and it holds no credential longer than the call
+      that carries it.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">org.fossh.Console.desktop</launchable>
+
+  <url type="homepage">https://github.com/s0aptile/foSSH</url>
+  <url type="bugtracker">https://github.com/s0aptile/foSSH/issues</url>
+  <url type="vcs-browser">https://github.com/s0aptile/foSSH</url>
+
+  <developer id="org.fossh">
+    <name>$0aptile</name>
+  </developer>
+
+  <content_rating type="oars-1.1" />
+
+  <categories>
+    <category>System</category>
+    <category>Monitor</category>
+  </categories>
+
+  <keywords>
+    <keyword>analytics</keyword>
+    <keyword>telemetry</keyword>
+    <keyword>privacy</keyword>
+  </keywords>
+
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>touch</control>
+  </supports>
+
+  <requires>
+    <!-- The sidebar collapses below this; the window is usable at
+         phone width, so this is the honest floor rather than a
+         desktop-only claim. -->
+    <display_length compare="ge">360</display_length>
+  </requires>
+
+  <releases>
+    <release version="0.2.0~alpha.1" date="2026-08-15">
+      <description>
+        <p>
+          First release of the console. Replaces the terminal interface
+          shipped through 0.1.3, which is retired along with the rest of
+          that line.
+        </p>
+      </description>
+    </release>
+  </releases>
+</component>

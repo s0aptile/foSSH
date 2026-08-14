@@ -64,7 +64,7 @@ done
 if [ -f "$project_root/target/release/fossh-cgi" ]; then
   cp "$project_root/target/release/fossh-cgi" "$stage/fossh/dist/fossh-cgi-x86_64-unknown-linux-gnu"
   cp "$project_root/target/release/fossh" "$stage/fossh/dist/fossh-x86_64-unknown-linux-gnu"
-  cp "$project_root/target/release/fossh-tui" "$stage/fossh/dist/fossh-tui-x86_64-unknown-linux-gnu"
+  cp "$project_root/target/release/fossh-agent" "$stage/fossh/dist/fossh-agent-x86_64-unknown-linux-gnu"
 fi
 if [ -f "$project_root/crates/fossh-ffi/target/release/libfossh.so" ]; then
   cp "$project_root/crates/fossh-ffi/target/release/libfossh.so" "$stage/fossh/dist/"

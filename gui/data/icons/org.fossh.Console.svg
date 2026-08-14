@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  foSSH Console application icon.
+
+  The mark is the diamond from the TUI's own chrome title
+  ("foSSH ◆ local admin console") — the one piece of ornament this
+  project has ever used — set in the brand amber on the brand
+  graphite. Drawn as geometry rather than as the ◆ character so it
+  does not depend on a font being installed, and so its weight can be
+  tuned independently of whatever a text renderer would do with it.
+
+  Two details that decide whether an icon survives being small:
+
+  * The diamond is a rounded rhombus, not four straight lines. Sharp
+    vertices alias badly at 16px and read as a fuzzy blob; a 6px
+    corner radius keeps the silhouette readable all the way down.
+  * The three bars behind it are at 22% opacity. They say "this is
+    about measurement" at 128px and disappear cleanly at 16px, rather
+    than turning into noise around the mark.
+
+  128x128 canvas with the 8px margin GNOME's icon guidelines ask for.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2A2A2D"/>
+      <stop offset="1" stop-color="#1C1C1E"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#EFC07C"/>
+      <stop offset="1" stop-color="#E0AF68"/>
+    </linearGradient>
+    <clipPath id="plate">
+      <rect x="8" y="8" width="112" height="112" rx="26" ry="26"/>
+    </clipPath>
+  </defs>
+
+  <rect x="8" y="8" width="112" height="112" rx="26" ry="26" fill="url(#ground)"/>
+
+  <!-- Measurement, implied. Clipped to the plate so the tallest bar
+       cannot poke past the rounded corner. -->
+  <g clip-path="url(#plate)" fill="#D8D2C8" opacity="0.22">
+    <rect x="30" y="78" width="12" height="22" rx="4"/>
+    <rect x="50" y="66" width="12" height="34" rx="4"/>
+    <rect x="70" y="54" width="12" height="46" rx="4"/>
+    <rect x="90" y="70" width="12" height="30" rx="4"/>
+  </g>
+
+  <!-- The mark. Rotated square with rounded corners, which is a
+       rhombus that stays legible when it is twelve pixels across. -->
+  <rect x="42" y="26" width="44" height="44" rx="6" ry="6"
+        transform="rotate(45 64 48)" fill="url(#amber)"/>
+
+  <!-- A single hairline of the foreground colour along the top edge of
+       the plate. Reads as light catching an edge and is what keeps the
+       icon from looking flat next to other rounded-square icons. -->
+  <path d="M 34 8.5 H 94" stroke="#D8D2C8" stroke-opacity="0.10"
+        stroke-width="1" stroke-linecap="round" fill="none"/>
+</svg>

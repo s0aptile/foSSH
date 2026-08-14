@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Symbolic variant, for panels, notifications and the dark/light
+  recolouring the shell does automatically.
+
+  Symbolic icons are single-colour by contract: the shell recolours
+  `fill="#2e3436"` to whatever the context needs, so nothing here may
+  carry a brand colour or an opacity that would survive that
+  recolouring as a grey. The mark alone, at 16px, with no bars —
+  they were always the part that disappears at this size.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <rect x="4.5" y="4.5" width="7" height="7" rx="1.2" ry="1.2"
+        transform="rotate(45 8 8)" fill="#2e3436"/>
+</svg>

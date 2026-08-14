@@ -5,12 +5,12 @@
 # Fedora Rust packaging guideline flow, just less automated.
 #
 # Version note: `%%{srcversion}` (hyphenated, matches Cargo's own
-# `0.1.3-alpha.1`) names the source tarball/directory; `%%{version}`
+# `0.2.0-alpha.1`) names the source tarball/directory; `%%{version}`
 # (tilde form, RPM's own prerelease convention — sorts *before*
 # `0.1.3` with no suffix, which is the ordering an alpha needs) is what
 # actually appears in the built package's metadata. Kept separate so
 # neither has to deal with the other's separator character.
-%global srcversion 0.1.3-alpha.1
+%global srcversion 0.2.0-alpha.1
 # Cargo's own release profile (strip = true) already strips every
 # binary before %%install even runs; there's no meaningful debug info
 # left for rpm's own automatic debuginfo/debugsource extraction to
@@ -24,7 +24,7 @@
 %global debug_package %{nil}
 
 Name:           fossh
-Version:        0.1.3~alpha.1
+Version:        0.2.0~alpha.1
 Release:        2%{?dist}
 Summary:        Privacy-preserving, embeddable telemetry (self-hosted analytics)
 
@@ -118,7 +118,7 @@ BuildRequires:  selinux-policy
 BuildRequires:  selinux-policy-devel
 %selinux_requires
 # gnupg2 is a base-package build *and* run dependency, not just a
-# watchdog one: fossh-tui's own operator_auth_client.rs shells out to
+# watchdog one: fossh-agent's own operator_auth_client.rs shells out to
 # real `gpg` both at runtime (the Wizard screen's key
 # generation/export/signing, gated on a live watchdog to actually
 # enroll against, but the code itself ships in this package) and in
@@ -132,7 +132,7 @@ BuildRequires:  gnupg2
 # cmake/clang-devel: BoringSSL's own build (cmake) and bindgen (clang)
 # requirements, needed here for a base-package reason, not a watchdog
 # one — scripts/build-release.sh unconditionally builds with
-# `--features fossh-fcgi/quic,fossh-tui/quic`, and that feature pulls
+# `--features fossh-fcgi/quic,fossh-agent/quic`, and that feature pulls
 # in fossh-ipc -> the `quiche` crate -> `boring-sys`, which vendors and
 # compiles its own copy of BoringSSL via cmake. This is a *separate*,
 # independent BoringSSL build from the one the watchdog subpackage's
@@ -141,7 +141,7 @@ BuildRequires:  gnupg2
 # *other*, independent build path" — that's this one). Both binaries
 # built with the quic feature end up statically linking their own copy
 # of quiche/BoringSSL (confirmed: no libquiche.so.0 install step exists
-# for fossh-fcgi/fossh-tui anywhere in %%install, unlike fossh-watchdog
+# for fossh-fcgi/fossh-agent anywhere in %%install, unlike fossh-watchdog
 # below, which needs the dynamic library specifically because ctypes
 # resolves symbols with dlsym at runtime — see that script's own header
 # comment) — so cmake/clang-devel are needed here, unconditionally, on
@@ -175,16 +175,16 @@ provides the portable core, buildable and installable on Fedora and
 on RHEL-family systems via EPEL (RHEL, Rocky, Alma; see
 docs/PACKAGING-copr.md): two ingest transports (fossh-cgi, a fresh
 process per request via fcgiwrap; fossh-fcgi, a persistent FastCGI
-process writing to SQLite directly), the fossh CLI, the fossh-tui
+process writing to SQLite directly), the fossh CLI, the fossh-agent
 local admin console (telemetry dashboard, standalone against the
 SQLite store — no watchdog required), hardened systemd units, and an
 SELinux policy module confining fossh-cgi and fossh-fcgi.
 
 On Fedora, install fossh-watchdog (a separate subpackage, not
 available on EPEL/RHEL) for supervised restart-on-crash, gpg-signed
-tamper detection, and the operator-auth enrollment gate fossh-tui's
+tamper detection, and the operator-auth enrollment gate fossh-agent's
 Wizard screen drives. Without it, fossh-fcgi runs as a plain,
-unsupervised systemd service and fossh-tui's Dashboard/Wizard/
+unsupervised systemd service and fossh-agent's Dashboard/Wizard/
 OperatorAuth screens report an honest "watchdog unreachable" rather
 than doing anything — see this package's own doc, and
 docs/PACKAGING-copr.md's "EPEL/RHEL-family build status", for exactly
@@ -215,9 +215,9 @@ Provides:       group(fossh-watchdog)
 %description watchdog
 The OCaml watchdog (§3.3): supervises fossh-fcgi (restart on crash),
 verifies a gpg-signed tamper-detection manifest before every spawn
-(§3.6), and serves both the §3.4 QUIC/mTLS command channel (fossh-tui's
+(§3.6), and serves both the §3.4 QUIC/mTLS command channel (fossh-agent's
 Dashboard screen is a client of it) and the §2.1 human-operator
-enrollment/auth gate (fossh-tui's Wizard and OperatorAuth screens
+enrollment/auth gate (fossh-agent's Wizard and OperatorAuth screens
 drive it). Owns its own runtime state (`%{_sharedstatedir}/fossh-
 watchdog`, `%{_sysconfdir}/fossh`'s setup-token) under a dedicated
 `fossh-watchdog` system account, separate from the base package's own
@@ -232,6 +232,91 @@ the base %{name} package (exact version match) — this subpackage ships
 no ingest transport of its own; it supervises the one the base package
 already installs.
 %endif
+
+%package console
+Summary:        Desktop console for administering a foSSH install
+Requires:       %{name} = %{version}-%{release}
+# The console is a pure-Python GTK4 application. It is `noarch` in
+# spirit but not in fact: it Requires the base package, which is not,
+# and splitting it further to gain that would mean two source packages
+# for one product.
+Requires:       python3 >= 3.9
+Requires:       python3-gobject
+Requires:       gtk4 >= 4.10
+Requires:       libadwaita >= 1.4
+# The only outbound request foSSH ever makes is an operator-triggered
+# integration test, and this is what makes it. See ADR-0063 for why a
+# system tool rather than an HTTP crate.
+Requires:       curl
+# Recommends, not Requires: the console detects at runtime what is
+# actually installed and falls back to the theme's own fonts and
+# symbolic icons. It looks as designed with these and works without
+# them, which is the right strength for a dependency that is purely
+# presentational.
+Recommends:     google-roboto-fonts
+Recommends:     google-roboto-mono-fonts
+Recommends:     material-icons-fonts
+BuildRequires:  python3-devel
+BuildRequires:  desktop-file-utils
+BuildRequires:  libappstream-glib
+
+%description console
+foSSH Console is the local administration interface for a foSSH
+install: today's figures across every site, real k-anonymised queries
+against the rollup store, management of external services added with an
+API key, and the first-run operator enrollment flow.
+
+It never listens on a socket. Everything it shows comes from
+fossh-agent, a helper process it spawns over a pipe, and no credential
+outlives the call that carries it.
+
+This package replaces the fossh-tui terminal console shipped up to
+0.1.3, which is retired along with the rest of that line — see
+RETIREMENT.md.
+
+
+%package selfheal
+Summary:        Optional local-model advisory layer for foSSH self-healing
+Requires:       %{name} = %{version}-%{release}
+Requires:       httpd
+Requires:       gnupg2
+# Deliberately NOT `Requires: ollama`: Ollama is not packaged for
+# Fedora or EPEL, so naming it would make this subpackage
+# uninstallable from any repository it is shipped in. The endpoint is
+# probed at runtime and its absence is an ordinary, reported state —
+# see %%description.
+Suggests:       vulkan-loader
+
+%description selfheal
+foSSH's self-healing runs deterministic rules over the real state of an
+install and reports what it finds, with a remedy for each. That part is
+in the base package, always runs, and is the whole feature.
+
+This subpackage adds an OPTIONAL local language model
+(lfm2.5-thinking:1.2b, served by Ollama) that may write one thing: a
+plain-language explanation attached to a finding the rules already
+produced. It cannot create a finding, change a severity, alter a
+remedy, or cause anything to be executed. Installing or removing it
+changes nothing about what foSSH diagnoses or repairs.
+
+It runs only where it can do so without competing with the work the
+machine is actually for: AVX2 is required and AVX-512 preferred, Vulkan
+is a fallback for machines without AVX2, and the floor is six physical
+cores with 8 GiB of RAM — an AMD Ryzen 5 2600 or Intel Core i5-8400 and
+upward. Hardware that passes is then timed against a real generation,
+and anything below the throughput floor switches the layer off for that
+session rather than slowing the server down.
+
+Ollama itself is not packaged by Fedora and is not pulled in by this
+subpackage. Without it, the endpoint is simply unreachable and
+self-healing reports that plainly while continuing to work.
+
+This package installs an Apache configuration that puts the model
+endpoint behind a per-install secret on loopback. Ollama's own bind
+address keeps the network out; it does not keep other local accounts
+out, which is what this adds.
+
+
 
 %prep
 %autosetup -n %{name}-%{srcversion}
@@ -250,7 +335,7 @@ already installs.
 # identity-hygiene gate, verified with `strings` after the build. It
 # always builds the base package's own binaries with the quic feature
 # on (see that script's own header comment) — the QUIC client code
-# ships in this package's fossh-fcgi/fossh-tui on every chroot,
+# ships in this package's fossh-fcgi/fossh-agent on every chroot,
 # Fedora or EPEL, even though it has nothing to dial into without the
 # (Fedora-only) watchdog subpackage also installed; it fails soft in
 # that case, the same documented posture as everywhere else in this
@@ -281,7 +366,7 @@ semodule_package -o packaging/selinux/fossh.pp -m packaging/selinux/fossh.mod -f
 # dev/DURUM.md). Same network caveat as %%build above: needs a warm
 # cargo registry cache, not yet safe under a network-denied mock/koji
 # build (§3.10). Runs on every chroot, EPEL included — real `gpg` is
-# already a BuildRequires above for exactly this (fossh-tui's own
+# already a BuildRequires above for exactly this (fossh-agent's own
 # operator_auth_client.rs tests round-trip it); the one OCaml interop
 # test in this suite (fossh-admin's bootstrap_interop.rs) skips itself,
 # rather than failing, when it doesn't find a compiled watchdog binary
@@ -305,7 +390,11 @@ cargo test --workspace
 install -D -m0755 target/release/fossh %{buildroot}%{_bindir}/fossh
 install -D -m0755 target/release/fossh-cgi %{buildroot}%{_bindir}/fossh-cgi
 install -D -m0755 target/release/fossh-fcgi %{buildroot}%{_bindir}/fossh-fcgi
-install -D -m0755 target/release/fossh-tui %{buildroot}%{_bindir}/fossh-tui
+# %%{_libexecdir}, not %%{_bindir}: fossh-agent is a helper the console
+# spawns over a pipe, not a command anyone runs by hand. Putting it on
+# PATH would invite exactly that, and its stdout is a protocol stream
+# that is useless in a terminal.
+install -D -m0755 target/release/fossh-agent %{buildroot}%{_libexecdir}/%{name}/fossh-agent
 
 # Explicit, not relied-upon-implicitly: Cargo's own `strip = true`
 # strips these before they're even copied in here, but rpm's automatic
@@ -315,7 +404,7 @@ install -D -m0755 target/release/fossh-tui %{buildroot}%{_bindir}/fossh-tui
 # directly (`file` reported "not stripped" on a build with automatic
 # debuginfo disabled, on binaries `cargo build` itself had *just*
 # stripped moments before `install -D` copied them in), not assumed.
-strip --strip-all %{buildroot}%{_bindir}/fossh %{buildroot}%{_bindir}/fossh-cgi %{buildroot}%{_bindir}/fossh-fcgi %{buildroot}%{_bindir}/fossh-tui
+strip --strip-all %{buildroot}%{_bindir}/fossh %{buildroot}%{_bindir}/fossh-cgi %{buildroot}%{_bindir}/fossh-fcgi %{buildroot}%{_libexecdir}/%{name}/fossh-agent
 
 install -D -m0644 packaging/systemd/fossh-fcgiwrap.socket %{buildroot}%{_unitdir}/fossh-fcgiwrap.socket
 install -D -m0644 packaging/systemd/fossh-fcgiwrap.service %{buildroot}%{_unitdir}/fossh-fcgiwrap.service
@@ -359,10 +448,48 @@ install -d -m0700 %{buildroot}%{_sharedstatedir}/fossh-watchdog
 # this token (Setup_token.ensure's own `Unix.mkdir` recovery path is
 # belt-and-suspenders, not the only thing standing between a fresh
 # install and a working setup flow); on a base-only (EPEL) install
-# nothing ever creates or populates it, and fossh-tui's Wizard screen
+# nothing ever creates or populates it, and fossh-agent's Wizard screen
 # reports an honest "no setup token" rather than assuming one exists.
 install -d -m0700 %{buildroot}%{_sysconfdir}/fossh
 %endif
+
+# --- fossh-console (GTK4/libadwaita, Python) ---
+#
+# Installed into the interpreter's own site-packages rather than a
+# private directory plus a PYTHONPATH wrapper: the latter breaks the
+# moment anyone runs a module directly, and Fedora's Python packaging
+# guidelines are explicit that an importable package belongs on the
+# real path.
+install -d -m0755 %{buildroot}%{python3_sitelib}/fossh_console
+install -d -m0755 %{buildroot}%{python3_sitelib}/fossh_console/views
+install -m0644 gui/fossh_console/*.py %{buildroot}%{python3_sitelib}/fossh_console/
+install -m0644 gui/fossh_console/style.css %{buildroot}%{python3_sitelib}/fossh_console/
+install -m0644 gui/fossh_console/views/*.py %{buildroot}%{python3_sitelib}/fossh_console/views/
+
+install -D -m0755 gui/fossh-console %{buildroot}%{_bindir}/fossh-console
+
+install -D -m0644 gui/data/org.fossh.Console.desktop \
+    %{buildroot}%{_datadir}/applications/org.fossh.Console.desktop
+install -D -m0644 gui/data/org.fossh.Console.metainfo.xml \
+    %{buildroot}%{_metainfodir}/org.fossh.Console.metainfo.xml
+install -D -m0644 gui/data/icons/org.fossh.Console.svg \
+    %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/org.fossh.Console.svg
+install -D -m0644 gui/data/icons/org.fossh.Console-symbolic.svg \
+    %{buildroot}%{_datadir}/icons/hicolor/symbolic/apps/org.fossh.Console-symbolic.svg
+
+# Both validators are BuildRequires of the console subpackage and both
+# fail the build rather than warning. A .desktop file with a bad key
+# or a metainfo file AppStream cannot parse installs perfectly happily
+# and then simply does not appear in anyone's software centre, which
+# is the kind of defect that is only ever found by a user.
+desktop-file-validate %{buildroot}%{_datadir}/applications/org.fossh.Console.desktop
+appstream-util validate-relax --nonet \
+    %{buildroot}%{_metainfodir}/org.fossh.Console.metainfo.xml
+
+# --- fossh-selfheal (optional local-model advisory layer) ---
+install -D -m0644 packaging/apache/fossh-model.conf \
+    %{buildroot}%{_sysconfdir}/httpd/conf.d/fossh-model.conf
+
 
 %pre
 # §2.3: purpose-created system user for the base package's own ingest
@@ -432,7 +559,7 @@ runuser -u fossh-watchdog -- %{_bindir}/fossh-watchdog generate-manifest \
 # fossh-watchdog.service is left enabled but not started, same reason
 # as fossh-fcgiwrap.socket in the base package's own %%post: the §2.1
 # operator auth gate has no enrolled key yet, so nothing should answer
-# application requests until the setup wizard (fossh-tui) completes.
+# application requests until the setup wizard (fossh-agent) completes.
 %endif
 
 %preun
@@ -466,7 +593,8 @@ fi
 %{_bindir}/fossh
 %{_bindir}/fossh-cgi
 %{_bindir}/fossh-fcgi
-%{_bindir}/fossh-tui
+%dir %{_libexecdir}/%{name}
+%{_libexecdir}/%{name}/fossh-agent
 %{_unitdir}/fossh-fcgiwrap.socket
 %{_unitdir}/fossh-fcgiwrap.service
 %{_unitdir}/fossh-fcgi.service
@@ -485,10 +613,47 @@ fi
 %attr(0700,fossh-watchdog,fossh-watchdog) %dir %{_sysconfdir}/fossh
 %endif
 
+%files console
+%license LICENSE
+%doc RETIREMENT.md
+%{_bindir}/fossh-console
+%{python3_sitelib}/fossh_console/
+%{_datadir}/applications/org.fossh.Console.desktop
+%{_metainfodir}/org.fossh.Console.metainfo.xml
+%{_datadir}/icons/hicolor/scalable/apps/org.fossh.Console.svg
+%{_datadir}/icons/hicolor/symbolic/apps/org.fossh.Console-symbolic.svg
+
+%files selfheal
+%license LICENSE
+# %%config(noreplace): an operator who has edited the vhost -- a
+# different port, an extra Require -- must not have it silently
+# replaced on upgrade. rpm leaves theirs and writes ours alongside as
+# .rpmnew.
+%config(noreplace) %{_sysconfdir}/httpd/conf.d/fossh-model.conf
+
+
 %changelog
-* Fri Aug 07 2026 s0aptile <noreply@example.invalid> - 0.1.3~alpha.1-2
+* Sat Aug 15 2026 s0aptile <noreply@example.invalid> - 0.2.0~alpha.1-1
+- Retire the whole 0.1.x line. See RETIREMENT.md for what was actually
+  broken in it, rather than a general "superseded" note.
+- Replace the fossh-tui terminal console with two things: fossh-agent,
+  a headless JSON-lines helper now installed to %%{_libexecdir}/fossh
+  rather than onto PATH (its stdout is a protocol stream, not output),
+  and a new fossh-console subpackage -- a GTK4/libadwaita desktop
+  application, with .desktop entry, AppStream metainfo and icons, both
+  validated during the build rather than at install time.
+- New fossh-selfheal subpackage: the optional, capability-gated local
+  model advisory layer, plus the Apache configuration that keeps its
+  endpoint closed to other local accounts. The deterministic
+  self-healing rules are in the base package and are unaffected by
+  whether this is installed.
+- Both new subpackages build on EPEL/RHEL as well as Fedora; only
+  fossh-watchdog remains Fedora-only, for the reason it always was
+  (ocaml-ctypes-devel is not in EPEL).
+
+* Fri Aug 07 2026 s0aptile <noreply@example.invalid> - 0.2.0~alpha.1-2
 - Split into a portable base package (fossh: fossh-cgi, fossh-fcgi,
-  fossh-tui, fossh CLI, SELinux policy confining fossh-cgi/fossh-fcgi
+  fossh-agent, fossh CLI, SELinux policy confining fossh-cgi/fossh-fcgi
   — all pure Rust, buildable on EPEL/RHEL 9/10 too) and a Fedora-only
   fossh-watchdog subpackage (the OCaml watchdog, needs
   ocaml-ctypes-devel, confirmed absent from EPEL 9/10). Fixes the
@@ -499,7 +664,7 @@ fi
   contents (base + watchdog together match the prior single-package
   %%files exactly).
 
-* Thu Aug 06 2026 s0aptile <noreply@example.invalid> - 0.1.3~alpha.1-1
+* Thu Aug 06 2026 s0aptile <noreply@example.invalid> - 0.2.0~alpha.1-1
 - §2.1 human-operator auth gate finished end to end: watchdog-side
   listener, real §2.6 setup-token flow gating enrollment, and the
   Rust/TUI client, all adversarially reviewed with real findings fixed
@@ -515,7 +680,7 @@ fi
 - Long fuzz pass (933.9M executions across 5 targets, zero crashes),
   supply-chain/identity-hygiene re-audit, and a second independent
   identity leak found and fixed (BoringSSL's own build path via
-  fossh-tui's quic feature).
+  fossh-agent's quic feature).
   Still 0.1.x/open-alpha — no interface-breaking changes.
 
 * Tue Aug 04 2026 s0aptile <noreply@example.invalid> - 0.1.2~alpha.1-1

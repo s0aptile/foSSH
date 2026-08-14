@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name=foSSH Console
+GenericName=Analytics Administration
+Comment=Administer a foSSH install: sites, telemetry, integrations and setup
+Exec=fossh-console
+Icon=org.fossh.Console
+Terminal=false
+Categories=System;Monitor;Network;
+# Not a document handler and not a URL handler: this application opens
+# nothing it was not started with, so offering it as one would put it
+# in "Open With" menus where it can do nothing useful.
+Keywords=analytics;telemetry;privacy;statistics;fossh;
+StartupNotify=true
+StartupWMClass=org.fossh.Console
+# The console is per-machine administration, not a document editor;
+# a second window would show the same single install twice.
+SingleMainWindow=true
