@@ -1,0 +1,20 @@
+[package]
+name = "fossh-selfheal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "foSSH self-healing: a deterministic remediation engine, plus an optional, capability-gated local-model advisory layer that can only ever annotate it."
+
+[dependencies]
+fossh-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# Deliberately absent: any HTTP or TLS client. `advisor.rs` reaches the
+# local model through the same `curl`-on-stdin pattern
+# `fossh-agent::integrations_net` established (ADR-0063), and the model
+# endpoint is loopback-only behind Apache. See ADR-0065.

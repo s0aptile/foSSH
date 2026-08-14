@@ -558,6 +558,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fossh-selfheal"
+version = "0.1.3-alpha.1"
+dependencies = [
+ "fossh-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fossh-store"
 version = "0.1.3-alpha.1"
 dependencies = [
