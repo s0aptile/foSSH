@@ -595,17 +595,32 @@ runuser -u fossh-watchdog -- %{_bindir}/fossh-watchdog generate-manifest \
 # as `apache` and the agent as `fossh-svc`, so a file readable by only
 # one of them makes the endpoint either unreachable or unguarded.
 #
-# `printf`, never `echo`: a trailing newline here silently breaks the
-# comparison in fossh-model.conf forever. See that file's own comment.
-if [ ! -s %{_sysconfdir}/fossh/model-access-secret ]; then
-    install -d -m0755 %{_sysconfdir}/fossh
+# It lives in its own directory rather than in %%{_sysconfdir}/fossh,
+# and that is a fix rather than a preference. `fossh-watchdog` owns
+# %%{_sysconfdir}/fossh as 0700 fossh-watchdog:fossh-watchdog, because
+# it holds the one-time setup token. Apache cannot traverse into a
+# 0700 directory owned by another user, so with both optional
+# subpackages installed — an ordinary combination — every request to
+# the model endpoint failed the `file()` lookup and was denied, with
+# no error logged anywhere. Confirmed against a real install.
+install -d -m0750 %{_sysconfdir}/fossh-model
+if [ ! -s %{_sysconfdir}/fossh-model/model-access-secret ]; then
     umask 077
+    # `printf`, never `echo`: a trailing newline here silently breaks
+    # the comparison in fossh-model.conf forever. See that file.
     printf '%%s' "$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')" \
-        > %{_sysconfdir}/fossh/model-access-secret
-    chgrp apache %{_sysconfdir}/fossh/model-access-secret 2>/dev/null || :
-    chmod 0640 %{_sysconfdir}/fossh/model-access-secret
+        > %{_sysconfdir}/fossh-model/model-access-secret
 fi
-# So the agent can read the same file Apache does.
+# Outside the guard above, deliberately. These used to sit inside it,
+# which meant that if the group was ever wrong on first install there
+# was no path back — every later upgrade skipped the block entirely
+# because the file already had content. Re-asserting them on every
+# %%post costs nothing and makes the condition self-healing.
+chgrp apache %{_sysconfdir}/fossh-model 2>/dev/null || :
+chgrp apache %{_sysconfdir}/fossh-model/model-access-secret 2>/dev/null || :
+chmod 0750 %{_sysconfdir}/fossh-model
+chmod 0640 %{_sysconfdir}/fossh-model/model-access-secret
+# So the agent, which runs as fossh-svc, can read the same file Apache does.
 usermod -a -G apache fossh-svc >/dev/null 2>&1 || :
 
 %preun
@@ -687,6 +702,9 @@ fi
 # replaced on upgrade. rpm leaves theirs and writes ours alongside as
 # .rpmnew.
 %config(noreplace) %{_sysconfdir}/httpd/conf.d/fossh-model.conf
+# Owned by this subpackage alone. Sharing %%{_sysconfdir}/fossh with
+# fossh-watchdog is what broke the endpoint; see %%post.
+%dir %attr(0750,root,apache) %{_sysconfdir}/fossh-model
 # %%{_datadir}/fossh itself is owned by fossh-console, which is not a
 # dependency of this subpackage -- so it is claimed here too. Shared
 # ownership of a directory is legal in rpm and is the correct fix;
@@ -698,7 +716,7 @@ fi
 
 
 %changelog
-* Sat Aug 15 2026 s0aptile <noreply@example.invalid> - 0.2.0~alpha.1-1
+* Sat Aug 15 2026 s0aptile <noreply@example.invalid> - 0.2.0~alpha.1-2
 - Retire the whole 0.1.x line. See RETIREMENT.md for what was actually
   broken in it, rather than a general "superseded" note.
 - Replace the fossh-tui terminal console with two things: fossh-agent,

@@ -18,4 +18,4 @@ toml.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 zeroize.workspace = true
-nix = { workspace = true, features = ["net", "user"] }
+nix = { workspace = true, features = ["net", "user", "fs"] }

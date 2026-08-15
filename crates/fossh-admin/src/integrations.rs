@@ -60,9 +60,68 @@ const MAX_FILE_LEN: u64 = 1024 * 1024;
 const MAX_INTEGRATIONS: usize = 64;
 
 pub const FILE_NAME: &str = "integrations.enc";
+/// Advisory lock held across a whole read-modify-write cycle. See
+/// `modify`.
+pub const LOCK_FILE_NAME: &str = "integrations.lock";
 
 pub fn store_path(data_dir: &Path) -> PathBuf {
     data_dir.join(FILE_NAME)
+}
+
+pub fn lock_path(data_dir: &Path) -> PathBuf {
+    data_dir.join(LOCK_FILE_NAME)
+}
+
+/// Runs a read-modify-write cycle under an exclusive advisory lock.
+///
+/// `save` replaces the file atomically, so the file itself was never
+/// at risk of corruption — but atomicity of the *write* does not make
+/// the *cycle* atomic. Two processes that both `load` before either
+/// `save`s each write a complete replacement, and the later `rename`
+/// silently discards the earlier one's change while that caller has
+/// already been told it succeeded.
+///
+/// Measured, not theorised: sixteen agents released simultaneously,
+/// each adding a uniquely-named integration, produced sixteen `ok`
+/// responses and thirteen surviving entries. The same race also
+/// resurrects deletions — a stale writer puts back something another
+/// process removed. Losing a credential silently while reporting
+/// success is the part that matters.
+///
+/// `flock` on a separate lock file rather than on the data file
+/// itself: the data file is replaced by `rename` on every save, so a
+/// lock held on it would be a lock on an unlinked inode the moment
+/// anyone wrote, which is no lock at all.
+pub fn modify<T>(
+    data_dir: &Path,
+    key: &[u8; 32],
+    change: impl FnOnce(&mut Integrations) -> Result<T, IntegrationError>,
+) -> Result<T, IntegrationError> {
+    use nix::fcntl::{Flock, FlockArg};
+
+    std::fs::create_dir_all(data_dir)
+        .map_err(|e| IntegrationError::Io(format!("{}: {e}", data_dir.display())))?;
+    let path = lock_path(data_dir);
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .open(&path)
+        .map_err(|e| IntegrationError::Io(format!("{}: {e}", path.display())))?;
+
+    // Blocking, deliberately. The critical section is one small file
+    // read, an in-memory edit and one write; a caller that waits a few
+    // milliseconds behind another is doing the right thing, whereas a
+    // caller told "busy, try later" would have to invent a retry
+    // policy for a conflict that resolves itself instantly.
+    let _guard = Flock::lock(file, FlockArg::LockExclusive)
+        .map_err(|(_f, e)| IntegrationError::Io(format!("locking {}: {e}", path.display())))?;
+
+    let mut set = Integrations::load(data_dir, key)?;
+    let outcome = change(&mut set)?;
+    set.save(data_dir, key)?;
+    Ok(outcome)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -789,6 +848,107 @@ mod tests {
         set.save(&dir, &key).unwrap();
         let mode = fs::metadata(store_path(&dir)).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "got {:o}", mode & 0o777);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn concurrent_writers_do_not_lose_each_others_additions() {
+        // The race this module's `modify` exists for. Sixteen threads
+        // each adding a uniquely-named integration to one directory:
+        // before the lock, every call reported success and three of
+        // them silently were not there afterwards, because each thread
+        // loaded before any other had saved and the last `rename` won.
+        //
+        // Threads rather than processes here so this runs as an
+        // ordinary `cargo test`; `flock` is per-open-file-description,
+        // so separate `OpenOptions::open` calls contend correctly
+        // whether they are in one process or several. The 16-process
+        // version was reproduced separately against the real binary.
+        use std::sync::Barrier;
+
+        let dir = scratch_dir("concurrent");
+        let key = [11u8; 32];
+        const N: usize = 16;
+        let barrier = Barrier::new(N);
+
+        std::thread::scope(|scope| {
+            for i in 0..N {
+                let dir = &dir;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    modify(dir, &key, |set| {
+                        set.add(
+                            &format!("svc{i}"),
+                            "https://x.example/hook",
+                            Auth::Bearer,
+                            Method::Get,
+                            "sk_live_abcdefghijkl",
+                            0,
+                        )
+                    })
+                    .expect("every add should succeed");
+                });
+            }
+        });
+
+        let loaded = Integrations::load(&dir, &key).unwrap();
+        assert_eq!(
+            loaded.items.len(),
+            N,
+            "an add reported success and then was not there: {:?}",
+            (0..N)
+                .map(|i| format!("svc{i}"))
+                .filter(|n| loaded.get(n).is_none())
+                .collect::<Vec<_>>()
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_concurrent_remove_is_not_undone_by_a_stale_writer() {
+        // The same race in the other direction: a writer holding a
+        // stale copy puts back something another caller removed.
+        use std::sync::Barrier;
+
+        let dir = scratch_dir("concurrent-remove");
+        let key = [12u8; 32];
+        modify(&dir, &key, |set| {
+            set.add(
+                "gone",
+                "https://x.example",
+                Auth::Bearer,
+                Method::Get,
+                "sk_live_abcdefghijkl",
+                0,
+            )
+        })
+        .unwrap();
+
+        let barrier = Barrier::new(2);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                barrier.wait();
+                modify(&dir, &key, |set| set.remove("gone")).unwrap();
+            });
+            scope.spawn(|| {
+                barrier.wait();
+                let _ = modify(&dir, &key, |set| {
+                    set.add(
+                        "other",
+                        "https://y.example",
+                        Auth::Bearer,
+                        Method::Get,
+                        "sk_live_mnopqrstuvwx",
+                        0,
+                    )
+                });
+            });
+        });
+
+        let loaded = Integrations::load(&dir, &key).unwrap();
+        assert!(loaded.get("gone").is_none(), "a removed entry came back");
+        assert!(loaded.get("other").is_some(), "the concurrent add was lost");
         fs::remove_dir_all(&dir).ok();
     }
 

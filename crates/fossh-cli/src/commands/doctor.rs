@@ -137,7 +137,6 @@ pub fn run(args: &[String]) -> i32 {
         "salt file permissions (0600, P2)",
     ));
 
-
     // §3.8: opening the real store here means opening it *encrypted*,
     // the same way every other real caller does — a `doctor` pass that
     // quietly used the legacy unkeyed `Store::open` instead would give

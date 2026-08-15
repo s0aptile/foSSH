@@ -97,6 +97,18 @@ fn main() -> std::process::ExitCode {
                     continue;
                 }
                 let response = match serde_json::from_str::<Request>(&line) {
+                    // `0` is this protocol's reserved id for a frame
+                    // that could not be parsed, so a caller sending it
+                    // on a well-formed request would produce a success
+                    // frame indistinguishable from a parse failure.
+                    // Refused rather than answered.
+                    Ok(req) if req.id == 0 => Response::failure(
+                        0,
+                        MethodError::bad_request(
+                            "id 0 is reserved for frames this agent could not parse; use any \
+                             other id",
+                        ),
+                    ),
                     Ok(req) => {
                         let id = req.id;
                         match agent.dispatch(&req) {
@@ -553,32 +565,32 @@ impl Agent {
             }
         };
 
-        let mut set = self.load_integrations()?;
-        set.add(name, endpoint, auth, method, api_key, unix_now())
-            .map_err(|e| match e {
-                integrations::IntegrationError::Duplicate(_) => {
-                    MethodError::new(ErrorCode::Conflict, e.to_string())
-                }
-                integrations::IntegrationError::Invalid(_)
-                | integrations::IntegrationError::TooMany => {
-                    MethodError::bad_request(e.to_string())
-                }
-                other => MethodError::internal(other.to_string()),
-            })?;
-        self.save_integrations(&set)?;
+        let key = self.data_key()?;
+        integrations::modify(&self.data_dir, &key, |set| {
+            set.add(name, endpoint, auth, method, api_key, unix_now())
+        })
+        .map_err(|e| match e {
+            integrations::IntegrationError::Duplicate(_) => {
+                MethodError::new(ErrorCode::Conflict, e.to_string())
+            }
+            integrations::IntegrationError::Invalid(_)
+            | integrations::IntegrationError::TooMany => MethodError::bad_request(e.to_string()),
+            other => MethodError::internal(other.to_string()),
+        })?;
         Ok(json!({ "added": name }))
     }
 
     fn integrations_remove(&self, p: &Value) -> MethodResult {
         let name = str_param(p, "name")?;
-        let mut set = self.load_integrations()?;
-        set.remove(name).map_err(|e| match e {
-            integrations::IntegrationError::NotFound(_) => {
-                MethodError::new(ErrorCode::NotFound, e.to_string())
-            }
-            other => MethodError::internal(other.to_string()),
-        })?;
-        self.save_integrations(&set)?;
+        let key = self.data_key()?;
+        integrations::modify(&self.data_dir, &key, |set| set.remove(name)).map_err(
+            |e| match e {
+                integrations::IntegrationError::NotFound(_) => {
+                    MethodError::new(ErrorCode::NotFound, e.to_string())
+                }
+                other => MethodError::internal(other.to_string()),
+            },
+        )?;
         Ok(json!({ "removed": name }))
     }
 
