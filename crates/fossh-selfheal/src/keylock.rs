@@ -198,29 +198,67 @@ pub fn canonical_manifest(config: &ModelConfig) -> String {
 /// Verifies the clearsigned manifest and returns the configuration it
 /// attests to.
 ///
-/// `--status-fd` output is parsed rather than the exit code being
-/// trusted. `gpg` exits 0 for a good signature from an expired or
-/// revoked key, which is the exact gap ADR-0040 found in this
-/// project's watchdog and fixed there; repeating the mistake here
-/// would reintroduce it in a second place.
+/// Two things here are load-bearing and both were got wrong first.
+///
+/// **Status is read from its own file, not from stdout.** `gpg
+/// --status-fd 1` interleaves its machine-readable status protocol
+/// with the *document's own content* on one stream, and nothing in
+/// that stream distinguishes them. A document whose body contains
+/// lines like `[GNUPG:] GOODSIG ...` and `[GNUPG:] VALIDSIG
+/// <the-fingerprint-you-expect> ...` therefore forges status
+/// directly into the verifier's input. Reproduced against a real
+/// gpg: an attacker-signed file carrying those two lines set both
+/// `good` and `fingerprint_matches` before the real status for the
+/// attacker's own key was ever reached. That particular attempt was
+/// still rejected, but only because the genuine `ERRSIG` happened to
+/// arrive afterwards and overrode it — ordering, not a defence.
+/// `--status-file` puts the protocol somewhere the document cannot
+/// reach, which is what the watchdog's own `Manifest` already does
+/// and what this module's header always claimed it did.
+///
+/// **The status protocol is parsed rather than the exit code
+/// trusted.** `gpg` exits 0 for a good signature from a revoked or
+/// expired key — the exact gap ADR-0040 found in the watchdog.
 pub fn verify(state_dir: &Path, expected_fingerprint: &str) -> Result<ModelConfig, LockError> {
     let path = manifest_path(state_dir);
     if !path.exists() {
         return Err(LockError::NotConfigured);
     }
 
+    // Named from the pid *and* a fresh nonce: `Operator_key`'s own
+    // pid-only temp paths collided across threads of one process, and
+    // that fix (ADR-0057) applies verbatim here.
+    let status_path = std::env::temp_dir().join(format!(
+        "fossh-model-status-{}-{}",
+        std::process::id(),
+        read_random_hex(8).unwrap_or_else(|_| "0".repeat(16))
+    ));
+
     let output = std::process::Command::new("gpg")
         .arg("--batch")
         .arg("--no-tty")
-        .arg("--status-fd")
-        .arg("1")
+        .arg("--status-file")
+        .arg(&status_path)
         .arg("--decrypt")
         .arg(&path)
-        .output()
-        .map_err(|e| LockError::Gpg(format!("could not run gpg: {e}")))?;
+        .output();
 
-    let status = String::from_utf8_lossy(&output.stdout);
-    parse_verified_manifest(&status, expected_fingerprint)
+    let result = (|| {
+        let output = output.map_err(|e| LockError::Gpg(format!("could not run gpg: {e}")))?;
+        let status = std::fs::read_to_string(&status_path).map_err(|e| {
+            LockError::Gpg(format!(
+                "gpg wrote no status output, so nothing about this signature could be \
+                 established: {e}"
+            ))
+        })?;
+        // Status from the file, body from stdout. Neither stream can
+        // impersonate the other.
+        let body = String::from_utf8_lossy(&output.stdout);
+        parse_verified_manifest_parts(&status, &body, expected_fingerprint)
+    })();
+
+    let _ = std::fs::remove_file(&status_path);
+    result
 }
 
 /// Split out so the `--status-fd` grammar is testable without a
@@ -230,13 +268,24 @@ pub fn parse_verified_manifest(
     gpg_output: &str,
     expected_fingerprint: &str,
 ) -> Result<ModelConfig, LockError> {
+    parse_verified_manifest_parts(gpg_output, gpg_output, expected_fingerprint)
+}
+
+/// The real entry point: `status` and `body` come from separate
+/// streams, so a document can never contribute a status line.
+pub fn parse_verified_manifest_parts(
+    status: &str,
+    body: &str,
+    expected_fingerprint: &str,
+) -> Result<ModelConfig, LockError> {
     let mut good = false;
     let mut fingerprint_matches = false;
 
-    for line in gpg_output.lines() {
-        let Some(rest) = line.strip_prefix("[GNUPG:] ") else {
-            continue;
-        };
+    for line in status.lines() {
+        // `--status-file` output has no `[GNUPG:] ` prefix; `--status-fd`
+        // merged into stdout does. Both are accepted so the
+        // single-stream entry point above keeps working.
+        let rest = line.strip_prefix("[GNUPG:] ").unwrap_or(line);
         let mut parts = rest.split_whitespace();
         match parts.next() {
             Some("GOODSIG") => good = true,
@@ -286,7 +335,7 @@ pub fn parse_verified_manifest(
     }
 
     // Only now is the content worth reading.
-    parse_manifest_body(gpg_output)
+    parse_manifest_body(body)
 }
 
 fn parse_manifest_body(text: &str) -> Result<ModelConfig, LockError> {
@@ -397,6 +446,46 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, LockError::Tampered(ref m) if m.contains("different key")));
+    }
+
+    #[test]
+    fn a_document_cannot_forge_status_lines_from_its_own_body() {
+        // The attack this module's `verify` was restructured for, as a
+        // unit test. A body carrying `GOODSIG` and a `VALIDSIG` naming
+        // the expected fingerprint must contribute nothing, because
+        // status now comes from its own stream.
+        //
+        // Reproduced against a real gpg first: an attacker-signed file
+        // with these two lines in its content had both flags set
+        // before the genuine status for the attacker's key was
+        // reached. It was still rejected, but only because `ERRSIG`
+        // arrived afterwards — ordering, not a defence.
+        let forged_body = format!(
+            "endpoint=http://evil.invalid:11434\nmodel=attacker:1.0\nthreads=64\n\
+             [GNUPG:] GOODSIG DEADBEEF someone\n[GNUPG:] VALIDSIG {FPR} 2026-01-01\n"
+        );
+        // A status stream that says the signature could not be checked
+        // at all — which is what gpg really reports for an unknown key.
+        let real_status = "NEWSIG\nERRSIG DEADBEEF 22 10 01 1786789346 9\nNO_PUBKEY DEADBEEF\n";
+
+        let err = parse_verified_manifest_parts(real_status, &forged_body, FPR).unwrap_err();
+        assert!(
+            matches!(err, LockError::Tampered(_)),
+            "a forged status line in the document body was believed: {err:?}"
+        );
+    }
+
+    #[test]
+    fn status_lines_are_accepted_with_or_without_the_stream_prefix() {
+        // `--status-file` writes bare lines; `--status-fd` merged into
+        // stdout prefixes them with `[GNUPG:] `. Both must parse, or
+        // switching between them silently verifies nothing.
+        let bare = format!("GOODSIG 1 x\nVALIDSIG {FPR} 2026-01-01\n");
+        let body = "endpoint=http://127.0.0.1:11434\nmodel=m\nthreads=4\n";
+        assert!(parse_verified_manifest_parts(&bare, body, FPR).is_ok());
+
+        let prefixed = format!("[GNUPG:] GOODSIG 1 x\n[GNUPG:] VALIDSIG {FPR} 2026-01-01\n");
+        assert!(parse_verified_manifest_parts(&prefixed, body, FPR).is_ok());
     }
 
     #[test]

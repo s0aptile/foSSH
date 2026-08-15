@@ -73,6 +73,9 @@ is worth less than one that shows where it was wrong.
   build the derived model, probe, generate, attach — has not executed
   once. Marked "written, unverified" in the sense this file has always
   used, and it is the largest unverified surface in 0.2.0.
+- `keylock::verify` **is** now verified end to end against a real gpg,
+  including the forged-status attack described in ADR-0067 — this was
+  listed here as unverified and no longer is.
 - **The Apache configuration has not been loaded by a real httpd.** The
   `Require expr ... file()` comparison is reasoned about carefully (see
   ADR-0065 on the two properties that make or break it) but not

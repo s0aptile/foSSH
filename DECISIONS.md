@@ -1148,3 +1148,55 @@ static `x-api-key` header fits this model exactly. AWS service APIs
 proper sign every request with SigV4 and cannot be reached this way at
 all, and the provider says so rather than shipping something that looks
 right and fails on first use.
+
+---
+
+## ADR-0067 — gpg status is read from its own stream, because a document can forge it
+
+**Status:** accepted, 0.2.0. Found by debugging, not by review.
+
+**The bug.** `keylock::verify` ran `gpg --status-fd 1 --decrypt`, which
+interleaves gpg's machine-readable status protocol with **the signed
+document's own content** on a single stream. Nothing in that stream
+distinguishes the two. A document whose body contains
+
+```
+[GNUPG:] GOODSIG DEADBEEF someone
+[GNUPG:] VALIDSIG <the fingerprint you expect> ...
+```
+
+therefore writes status directly into the verifier's input.
+
+**Reproduced against a real gpg**, not reasoned about: a file
+clearsigned by an attacker's key, carrying exactly those two lines in
+its body, caused the parser to set both `good` and
+`fingerprint_matches` before the genuine status for the attacker's key
+was reached. The attempt was still rejected — but only because gpg
+emits the real `ERRSIG` *after* the content, and the parser returns
+early on it. That is line ordering, not a defence, and it would not
+survive a multi-signature document, a different gpg option, or a
+future change in emission order.
+
+**The fix.** `--status-file <path>`, parsed separately from stdout.
+Status comes from a file the document cannot write to; the body comes
+from stdout. Neither stream can impersonate the other, and the property
+no longer depends on ordering at all.
+
+**This module's own header already claimed this.** It said verification
+"mirrors `watchdog/lib/manifest.ml`", which really does use
+`--status-file`, and cited ADR-0040 for parsing status rather than
+trusting the exit code. The prose was right and the implementation was
+not — a reminder that a comment asserting a security property is not
+evidence of one.
+
+Two regression tests: a forged body against a real `ERRSIG` status, and
+a check that both the bare (`--status-file`) and `[GNUPG:] `-prefixed
+(`--status-fd`) spellings parse, so switching between them cannot
+silently verify nothing. The temp status path is named from the pid
+**and** a nonce, because pid-only temp paths already collided across
+threads once in this codebase (ADR-0057).
+
+Verified end to end against real gpg afterwards: a genuine manifest
+verifies; the forged one is refused; a genuine signature checked
+against a different expected fingerprint is refused; a missing manifest
+reads as "not configured" rather than as tampering.
