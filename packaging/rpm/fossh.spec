@@ -514,6 +514,11 @@ appstreamcli validate --no-net \
 # --- fossh-selfheal (optional local-model advisory layer) ---
 install -D -m0644 packaging/apache/fossh-model.conf \
     %{buildroot}%{_sysconfdir}/httpd/conf.d/fossh-model.conf
+# The directory the model secret lives in. Created here so rpm owns it
+# (and removes it on uninstall); %%post only re-asserts its group and
+# mode, which it cannot do at build time because `apache` may not exist
+# in the build root.
+install -d -m0750 %{buildroot}%{_sysconfdir}/fossh-model
 install -D -m0644 packaging/model/Modelfile \
     %{buildroot}%{_datadir}/%{name}/model/Modelfile
 
