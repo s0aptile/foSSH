@@ -480,6 +480,7 @@ dependencies = [
  "fossh-store",
  "serde",
  "serde_json",
+ "toml",
  "zeroize",
 ]
 

@@ -139,8 +139,31 @@ only over this machine's loopback interface. No prompt, no diagnostic,
 and no output leaves the machine, and none of it reaches the author,
 who operates no service and receives nothing — see §2. Model weights
 are obtained by you, from a third party, under whatever terms that
-party sets; the author neither distributes them nor is a party to
-that arrangement.
+party sets; the author neither distributes them nor is a party to that
+arrangement. You are responsible for complying with the licence or
+usage terms attached to any weights you obtain, and for satisfying
+yourself that they permit the use you put them to. The author makes no
+representation about those terms and has not reviewed them.
+
+**Not an automated decision about anyone.** Article 11(1)(g) of the
+KVKK and Article 21 of the Swiss revFADP each concern a decision taken
+solely by automated processing that produces a legal effect on, or
+otherwise significantly affects, a natural person. Neither is engaged
+here: these diagnostics concern the configuration of a deployment
+rather than any person, and the model does not produce the diagnostic,
+the severity, or the remedy in any case — it only annotates a
+conclusion the deterministic rules already reached.
+
+**Regulatory framing.** Where the EU AI Act (Regulation (EU)
+2024/1689) applies to a deployment — including because a deployer is
+established in the EU, or because output is used there — the feature
+described in this section is, on its face, a limited-risk system
+generating explanatory text for a professional operator, and not
+something listed in Article 5 or Annex III. No representation is made
+about how that Regulation applies to any particular deployment, and no
+compliance with it is warranted, for the same reason no compliance
+with the KVKK, the revFADP, the GDPR, ePrivacy or the CCPA is
+warranted — see §11.
 
 ## 22. Where your data lives, and who is responsible for it
 
@@ -162,12 +185,20 @@ every legal or regulatory obligation arising from any of that. You are
 the data controller — see §10. The author is neither controller nor
 processor, and cannot be, because no data reaches them.
 
-**The author's.** Making the software correct, efficient, and honest
-about what it does: design choices that reduce the amount of personal
-data processed in the first place, a threat model that states what is
-*not* defended against as plainly as what is, and documentation that
-does not overstate a guarantee. Nothing beyond that is undertaken, and
-none of it is a warranty — see §6 and §7.
+**The author's.** Stated first, because the label matters less than
+where it sits: what follows is a statement of intent, not a warranty
+and not a term of this document enforceable against the author — the
+same standing §12's "intended use" has. It narrows nothing in §6 or
+§7.
+
+With that said, the author's side is effort rather than outcome: to
+aim for software that is correct, to work at making it efficient, and
+to be honest about what it does — through design choices that reduce
+the amount of personal data processed in the first place, a threat
+model that tries to state what is *not* defended against as plainly as
+what is, and documentation that tries not to overstate a guarantee.
+Nothing beyond that effort is undertaken, and no particular outcome is
+promised.
 
 Neither half substitutes for the other. Software that collects less
 does not make a deployment lawful, and a lawful deployment does not
@@ -181,7 +212,7 @@ You are responsible for supplying an address you are authorised to request, and 
 
 ## 24. Indemnification
 
-If a third party brings a claim, demand, or proceeding against the author arising from your deployment of foSSH, your configuration of it, the data you chose to collect or forward, your use of the integration-verification feature against any address, or your breach of this document, you will indemnify and hold the author harmless against that claim and against the reasonable costs of defending it, to the maximum extent permitted by applicable law.
+If a third party brings a claim, demand, or proceeding against the author arising from your deployment of foSSH, your configuration of it, your choice or use of any third-party model weights, the data you chose to collect or forward, your use of the integration-verification feature against any address, or your breach of this document, you will indemnify and hold the author harmless against that claim and against the reasonable costs of defending it, to the maximum extent permitted by applicable law.
 
 This does not extend to any claim arising from the author's own unlawful intent or gross negligence/gross fault, which §18 already excludes from every limitation in this document and which is excluded here too.
 

@@ -39,6 +39,7 @@
 #![forbid(unsafe_code)]
 
 mod integrations_net;
+mod modules;
 mod operator_auth_client;
 mod protocol;
 mod setup;
@@ -287,13 +288,93 @@ impl Agent {
             "operator.authenticate" => self.operator_authenticate(),
             "integrations.list" => self.integrations_list(),
             "providers.list" => self.providers_list(),
+            "modules.list" => self.modules_list(),
             "integrations.add" => self.integrations_add(p),
             "integrations.remove" => self.integrations_remove(p),
             "integrations.test" => self.integrations_test(p),
-            other => Err(MethodError::bad_request(format!(
-                "no such method: \"{other}\""
-            ))),
+            other => {
+                // A method in a namespace no module claims is a
+                // different mistake from a typo'd verb, and saying so
+                // saves a developer writing a module the obvious
+                // first hour of confusion.
+                let Some(ns) = modules::namespace_of(other) else {
+                    return Err(MethodError::bad_request(format!(
+                        "no such method: \"{other}\""
+                    )));
+                };
+                let (mods, _) = modules::load();
+                let Some(module) = mods.iter().find(|m| m.namespace == ns) else {
+                    // A method in a namespace no module claims is a
+                    // different mistake from a typo'd verb, and saying
+                    // so saves a developer writing a module the
+                    // obvious first hour of confusion.
+                    return Err(MethodError::bad_request(format!(
+                        "no module owns the namespace \"{ns}\" — install one that does, or \
+                         check `modules.list`"
+                    )));
+                };
+                if module.builtin {
+                    // A built-in namespace reaching here means the
+                    // verb does not exist, not that the module is
+                    // missing.
+                    return Err(MethodError::bad_request(format!(
+                        "no such method: \"{other}\""
+                    )));
+                }
+                self.dispatch_to_module(module, req)
+            }
         }
+    }
+
+    /// Hands a request to the module that owns its namespace.
+    ///
+    /// The module's reply is re-parsed rather than forwarded verbatim:
+    /// a module must not be able to put arbitrary bytes on the agent's
+    /// stdout, which is the console's protocol stream. Whatever comes
+    /// back is unwrapped and re-emitted by the agent's own writer,
+    /// under the id the console actually sent.
+    fn dispatch_to_module(&self, module: &modules::Manifest, req: &Request) -> MethodResult {
+        let line = serde_json::to_string(&json!({
+            "id": req.id,
+            "method": req.method,
+            "params": req.params,
+        }))
+        .map_err(|e| MethodError::internal(format!("serialising for the module: {e}")))?;
+
+        let reply = modules::dispatch(module, &line)
+            .map_err(|e| MethodError::new(ErrorCode::Unavailable, e.to_string()))?;
+
+        let frame: Value = serde_json::from_str(&reply).map_err(|_| {
+            MethodError::new(
+                ErrorCode::Internal,
+                format!(
+                    "the module \"{}\" replied with something that is not a response frame",
+                    module.namespace
+                ),
+            )
+        })?;
+
+        if frame.get("ok").and_then(Value::as_bool) == Some(true) {
+            return Ok(frame.get("result").cloned().unwrap_or(json!({})));
+        }
+        let error = frame.get("error");
+        let message = error
+            .and_then(|e| e.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("the module reported a failure with no detail")
+            .to_string();
+        // A module's error code is taken only if it is one of ours;
+        // anything else becomes `internal` rather than letting a
+        // module invent protocol vocabulary.
+        let code = match error.and_then(|e| e.get("code")).and_then(Value::as_str) {
+            Some("bad_request") => ErrorCode::BadRequest,
+            Some("not_found") => ErrorCode::NotFound,
+            Some("unavailable") => ErrorCode::Unavailable,
+            Some("denied") => ErrorCode::Denied,
+            Some("conflict") => ErrorCode::Conflict,
+            _ => ErrorCode::Internal,
+        };
+        Err(MethodError::new(code, message))
     }
 
     fn hello(&self) -> MethodResult {
@@ -485,6 +566,29 @@ impl Agent {
                     "key_hint": i.key_hint(),
                 }))
                 .collect::<Vec<_>>(),
+        }))
+    }
+
+    /// Every module on this install, built-in and external alike.
+    ///
+    /// The console renders this rather than a hardcoded page list, so
+    /// a module a developer dropped in appears without the console
+    /// knowing anything about it. Telemetry appears here too: it is
+    /// the flagship, not a special case.
+    fn modules_list(&self) -> MethodResult {
+        let (mods, problems) = modules::load();
+        Ok(json!({
+            "modules": mods
+                .iter()
+                .map(|m| json!({
+                    "namespace": m.namespace,
+                    "name": m.name,
+                    "description": m.description,
+                    "icon": m.icon,
+                    "builtin": m.builtin,
+                }))
+                .collect::<Vec<_>>(),
+            "problems": problems.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
         }))
     }
 

@@ -41,6 +41,11 @@
 //! - `--proto` / `--proto-redir` pin the set of schemes `curl` will
 //!   accept, so a URL that got past validation cannot be turned into a
 //!   `file://` or `scp://` fetch by anything downstream.
+//! - `tlsv1.2` sets the floor, not the target. The handshake
+//!   negotiates the highest version both sides support, so a modern
+//!   endpoint gets TLS 1.3 and one that has not moved yet still gets
+//!   1.2 rather than a failed request. Everything below 1.2 is
+//!   refused outright.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -163,6 +168,23 @@ fn build_config(integration: &Integration, body_path: &str) -> Zeroizing<String>
     cfg.push_str(&format!("max-filesize = {MAX_RESPONSE_BYTES}\n"));
     cfg.push_str("proto = \"=http,https\"\n");
     cfg.push_str("proto-redir = \"=https\"\n");
+    // TLS 1.2 is the floor and 1.3 is what actually gets used
+    // wherever the far side supports it: `tlsv1.2` sets a MINIMUM,
+    // and the handshake then negotiates the highest version both
+    // sides have. Setting a minimum rather than pinning 1.3 outright
+    // is deliberate — pinning would refuse services that have not
+    // moved yet, and refusing to send at all is not more secure than
+    // sending over 1.2, it is just broken.
+    //
+    // Everything below 1.2 is off. SSLv3, TLS 1.0 and 1.1 are all
+    // deprecated and all have practical attacks; a credential must
+    // never travel over one.
+    cfg.push_str("tlsv1.2\n");
+    // Certificate and hostname verification stay on. Named rather
+    // than merely not-disabled, because `--insecure` is the first
+    // thing anyone reaches for when a request fails and this is where
+    // a reader will look for whether that is sanctioned. It is not.
+    cfg.push_str("ssl-reqd\n");
     cfg.push_str("silent\n");
     cfg.push_str("show-error\n");
     // No `location`: see this module's own doc comment. Spelled out
