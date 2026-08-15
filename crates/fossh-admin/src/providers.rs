@@ -54,7 +54,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::integrations::{validate_endpoint, validate_header_name, Auth, Method};
+use crate::integrations::{Auth, Method, validate_endpoint, validate_header_name};
 
 /// Cap on how many providers will be loaded, and how big one may be.
 /// A provider directory is operator-controlled, not hostile, but these
@@ -150,7 +150,9 @@ impl Provider {
                 .chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
         {
-            return Err(bad("an id may only contain lowercase letters, digits and \"-\""));
+            return Err(bad(
+                "an id may only contain lowercase letters, digits and \"-\"",
+            ));
         }
         if self.name.is_empty() {
             return Err(bad("it has no display name"));
@@ -180,7 +182,9 @@ impl Provider {
                     .chars()
                     .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
             {
-                return Err(bad("a field key may only contain lowercase letters, digits and \"_\""));
+                return Err(bad(
+                    "a field key may only contain lowercase letters, digits and \"_\"",
+                ));
             }
             if !self.endpoint.contains(&format!("{{{}}}", field.key)) {
                 return Err(bad(&format!(
@@ -222,7 +226,9 @@ impl Provider {
             // workspace id has no business containing one. Escaping
             // would silently produce a URL the operator did not mean.
             if value.chars().any(|c| {
-                c.is_whitespace() || c.is_control() || matches!(c, '/' | '?' | '#' | '@' | '\\' | ':')
+                c.is_whitespace()
+                    || c.is_control()
+                    || matches!(c, '/' | '?' | '#' | '@' | '\\' | ':')
             }) {
                 return Err(ProviderError::Invalid {
                     id: self.id.clone(),
@@ -329,7 +335,8 @@ fn load_one(path: &Path) -> Result<Provider, ProviderError> {
             "{name}: larger than {MAX_PROVIDER_BYTES} bytes, which no provider definition is"
         )));
     }
-    let text = std::fs::read_to_string(path).map_err(|e| ProviderError::Io(format!("{name}: {e}")))?;
+    let text =
+        std::fs::read_to_string(path).map_err(|e| ProviderError::Io(format!("{name}: {e}")))?;
     let provider: Provider =
         toml::from_str(&text).map_err(|e| ProviderError::Io(format!("{name}: {e}")))?;
     provider.validate()?;
@@ -414,7 +421,9 @@ mod tests {
         }];
         assert!(p.validate().is_ok());
 
-        let rendered = p.render_endpoint(&values(&[("region", "eu-west-1")])).unwrap();
+        let rendered = p
+            .render_endpoint(&values(&[("region", "eu-west-1")]))
+            .unwrap();
         assert_eq!(rendered, "https://api.eu-west-1.example.com/v1/events");
     }
 
@@ -433,11 +442,11 @@ mod tests {
         }];
 
         for hostile in [
-            "evil.invalid/",      // ends the authority early
-            "x@evil.invalid",     // userinfo, so the host is evil
-            "x?@evil.invalid",    // query before the @
-            "x#@evil.invalid",    // fragment before the @
-            "x:9999",             // a port the provider did not choose
+            "evil.invalid/",   // ends the authority early
+            "x@evil.invalid",  // userinfo, so the host is evil
+            "x?@evil.invalid", // query before the @
+            "x#@evil.invalid", // fragment before the @
+            "x:9999",          // a port the provider did not choose
             "x\\evil.invalid",
             "x evil",
         ] {
@@ -490,10 +499,8 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "fossh-providers-{name}-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("fossh-providers-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -551,7 +558,10 @@ auth_header = "X-Api-Key"
 
         let (providers, _) = load_from(&[system.clone(), site.clone()]);
         assert_eq!(providers.len(), 1);
-        assert_eq!(providers[0].endpoint, "https://api.internal.example/v1/events");
+        assert_eq!(
+            providers[0].endpoint,
+            "https://api.internal.example/v1/events"
+        );
         fs::remove_dir_all(&system).ok();
         fs::remove_dir_all(&site).ok();
     }
@@ -567,7 +577,11 @@ auth_header = "X-Api-Key"
     #[test]
     fn an_oversized_file_is_refused_rather_than_read() {
         let dir = scratch("huge");
-        fs::write(dir.join("huge.toml"), "x".repeat(MAX_PROVIDER_BYTES as usize + 1)).unwrap();
+        fs::write(
+            dir.join("huge.toml"),
+            "x".repeat(MAX_PROVIDER_BYTES as usize + 1),
+        )
+        .unwrap();
         let (providers, problems) = load_from(&[dir.clone()]);
         assert!(providers.is_empty());
         assert_eq!(problems.len(), 1);
@@ -581,8 +595,14 @@ auth_header = "X-Api-Key"
         // in one fails the build rather than an operator's first use.
         let bundled = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packaging/providers");
         let (providers, problems) = load_from(&[bundled]);
-        assert!(problems.is_empty(), "bundled providers have problems: {problems:?}");
-        assert!(!providers.is_empty(), "no bundled providers were found at all");
+        assert!(
+            problems.is_empty(),
+            "bundled providers have problems: {problems:?}"
+        );
+        assert!(
+            !providers.is_empty(),
+            "no bundled providers were found at all"
+        );
         for p in &providers {
             assert!(p.validate().is_ok(), "{} is invalid", p.id);
             assert!(!p.docs.is_empty(), "{} has no docs link", p.id);

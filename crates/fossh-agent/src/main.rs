@@ -405,10 +405,7 @@ impl Agent {
     }
 
     fn setup_generate_key(&self) -> MethodResult {
-        let generated = self
-            .setup
-            .generate_key()
-            .map_err(MethodError::internal)?;
+        let generated = self.setup.generate_key().map_err(MethodError::internal)?;
         // The private half crosses to the console exactly once, so the
         // operator can save it — §3.11's own wording. It is never
         // written to disk by this process and never logged.
