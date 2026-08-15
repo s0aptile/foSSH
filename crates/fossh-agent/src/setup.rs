@@ -287,7 +287,10 @@ mod tests {
         fs::write(&path, "tok123").unwrap();
         let mut setup = Setup::new(path.clone());
         let huge = "a".repeat(MAX_KEY_LEN + 1);
-        assert!(matches!(setup.enroll(&huge), Err(EnrollOutcome::Invalid(_))));
+        assert!(matches!(
+            setup.enroll(&huge),
+            Err(EnrollOutcome::Invalid(_))
+        ));
         // The token must survive a rejection that never reached the
         // watchdog — otherwise a fat-fingered paste would cost the
         // operator their one live token.

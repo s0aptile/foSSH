@@ -298,7 +298,10 @@ mod tests {
                  event must be recovered, none lost (first pass {first_pass:?}, \
                  second pass {second_pass:?})"
             );
-            assert_eq!(total_corrupt, 0, "attempt {attempt}: no frame should be corrupt");
+            assert_eq!(
+                total_corrupt, 0,
+                "attempt {attempt}: no frame should be corrupt"
+            );
             fs::remove_dir_all(&dir).ok();
         }
     }

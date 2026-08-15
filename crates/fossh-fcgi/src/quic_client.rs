@@ -59,7 +59,9 @@ fn env_var(key: &str) -> Option<String> {
 }
 
 fn env_path(key: &str, default: &str) -> PathBuf {
-    env_var(key).map(PathBuf::from).unwrap_or_else(|| PathBuf::from(default))
+    env_var(key)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(default))
 }
 
 pub struct QuicClientConfig {
@@ -99,10 +101,15 @@ impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::MissingWatchdogUid => {
-                write!(f, "FOSSH_WATCHDOG_UID must be set (no getpwnam lookup here — see this module's own doc comment)")
+                write!(
+                    f,
+                    "FOSSH_WATCHDOG_UID must be set (no getpwnam lookup here — see this module's own doc comment)"
+                )
             }
             Self::InvalidWatchdogUid(s) => write!(f, "FOSSH_WATCHDOG_UID {s:?} is not a valid UID"),
-            Self::InvalidConnectAddr(s) => write!(f, "FOSSH_QUIC_CONNECT_ADDR {s:?} is not a valid address"),
+            Self::InvalidConnectAddr(s) => {
+                write!(f, "FOSSH_QUIC_CONNECT_ADDR {s:?} is not a valid address")
+            }
         }
     }
 }
@@ -112,12 +119,16 @@ impl QuicClientConfig {
         let watchdog_uid: u32 = env_var("FOSSH_WATCHDOG_UID")
             .ok_or(ConfigError::MissingWatchdogUid)?
             .parse()
-            .map_err(|_| ConfigError::InvalidWatchdogUid(env_var("FOSSH_WATCHDOG_UID").unwrap_or_default()))?;
+            .map_err(|_| {
+                ConfigError::InvalidWatchdogUid(env_var("FOSSH_WATCHDOG_UID").unwrap_or_default())
+            })?;
         let quic_connect_addr: SocketAddr = env_var("FOSSH_QUIC_CONNECT_ADDR")
             .unwrap_or_else(|| "127.0.0.1:7443".to_string())
             .parse()
             .map_err(|_| {
-                ConfigError::InvalidConnectAddr(env_var("FOSSH_QUIC_CONNECT_ADDR").unwrap_or_default())
+                ConfigError::InvalidConnectAddr(
+                    env_var("FOSSH_QUIC_CONNECT_ADDR").unwrap_or_default(),
+                )
             })?;
         Ok(Self {
             bootstrap_socket: env_path("FOSSH_BOOTSTRAP_SOCKET", "/run/fossh/bootstrap.sock"),
@@ -126,7 +137,10 @@ impl QuicClientConfig {
                 "FOSSH_WATCHDOG_FINGERPRINT_PIN",
                 "/var/lib/fossh/watchdog-fingerprint.pin",
             ),
-            watchdog_cert_pin: env_path("FOSSH_WATCHDOG_CERT_PIN", "/var/lib/fossh/watchdog-cert.pin"),
+            watchdog_cert_pin: env_path(
+                "FOSSH_WATCHDOG_CERT_PIN",
+                "/var/lib/fossh/watchdog-cert.pin",
+            ),
             watchdog_uid,
             quic_connect_addr,
         })
@@ -191,8 +205,8 @@ pub fn send_one_reload(identity: &TlsIdentity, config: &QuicClientConfig) -> Res
     };
 
     let deadline = Instant::now() + Duration::from_secs(10);
-    let (mut conn, socket) =
-        fossh_ipc::connect(config.quic_connect_addr, &tls, deadline).map_err(|e| format!("connect: {e}"))?;
+    let (mut conn, socket) = fossh_ipc::connect(config.quic_connect_addr, &tls, deadline)
+        .map_err(|e| format!("connect: {e}"))?;
 
     // Stream 1, not 0: QUIC stream IDs encode who may be the first to
     // write on them in their low two bits (0 = client-initiated bidi,
@@ -204,11 +218,12 @@ pub fn send_one_reload(identity: &TlsIdentity, config: &QuicClientConfig) -> Res
     const SESSION_STREAM: u64 = 1;
     const COMMAND_STREAM: u64 = 4;
 
-    let (hello_line, _fin) = fossh_ipc::recv_from_stream(&mut conn, &socket, SESSION_STREAM, deadline)
-        .map_err(|e| format!("recv session hello: {e}"))?;
+    let (hello_line, _fin) =
+        fossh_ipc::recv_from_stream(&mut conn, &socket, SESSION_STREAM, deadline)
+            .map_err(|e| format!("recv session hello: {e}"))?;
     let hello_line = String::from_utf8_lossy(&hello_line).into_owned();
-    let session_token =
-        command_client::decode_session_hello(&hello_line).map_err(|e| format!("session hello: {e}"))?;
+    let session_token = command_client::decode_session_hello(&hello_line)
+        .map_err(|e| format!("session hello: {e}"))?;
 
     let command_line = command_client::encode_command(&session_token, Command::Reload);
     fossh_ipc::send_on_stream(
@@ -221,8 +236,9 @@ pub fn send_one_reload(identity: &TlsIdentity, config: &QuicClientConfig) -> Res
     )
     .map_err(|e| format!("send command: {e}"))?;
 
-    let (reply_line, _fin) = fossh_ipc::recv_from_stream(&mut conn, &socket, COMMAND_STREAM, deadline)
-        .map_err(|e| format!("recv reply: {e}"))?;
+    let (reply_line, _fin) =
+        fossh_ipc::recv_from_stream(&mut conn, &socket, COMMAND_STREAM, deadline)
+            .map_err(|e| format!("recv reply: {e}"))?;
     let reply_line = String::from_utf8_lossy(&reply_line).into_owned();
     match command_client::decode_response(&reply_line).map_err(|e| format!("reply: {e}"))? {
         Response::Ok => Ok(()),
@@ -266,19 +282,26 @@ pub fn run(config: QuicClientConfig) {
     let identity = match tls_identity::ensure_identity(&config.tls_dir, "fossh-svc") {
         Ok(id) => id,
         Err(e) => {
-            log(&format!("could not establish this process's own TLS identity: {e} — QUIC command channel disabled for this process's lifetime"));
+            log(&format!(
+                "could not establish this process's own TLS identity: {e} — QUIC command channel disabled for this process's lifetime"
+            ));
             return;
         }
     };
     let own_cert_pem = match std::fs::read_to_string(&identity.cert_pem_path) {
         Ok(s) => s,
         Err(e) => {
-            log(&format!("could not read own certificate at {}: {e}", identity.cert_pem_path.display()));
+            log(&format!(
+                "could not read own certificate at {}: {e}",
+                identity.cert_pem_path.display()
+            ));
             return;
         }
     };
     if let Err(e) = ensure_watchdog_pinned(&config, &own_cert_pem) {
-        log(&format!("bootstrap handoff failed: {e} — QUIC command channel disabled for this process's lifetime"));
+        log(&format!(
+            "bootstrap handoff failed: {e} — QUIC command channel disabled for this process's lifetime"
+        ));
         return;
     }
 

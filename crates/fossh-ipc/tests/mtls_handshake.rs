@@ -136,8 +136,15 @@ fn a_real_mtls_quic_handshake_completes_and_a_stream_round_trips() {
     let peer_cert_der = conn.peer_cert().expect("client should see the server cert");
     assert!(!peer_cert_der.is_empty());
 
-    fossh_ipc::send_on_stream(&mut conn, &socket, 4, b"hello from watchdog", true, deadline)
-        .expect("send_on_stream failed");
+    fossh_ipc::send_on_stream(
+        &mut conn,
+        &socket,
+        4,
+        b"hello from watchdog",
+        true,
+        deadline,
+    )
+    .expect("send_on_stream failed");
 
     let (msg, fin) = fossh_ipc::recv_from_stream(&mut conn, &socket, 4, deadline)
         .expect("recv_from_stream failed");
@@ -218,7 +225,14 @@ fn a_client_presenting_the_wrong_certificate_is_rejected() {
         // the real property under test is "this connection never
         // becomes usable *even given the full deadline to try*", not
         // "the very first operation on it happens to fail".
-        let _ = fossh_ipc::send_on_stream(&mut conn, &socket, 4, b"should never arrive", true, deadline);
+        let _ = fossh_ipc::send_on_stream(
+            &mut conn,
+            &socket,
+            4,
+            b"should never arrive",
+            true,
+            deadline,
+        );
         let recv_result = fossh_ipc::recv_from_stream(&mut conn, &socket, 4, deadline);
         assert!(
             recv_result.is_err() || conn.is_closed(),

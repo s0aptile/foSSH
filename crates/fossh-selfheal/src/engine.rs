@@ -58,7 +58,10 @@ pub enum Remedy {
     Automatic { description: String },
     /// A command for the operator. Printed, never executed — see the
     /// module docs.
-    Operator { description: String, command: String },
+    Operator {
+        description: String,
+        command: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,8 +178,10 @@ fn check_data_key(ctx: &Context, out: &mut Vec<Finding>) {
         // demand — so this is not a finding at all.
         return;
     }
-    if let Some(mode) = mode_of(&key_path) {
-        if mode & 0o077 != 0 {
+    if let Some(mode) = mode_of(&key_path)
+        && mode & 0o077 != 0
+    {
+        {
             out.push(Finding::new(
                 "data_key_permissions",
                 Severity::Critical,
@@ -264,8 +269,7 @@ fn check_country_db(ctx: &Context, out: &mut Vec<Finding>) {
                  without ever failing a request — which is why it is easy to miss."
             ),
             Remedy::Operator {
-                description: "Point country_db at the real file, or set it to \"none\""
-                    .to_string(),
+                description: "Point country_db at the real file, or set it to \"none\"".to_string(),
                 command: "fossh config set country_db none".to_string(),
             },
         ));
@@ -339,10 +343,8 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "fossh-selfheal-{name}-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("fossh-selfheal-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -440,7 +442,10 @@ mod tests {
         let mut ctx = ctx_for(&dir);
         ctx.k_anonymity = 0;
         let findings = check(&ctx);
-        let f = findings.iter().find(|f| f.id == "k_anonymity_disabled").unwrap();
+        let f = findings
+            .iter()
+            .find(|f| f.id == "k_anonymity_disabled")
+            .unwrap();
         assert_eq!(f.severity, Severity::Critical);
         fs::remove_dir_all(&dir).ok();
     }
@@ -554,7 +559,12 @@ mod tests {
 
         for finding in check(&ctx) {
             assert!(!finding.id.is_empty());
-            assert!(finding.id.chars().all(|c| c.is_ascii_lowercase() || c == '_'));
+            assert!(
+                finding
+                    .id
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c == '_')
+            );
             assert!(finding.title.len() > 10, "{}", finding.id);
             assert!(finding.detail.len() > 30, "{}", finding.id);
             assert!(finding.advice.is_none(), "the engine never writes advice");

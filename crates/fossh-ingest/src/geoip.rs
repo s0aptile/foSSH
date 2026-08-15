@@ -146,10 +146,8 @@ mod tests {
 
     #[test]
     fn corrupt_database_file_fails_closed_not_panics() {
-        let dir = std::env::temp_dir().join(format!(
-            "fossh-geoip-corrupt-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("fossh-geoip-corrupt-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("corrupt.mmdb");
         {
@@ -167,7 +165,8 @@ mod tests {
 
     #[test]
     fn empty_file_fails_closed_not_panics() {
-        let dir = std::env::temp_dir().join(format!("fossh-geoip-empty-test-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("fossh-geoip-empty-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("empty.mmdb");
         std::fs::File::create(&path).unwrap();

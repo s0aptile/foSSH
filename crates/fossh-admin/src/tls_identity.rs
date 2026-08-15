@@ -155,7 +155,14 @@ fn generate_into(tmp_dir: &Path, common_name: &str) -> Result<(), TlsIdentityErr
     let key_path = tmp_dir.join("key.pem");
 
     let status = Command::new(OPENSSL_PATH)
-        .args(["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1"])
+        .args([
+            "req",
+            "-x509",
+            "-newkey",
+            "ec",
+            "-pkeyopt",
+            "ec_paramgen_curve:prime256v1",
+        ])
         .args(["-days", &VALIDITY_DAYS.to_string(), "-nodes"])
         .arg("-keyout")
         .arg(&key_path)
@@ -305,31 +312,32 @@ pub fn ensure_identity(dir: &Path, common_name: &str) -> Result<TlsIdentity, Tls
 
     let tmp_link = dir.join(format!(".current-tmp-{}-{suffix}", std::process::id()));
 
-    let result: Result<(), TlsIdentityError> = generate_into(&gen_dir, common_name).and_then(|()| {
-        // Defensive, not expected on any path this function itself
-        // ever produces (which always leaves `current` as a symlink,
-        // never a real directory): a symlink rename can never replace
-        // an existing *real* directory (EISDIR, POSIX — a rename can
-        // only replace a same-kind destination, and a real directory
-        // is not, kind-wise, replaceable by a symlink). Cheap to guard
-        // against regardless — stray external state (a manual `mkdir`,
-        // or output from some future, different version of this
-        // function) — and safe even under a concurrent race: if
-        // another caller's symlink has already replaced `current` by
-        // the time this runs, `remove_dir_all` on a symlink removes
-        // only the symlink itself, never recursing into its target
-        // (documented `std::fs::remove_dir_all` behavior), so a
-        // concurrent winner's real generation directory is never at
-        // risk here even in the worst case — at most this caller's
-        // own publish overwrites theirs a moment later with an
-        // equally valid one.
-        if fs::symlink_metadata(&current_link).is_ok_and(|m| m.is_dir()) {
-            let _ = fs::remove_dir_all(&current_link);
-        }
-        let _ = fs::remove_file(&tmp_link);
-        std::os::unix::fs::symlink(&gen_dir_name, &tmp_link)?;
-        fs::rename(&tmp_link, &current_link).map_err(TlsIdentityError::Io)
-    });
+    let result: Result<(), TlsIdentityError> =
+        generate_into(&gen_dir, common_name).and_then(|()| {
+            // Defensive, not expected on any path this function itself
+            // ever produces (which always leaves `current` as a symlink,
+            // never a real directory): a symlink rename can never replace
+            // an existing *real* directory (EISDIR, POSIX — a rename can
+            // only replace a same-kind destination, and a real directory
+            // is not, kind-wise, replaceable by a symlink). Cheap to guard
+            // against regardless — stray external state (a manual `mkdir`,
+            // or output from some future, different version of this
+            // function) — and safe even under a concurrent race: if
+            // another caller's symlink has already replaced `current` by
+            // the time this runs, `remove_dir_all` on a symlink removes
+            // only the symlink itself, never recursing into its target
+            // (documented `std::fs::remove_dir_all` behavior), so a
+            // concurrent winner's real generation directory is never at
+            // risk here even in the worst case — at most this caller's
+            // own publish overwrites theirs a moment later with an
+            // equally valid one.
+            if fs::symlink_metadata(&current_link).is_ok_and(|m| m.is_dir()) {
+                let _ = fs::remove_dir_all(&current_link);
+            }
+            let _ = fs::remove_file(&tmp_link);
+            std::os::unix::fs::symlink(&gen_dir_name, &tmp_link)?;
+            fs::rename(&tmp_link, &current_link).map_err(TlsIdentityError::Io)
+        });
 
     match result {
         Ok(()) => Ok(TlsIdentity {
@@ -406,13 +414,19 @@ mod tests {
         // module's explicit `Unix.mkdir dir 0o700`. Now uses
         // `DirBuilder::mode(0o700)` explicitly for both.
         let dir_mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
-        assert_eq!(dir_mode, 0o700, "dir itself must be 0700, not umask-dependent");
+        assert_eq!(
+            dir_mode, 0o700,
+            "dir itself must be 0700, not umask-dependent"
+        );
         let gen_dir_mode = fs::metadata(id.cert_pem_path.parent().unwrap())
             .unwrap()
             .permissions()
             .mode()
             & 0o777;
-        assert_eq!(gen_dir_mode, 0o700, "the generation directory must be 0700, not umask-dependent");
+        assert_eq!(
+            gen_dir_mode, 0o700,
+            "the generation directory must be 0700, not umask-dependent"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -480,8 +494,21 @@ mod tests {
         let cert_path = gen_dir.join("cert.pem");
         let key_path = gen_dir.join("key.pem");
         let status = Command::new(OPENSSL_PATH)
-            .args(["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes"])
-            .args(["-not_before", "20200101000000Z", "-not_after", "20210101000000Z"])
+            .args([
+                "req",
+                "-x509",
+                "-newkey",
+                "ec",
+                "-pkeyopt",
+                "ec_paramgen_curve:prime256v1",
+                "-nodes",
+            ])
+            .args([
+                "-not_before",
+                "20200101000000Z",
+                "-not_after",
+                "20210101000000Z",
+            ])
             .arg("-keyout")
             .arg(&key_path)
             .arg("-out")
@@ -489,7 +516,10 @@ mod tests {
             .args(["-subj", "/CN=already-expired"])
             .status()
             .unwrap();
-        assert!(status.success(), "test setup: generating an expired cert must itself succeed");
+        assert!(
+            status.success(),
+            "test setup: generating an expired cert must itself succeed"
+        );
         let expired_bytes = read(&cert_path);
         std::os::unix::fs::symlink("gen-fake-expired", dir.join("current")).unwrap();
 
@@ -518,7 +548,12 @@ mod tests {
 
     #[test]
     fn common_name_with_dn_metacharacters_is_rejected() {
-        for bad in ["innocuous/O=Evil Corp/OU=Fake Unit", "has=equals", "", &"a".repeat(65)] {
+        for bad in [
+            "innocuous/O=Evil Corp/OU=Fake Unit",
+            "has=equals",
+            "",
+            &"a".repeat(65),
+        ] {
             let dir = scratch_dir("badcn");
             assert!(
                 matches!(
@@ -548,7 +583,9 @@ mod tests {
             .args(["-pubout"])
             .output()
             .unwrap();
-        cert_pubkey.status.success() && key_pubkey.status.success() && cert_pubkey.stdout == key_pubkey.stdout
+        cert_pubkey.status.success()
+            && key_pubkey.status.success()
+            && cert_pubkey.stdout == key_pubkey.stdout
     }
 
     #[test]
@@ -579,8 +616,14 @@ mod tests {
             .collect();
         let ids: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
         for (i, id) in ids.iter().enumerate() {
-            assert!(cert_is_valid(&id.cert_pem_path), "racer {i}'s own cert must be valid");
-            assert!(key_is_valid(&id.key_pem_path), "racer {i}'s own key must be valid");
+            assert!(
+                cert_is_valid(&id.cert_pem_path),
+                "racer {i}'s own cert must be valid"
+            );
+            assert!(
+                key_is_valid(&id.key_pem_path),
+                "racer {i}'s own key must be valid"
+            );
             assert!(
                 is_matched_pair(&id.cert_pem_path, &id.key_pem_path),
                 "racer {i}'s own returned cert and key must be a genuinely matched pair, \
@@ -590,7 +633,10 @@ mod tests {
         // A fresh, non-racing caller afterward must also see a valid,
         // matched pair via the fast (already-established) path.
         let settled = ensure_identity(&dir, "fossh-admin-test-race-settled").unwrap();
-        assert!(is_matched_pair(&settled.cert_pem_path, &settled.key_pem_path));
+        assert!(is_matched_pair(
+            &settled.cert_pem_path,
+            &settled.key_pem_path
+        ));
         fs::remove_dir_all(&*dir).ok();
     }
 
@@ -634,7 +680,10 @@ mod tests {
         }
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         republisher.join().unwrap();
-        assert!(observed_any, "test setup: the observer loop should have succeeded at least once");
+        assert!(
+            observed_any,
+            "test setup: the observer loop should have succeeded at least once"
+        );
         fs::remove_dir_all(&*dir).ok();
     }
 }

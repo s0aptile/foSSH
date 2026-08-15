@@ -438,7 +438,10 @@ mod tests {
             .expect("rare groups merge into a (other) that itself meets k");
         assert_eq!(other.hits, 5);
         assert_eq!(other.uniques, 5);
-        assert!(other.uniques >= 5, "no reported group, including (other), may show uniques < k");
+        assert!(
+            other.uniques >= 5,
+            "no reported group, including (other), may show uniques < k"
+        );
     }
 
     #[test]
@@ -463,12 +466,24 @@ mod tests {
         let mut store = Store::open_in_memory().unwrap();
         for i in 0..2 {
             store
-                .record_event(&event(1, 1_700_000_000 + i, "pageview", "/a", 100 + i as u64))
+                .record_event(&event(
+                    1,
+                    1_700_000_000 + i,
+                    "pageview",
+                    "/a",
+                    100 + i as u64,
+                ))
                 .unwrap();
         }
         for i in 0..2 {
             store
-                .record_event(&event(1, 1_700_000_000 + i, "pageview", "/b", 200 + i as u64))
+                .record_event(&event(
+                    1,
+                    1_700_000_000 + i,
+                    "pageview",
+                    "/b",
+                    200 + i as u64,
+                ))
                 .unwrap();
         }
 
@@ -486,22 +501,41 @@ mod tests {
         let mut store = Store::open_in_memory().unwrap();
         for i in 0..2 {
             store
-                .record_event(&event(1, 1_700_000_000 + i, "pageview", "/a", 100 + i as u64))
+                .record_event(&event(
+                    1,
+                    1_700_000_000 + i,
+                    "pageview",
+                    "/a",
+                    100 + i as u64,
+                ))
                 .unwrap();
         }
         for i in 0..3 {
             store
-                .record_event(&event(1, 1_700_000_000 + i, "pageview", "/b", 200 + i as u64))
+                .record_event(&event(
+                    1,
+                    1_700_000_000 + i,
+                    "pageview",
+                    "/b",
+                    200 + i as u64,
+                ))
                 .unwrap();
         }
 
         let rows = store
             .query_rollup(SiteId::new(1), 0, i64::MAX, &[GroupByField::Path], 5)
             .unwrap();
-        assert_eq!(rows.len(), 1, "the merged (other) bucket meets k=5 and is reportable");
+        assert_eq!(
+            rows.len(),
+            1,
+            "the merged (other) bucket meets k=5 and is reportable"
+        );
         assert_eq!(rows[0].dims[0].1, "(other)");
         assert_eq!(rows[0].uniques, 5);
-        assert!(rows[0].uniques >= 5, "no reported group may show uniques < k");
+        assert!(
+            rows[0].uniques >= 5,
+            "no reported group may show uniques < k"
+        );
     }
 
     #[test]
@@ -509,7 +543,13 @@ mod tests {
         let mut store = Store::open_in_memory().unwrap();
         for i in 0..2 {
             store
-                .record_event(&event(1, 1_700_000_000 + i, "pageview", "/rare", 300 + i as u64))
+                .record_event(&event(
+                    1,
+                    1_700_000_000 + i,
+                    "pageview",
+                    "/rare",
+                    300 + i as u64,
+                ))
                 .unwrap();
         }
         let rows = store

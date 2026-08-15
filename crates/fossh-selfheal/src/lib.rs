@@ -47,7 +47,7 @@ pub mod keylock;
 
 pub use advisor::{Availability, MODEL};
 pub use capability::{Capability, Tier};
-pub use engine::{check, Finding, Remedy, Severity};
+pub use engine::{Finding, Remedy, Severity, check};
 
 /// One call: run the rules, and say whether the optional layer is
 /// available to annotate them.
@@ -83,10 +83,8 @@ mod tests {
     fn diagnose_returns_real_findings_whatever_the_model_situation_is() {
         // The contract that matters: a machine with no model, no
         // Ollama and no AVX2 still gets the full diagnosis.
-        let dir: PathBuf = std::env::temp_dir().join(format!(
-            "fossh-selfheal-diagnose-{}",
-            std::process::id()
-        ));
+        let dir: PathBuf =
+            std::env::temp_dir().join(format!("fossh-selfheal-diagnose-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();

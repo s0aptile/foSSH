@@ -5,8 +5,7 @@ use fossh_core::base32;
 use crate::args::{comma_list, flag_value, has_flag, positional, wants_help};
 use crate::common::{load_config, open_store, unix_now};
 
-const USAGE: &str =
-    "usage: fossh site <create|list|disable|rotate-key|rotate-signing-key> ...";
+const USAGE: &str = "usage: fossh site <create|list|disable|rotate-key|rotate-signing-key> ...";
 const HELP: &str = "usage: fossh site <SUBCOMMAND>\n\n\
 SUBCOMMANDS:\n    \
     create <slug> [--allow name,name] [--public-key]\n    \
@@ -21,7 +20,10 @@ pub fn run(args: &[String]) -> i32 {
     // subcommand is chosen, that subcommand's own `wants_help` check
     // handles it, so e.g. `site create --help` shows create's usage,
     // not this generic one.
-    if matches!(args.first().map(String::as_str), Some("--help") | Some("-h")) {
+    if matches!(
+        args.first().map(String::as_str),
+        Some("--help") | Some("-h")
+    ) {
         println!("{HELP}");
         return 0;
     }
@@ -64,9 +66,7 @@ fn print_new_signing_key(slug: &str, signing_key: &ed25519_dalek::SigningKey) {
         "fossh_sign_{slug}_{}",
         base32::encode(&signing_key.to_bytes())
     );
-    println!(
-        "Signing key (for signed-mode/server-to-server auth — displayed once, store it now):"
-    );
+    println!("Signing key (for signed-mode/server-to-server auth — displayed once, store it now):");
     println!("  {key}");
 }
 

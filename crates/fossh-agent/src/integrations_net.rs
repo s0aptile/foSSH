@@ -130,18 +130,33 @@ fn build_config(integration: &Integration, body_path: &str) -> Zeroizing<String>
     let header_line = format!("{header_name}: {}", header_value.as_str());
 
     let mut cfg = String::new();
-    cfg.push_str(&format!("url = {}\n", quote_config_value(&integration.endpoint).as_str()));
-    cfg.push_str(&format!("request = {}\n", quote_config_value(integration.method.as_str()).as_str()));
-    cfg.push_str(&format!("header = {}\n", quote_config_value(&header_line).as_str()));
+    cfg.push_str(&format!(
+        "url = {}\n",
+        quote_config_value(&integration.endpoint).as_str()
+    ));
+    cfg.push_str(&format!(
+        "request = {}\n",
+        quote_config_value(integration.method.as_str()).as_str()
+    ));
+    cfg.push_str(&format!(
+        "header = {}\n",
+        quote_config_value(&header_line).as_str()
+    ));
     cfg.push_str(&format!(
         "user-agent = {}\n",
         quote_config_value(&format!("foSSH/{}", env!("CARGO_PKG_VERSION"))).as_str()
     ));
     if integration.method == Method::Post {
-        cfg.push_str(&format!("data = {}\n", quote_config_value(TEST_BODY).as_str()));
+        cfg.push_str(&format!(
+            "data = {}\n",
+            quote_config_value(TEST_BODY).as_str()
+        ));
         cfg.push_str("header = \"Content-Type: application/json\"\n");
     }
-    cfg.push_str(&format!("output = {}\n", quote_config_value(body_path).as_str()));
+    cfg.push_str(&format!(
+        "output = {}\n",
+        quote_config_value(body_path).as_str()
+    ));
     cfg.push_str("write-out = \"%{http_code}\"\n");
     cfg.push_str(&format!("max-time = {MAX_TIME_SECS}\n"));
     cfg.push_str(&format!("connect-timeout = {CONNECT_TIMEOUT_SECS}\n"));
@@ -416,10 +431,16 @@ mod tests {
         match test(&integration) {
             Err(NetError::CurlMissing) => {}
             Err(NetError::Transport(m)) => {
-                assert!(!m.contains("sk_live_SECRETVALUE1"), "curl echoed the key: {m}");
+                assert!(
+                    !m.contains("sk_live_SECRETVALUE1"),
+                    "curl echoed the key: {m}"
+                );
             }
             Err(NetError::Internal(m)) => panic!("unexpected internal error: {m}"),
-            Ok(o) => panic!("nothing should be listening on port 9, got HTTP {}", o.status),
+            Ok(o) => panic!(
+                "nothing should be listening on port 9, got HTTP {}",
+                o.status
+            ),
         }
     }
 
@@ -431,10 +452,8 @@ mod tests {
             Method::Get,
             "sk_live_SECRETVALUE1",
         );
-        let expected = std::env::temp_dir().join(format!(
-            "fossh-agent-probe-{}-probe",
-            std::process::id()
-        ));
+        let expected =
+            std::env::temp_dir().join(format!("fossh-agent-probe-{}-probe", std::process::id()));
         let _ = test(&integration);
         assert!(
             !expected.exists(),

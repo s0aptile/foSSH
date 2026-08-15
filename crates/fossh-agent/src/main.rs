@@ -49,8 +49,8 @@ use std::io::{BufWriter, Read, Write};
 use std::path::PathBuf;
 
 use fossh_admin::integrations::{self, Auth, Integrations, Method};
-use protocol::{ErrorCode, MethodError, MethodResult, Request, Response, PROTOCOL_VERSION};
-use serde_json::{json, Value};
+use protocol::{ErrorCode, MethodError, MethodResult, PROTOCOL_VERSION, Request, Response};
+use serde_json::{Value, json};
 
 /// Generous next to any real request (the largest is an armored public
 /// key, itself capped at 256 KiB by `setup::MAX_KEY_LEN`) and small
@@ -225,17 +225,15 @@ fn unix_now() -> i64 {
 /// Parameter accessors that fail with a message naming the field, so a
 /// console bug is legible in one line instead of "invalid params".
 fn str_param<'a>(params: &'a Value, key: &str) -> Result<&'a str, MethodError> {
-    params
-        .get(key)
-        .and_then(Value::as_str)
-        .ok_or_else(|| MethodError::bad_request(format!("\"{key}\" is required and must be a string")))
+    params.get(key).and_then(Value::as_str).ok_or_else(|| {
+        MethodError::bad_request(format!("\"{key}\" is required and must be a string"))
+    })
 }
 
 fn i64_param(params: &Value, key: &str) -> Result<i64, MethodError> {
-    params
-        .get(key)
-        .and_then(Value::as_i64)
-        .ok_or_else(|| MethodError::bad_request(format!("\"{key}\" is required and must be a number")))
+    params.get(key).and_then(Value::as_i64).ok_or_else(|| {
+        MethodError::bad_request(format!("\"{key}\" is required and must be a number"))
+    })
 }
 
 impl Agent {
@@ -302,7 +300,7 @@ impl Agent {
 
     fn telemetry_summary(&self) -> MethodResult {
         let sites = telemetry::load_summary(&self.data_dir, unix_now(), self.k_anonymity)
-            .map_err(|e| MethodError::unavailable(e))?;
+            .map_err(MethodError::unavailable)?;
         Ok(json!({
             "k_anonymity": self.k_anonymity,
             "sites": sites
@@ -329,10 +327,9 @@ impl Agent {
                 "\"to\" is earlier than \"from\"".to_string(),
             ));
         }
-        let group_by_raw = p
-            .get("group_by")
-            .and_then(Value::as_array)
-            .ok_or_else(|| MethodError::bad_request("\"group_by\" is required and must be an array"))?;
+        let group_by_raw = p.get("group_by").and_then(Value::as_array).ok_or_else(|| {
+            MethodError::bad_request("\"group_by\" is required and must be an array")
+        })?;
         // Every dimension the store knows, at most once each — a
         // repeated field would produce duplicated columns for no
         // benefit and is far more likely a console bug than intent.
@@ -357,15 +354,8 @@ impl Agent {
             group_by.push(field);
         }
 
-        let result = telemetry::query(
-            &self.data_dir,
-            slug,
-            from,
-            to,
-            &group_by,
-            self.k_anonymity,
-        )
-        .map_err(|e| MethodError::new(ErrorCode::Unavailable, e))?;
+        let result = telemetry::query(&self.data_dir, slug, from, to, &group_by, self.k_anonymity)
+            .map_err(|e| MethodError::new(ErrorCode::Unavailable, e))?;
 
         Ok(json!({
             "k_anonymity": self.k_anonymity,
@@ -417,7 +407,7 @@ impl Agent {
         let generated = self
             .setup
             .generate_key()
-            .map_err(|e| MethodError::internal(e))?;
+            .map_err(MethodError::internal)?;
         // The private half crosses to the console exactly once, so the
         // operator can save it — §3.11's own wording. It is never
         // written to disk by this process and never logged.
@@ -498,7 +488,7 @@ impl Agent {
             other => {
                 return Err(MethodError::bad_request(format!(
                     "\"{other}\" is not a supported method — GET or POST"
-                )))
+                )));
             }
         };
         let auth = match p
@@ -523,7 +513,7 @@ impl Agent {
             other => {
                 return Err(MethodError::bad_request(format!(
                     "\"{other}\" is not a supported credential placement — bearer or header"
-                )))
+                )));
             }
         };
 
@@ -559,9 +549,12 @@ impl Agent {
     fn integrations_test(&self, p: &Value) -> MethodResult {
         let name = str_param(p, "name")?;
         let set = self.load_integrations()?;
-        let integration = set
-            .get(name)
-            .ok_or_else(|| MethodError::new(ErrorCode::NotFound, format!("no integration named \"{name}\"")))?;
+        let integration = set.get(name).ok_or_else(|| {
+            MethodError::new(
+                ErrorCode::NotFound,
+                format!("no integration named \"{name}\""),
+            )
+        })?;
 
         match integrations_net::test(integration) {
             Ok(outcome) => Ok(json!({
@@ -643,7 +636,10 @@ mod tests {
         // pinning in both directions.
         let exact = format!("{}\n", "a".repeat(MAX_LINE_LEN));
         let got = read_all(&exact);
-        assert_eq!(got[0].as_ref().unwrap().as_ref().unwrap().len(), MAX_LINE_LEN);
+        assert_eq!(
+            got[0].as_ref().unwrap().as_ref().unwrap().len(),
+            MAX_LINE_LEN
+        );
     }
 
     #[test]

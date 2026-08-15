@@ -304,7 +304,6 @@ fn parse_mem_total(meminfo: &str) -> u64 {
         if let Some(rest) = line.strip_prefix("MemTotal:") {
             // "MemTotal:       32690156 kB"
             let kb: u64 = rest
-                .trim()
                 .split_whitespace()
                 .next()
                 .and_then(|n| n.parse().ok())
@@ -465,7 +464,11 @@ processor\t: 1
 physical id\t: 1
 core id\t: 0
 ";
-        assert_eq!(count_physical_cores(cpuinfo), 2, "same core id, two sockets");
+        assert_eq!(
+            count_physical_cores(cpuinfo),
+            2,
+            "same core id, two sockets"
+        );
     }
 
     #[test]
@@ -504,7 +507,10 @@ core id\t: 0
         assert!(c.inference_threads() >= 1);
         assert!(!c.explain().is_empty());
         if c.avx512_vnni {
-            assert!(c.avx512, "VNNI without the AVX-512 foundation is impossible");
+            assert!(
+                c.avx512,
+                "VNNI without the AVX-512 foundation is impossible"
+            );
         }
         if c.arch != "x86_64" {
             assert!(!c.avx2 && !c.avx512, "AVX is meaningless off x86-64");

@@ -110,8 +110,8 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use crate::Store;
     use super::{PRAGMAS, SCHEMA_V1};
+    use crate::Store;
 
     fn columns_of(conn: &rusqlite::Connection, table: &str) -> Vec<(String, String, bool)> {
         let mut stmt = conn

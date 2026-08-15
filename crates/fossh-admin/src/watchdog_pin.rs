@@ -385,8 +385,10 @@ mod tests {
         nix::unistd::Uid::current().as_raw()
     }
 
-    const FAKE_WATCHDOG_CERT_PEM: &str = "-----BEGIN CERTIFICATE-----\nZmFrZS13YXRjaGRvZw==\n-----END CERTIFICATE-----\n";
-    const FAKE_CORE_CERT_PEM: &str = "-----BEGIN CERTIFICATE-----\nZmFrZS1jb3Jl\n-----END CERTIFICATE-----\n";
+    const FAKE_WATCHDOG_CERT_PEM: &str =
+        "-----BEGIN CERTIFICATE-----\nZmFrZS13YXRjaGRvZw==\n-----END CERTIFICATE-----\n";
+    const FAKE_CORE_CERT_PEM: &str =
+        "-----BEGIN CERTIFICATE-----\nZmFrZS1jb3Jl\n-----END CERTIFICATE-----\n";
 
     #[test]
     fn a_handoff_from_the_expected_uid_is_accepted_and_persisted_at_0600() {
@@ -426,7 +428,10 @@ mod tests {
 
         assert_eq!(received.watchdog_fingerprint, "AA:BB:CC:DD:EE:FF");
         assert_eq!(received.watchdog_cert_pem, FAKE_WATCHDOG_CERT_PEM);
-        assert_eq!(core_reply, FAKE_CORE_CERT_PEM, "watchdog must receive core's own certificate back");
+        assert_eq!(
+            core_reply, FAKE_CORE_CERT_PEM,
+            "watchdog must receive core's own certificate back"
+        );
         assert_eq!(
             load_pin(&fpr_pin_path).unwrap().as_deref(),
             Some("AA:BB:CC:DD:EE:FF")
@@ -490,7 +495,8 @@ mod tests {
                         Err(e)
                             if matches!(
                                 e.kind(),
-                                std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                                std::io::ErrorKind::BrokenPipe
+                                    | std::io::ErrorKind::ConnectionReset
                             ) => {}
                         Err(e) => panic!("client write failed unexpectedly: {e}"),
                     }
@@ -770,7 +776,10 @@ mod tests {
             }
             thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(became_safe, "a socket with no listener must eventually be detected as safe to remove");
+        assert!(
+            became_safe,
+            "a socket with no listener must eventually be detected as safe to remove"
+        );
     }
 
     #[test]

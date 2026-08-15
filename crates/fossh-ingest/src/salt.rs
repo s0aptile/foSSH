@@ -26,9 +26,9 @@ fn utc_day(t: SystemTime) -> Result<i64, IngestError> {
 }
 
 fn write_new_salt(path: &Path) -> Result<Zeroizing<[u8; SALT_LEN]>, IngestError> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| IngestError::Io(std::io::Error::other("salt path has no parent directory")))?;
+    let dir = path.parent().ok_or_else(|| {
+        IngestError::Io(std::io::Error::other("salt path has no parent directory"))
+    })?;
     fs::create_dir_all(dir)?;
     let random = read_random_bytes(SALT_LEN)?;
     let mut salt = Zeroizing::new([0u8; SALT_LEN]);

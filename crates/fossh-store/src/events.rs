@@ -264,7 +264,10 @@ mod tests {
             .query_row("SELECT visitor FROM events LIMIT 1", [], |r| {
                 r.get::<_, i64>(0)
             });
-        assert!(result.is_err(), "events.visitor must not exist as a column at all");
+        assert!(
+            result.is_err(),
+            "events.visitor must not exist as a column at all"
+        );
     }
 
     #[test]

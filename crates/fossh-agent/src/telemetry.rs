@@ -145,8 +145,10 @@ pub fn query(
         .query_rollup(site.id, from, to, group_by, k_anonymity)
         .map_err(|e| e.to_string())?;
 
-    let entirely_folded =
-        !rows.is_empty() && rows.iter().all(|r| r.dims.iter().all(|(_, v)| v == "(other)"));
+    let entirely_folded = !rows.is_empty()
+        && rows
+            .iter()
+            .all(|r| r.dims.iter().all(|(_, v)| v == "(other)"));
 
     let rows = rows
         .into_iter()
@@ -199,7 +201,11 @@ mod tests {
             GroupByField::Os,
             GroupByField::Device,
         ] {
-            assert_eq!(parse_field(field_name(f)), Some(f), "{f:?} did not round-trip");
+            assert_eq!(
+                parse_field(field_name(f)),
+                Some(f),
+                "{f:?} did not round-trip"
+            );
         }
         assert_eq!(parse_field("visitor_ip"), None);
         assert_eq!(parse_field(""), None);
@@ -269,7 +275,14 @@ mod tests {
             let key = fossh_admin::data_key::load_or_generate(&dir.join(".data_key")).unwrap();
             let store = Store::open_encrypted(&db_path(&dir), &key).unwrap();
             store
-                .create_site("blog", &[7u8; 32], None, &["pageview".to_string()], 0, false)
+                .create_site(
+                    "blog",
+                    &[7u8; 32],
+                    None,
+                    &["pageview".to_string()],
+                    0,
+                    false,
+                )
                 .unwrap();
         }
         let result = query(&dir, "blog", 0, 1_700_000_000, &[GroupByField::Path], 5).unwrap();

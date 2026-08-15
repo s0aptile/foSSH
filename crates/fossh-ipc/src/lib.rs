@@ -141,7 +141,10 @@ fn random_conn_id() -> [u8; quiche::MAX_CONN_ID_LEN] {
 /// that only cares about "did I get to send" is guaranteed at least
 /// one real send-drain pass before this function can return.
 fn drive_until<F>(
-    conn: &mut quiche::Connection, socket: &UdpSocket, deadline: Instant, mut done: F,
+    conn: &mut quiche::Connection,
+    socket: &UdpSocket,
+    deadline: Instant,
+    mut done: F,
 ) -> Result<(), IpcError>
 where
     F: FnMut(&mut quiche::Connection) -> bool,
@@ -259,7 +262,9 @@ fn set_socket_timeouts(socket: &UdpSocket) -> Result<(), IpcError> {
 /// keeps driving both with `service` for the connection's remaining
 /// lifetime.
 pub fn connect(
-    peer_addr: SocketAddr, tls: &TlsPaths, deadline: Instant,
+    peer_addr: SocketAddr,
+    tls: &TlsPaths,
+    deadline: Instant,
 ) -> Result<(quiche::Connection, UdpSocket), IpcError> {
     let bind_addr: SocketAddr = match peer_addr {
         SocketAddr::V4(_) => "0.0.0.0:0".parse().unwrap(),
@@ -289,7 +294,9 @@ pub fn connect(
 /// core, not a multi-client server (see this module's header
 /// comment), so there is no connection-ID-keyed client table here.
 pub fn accept_one(
-    listen_addr: SocketAddr, tls: &TlsPaths, deadline: Instant,
+    listen_addr: SocketAddr,
+    tls: &TlsPaths,
+    deadline: Instant,
 ) -> Result<(quiche::Connection, UdpSocket), IpcError> {
     let socket = UdpSocket::bind(listen_addr)?;
     set_socket_timeouts(&socket)?;
@@ -318,8 +325,7 @@ pub fn accept_one(
                 };
 
                 let scid = quiche::ConnectionId::from_vec(random_conn_id().to_vec());
-                let mut new_conn =
-                    quiche::accept(&scid, None, local_addr, from, &mut config)?;
+                let mut new_conn = quiche::accept(&scid, None, local_addr, from, &mut config)?;
                 let recv_info = quiche::RecvInfo {
                     to: local_addr,
                     from,
@@ -344,8 +350,12 @@ pub fn accept_one(
 /// has flushed everything it's willing to send this pass or the
 /// deadline passes.
 pub fn send_on_stream(
-    conn: &mut quiche::Connection, socket: &UdpSocket, stream_id: u64, data: &[u8],
-    fin: bool, deadline: Instant,
+    conn: &mut quiche::Connection,
+    socket: &UdpSocket,
+    stream_id: u64,
+    data: &[u8],
+    fin: bool,
+    deadline: Instant,
 ) -> Result<(), IpcError> {
     conn.stream_send(stream_id, data, fin)?;
     drive_until(conn, socket, deadline, |_| true)
@@ -369,7 +379,10 @@ pub fn send_on_stream(
 /// removes the gap between "observing readable" and "acting on it"
 /// entirely.
 pub fn recv_from_stream(
-    conn: &mut quiche::Connection, socket: &UdpSocket, stream_id: u64, deadline: Instant,
+    conn: &mut quiche::Connection,
+    socket: &UdpSocket,
+    stream_id: u64,
+    deadline: Instant,
 ) -> Result<(Vec<u8>, bool), IpcError> {
     let mut collected = Vec::new();
     let mut got_fin = false;

@@ -37,9 +37,7 @@ pub fn hash_visitor(
     ua_string: &str,
     site_id: SiteId,
 ) -> u64 {
-    let mut input = Zeroizing::new(Vec::with_capacity(
-        client_ip.len() + ua_string.len() + 4,
-    ));
+    let mut input = Zeroizing::new(Vec::with_capacity(client_ip.len() + ua_string.len() + 4));
     input.extend_from_slice(client_ip.as_bytes());
     input.extend_from_slice(ua_string.as_bytes());
     input.extend_from_slice(&site_id.get().to_be_bytes());

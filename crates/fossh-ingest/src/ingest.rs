@@ -429,7 +429,14 @@ mod tests {
     fn signed_auth_happy_path_is_a_commit_with_no_cors_echo() {
         let dir = scratch_dir("signed-happy");
         let (signing_key, verifying_key) = signing_keypair(9);
-        seed_site(&dir, "blog", [0u8; 32], Some(verifying_key), &["pageview"], false);
+        seed_site(
+            &dir,
+            "blog",
+            [0u8; 32],
+            Some(verifying_key),
+            &["pageview"],
+            false,
+        );
 
         let mut env = base_env();
         env.key_id = Some("blog".to_string());
@@ -490,7 +497,14 @@ mod tests {
         let write_key = [0x77u8; 32];
         let key_hash = *blake3::hash(&write_key).as_bytes();
         let (_real_signing_key, real_verifying_key) = signing_keypair(9);
-        seed_site(&dir, "blog", key_hash, Some(real_verifying_key), &["pageview"], false);
+        seed_site(
+            &dir,
+            "blog",
+            key_hash,
+            Some(real_verifying_key),
+            &["pageview"],
+            false,
+        );
         let _ = write_key;
 
         let stolen_key_hash = key_hash;
@@ -501,8 +515,7 @@ mod tests {
         env.ts_header = Some("1700000000".to_string());
         env.nonce_header = Some("attacker-nonce".to_string());
         let body: &[u8] = br#"{"name":"pageview"}"#;
-        let canonical =
-            auth::canonical_string("POST", "/e", 1_700_000_000, "attacker-nonce", body);
+        let canonical = auth::canonical_string("POST", "/e", 1_700_000_000, "attacker-nonce", body);
         env.sig_header = Some(signed_header(&attacker_signing_key, &canonical));
 
         let decision = decide_default(&dir, &env, body);
@@ -517,7 +530,14 @@ mod tests {
     fn signed_auth_replayed_nonce_is_401() {
         let dir = scratch_dir("signed-replay");
         let (signing_key, verifying_key) = signing_keypair(9);
-        seed_site(&dir, "blog", [0u8; 32], Some(verifying_key), &["pageview"], false);
+        seed_site(
+            &dir,
+            "blog",
+            [0u8; 32],
+            Some(verifying_key),
+            &["pageview"],
+            false,
+        );
 
         let mut env = base_env();
         env.key_id = Some("blog".to_string());
@@ -545,7 +565,14 @@ mod tests {
     fn signed_auth_stale_timestamp_is_401() {
         let dir = scratch_dir("signed-stale");
         let (signing_key, verifying_key) = signing_keypair(9);
-        seed_site(&dir, "blog", [0u8; 32], Some(verifying_key), &["pageview"], false);
+        seed_site(
+            &dir,
+            "blog",
+            [0u8; 32],
+            Some(verifying_key),
+            &["pageview"],
+            false,
+        );
 
         let mut env = base_env();
         env.key_id = Some("blog".to_string());

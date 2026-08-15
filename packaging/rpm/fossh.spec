@@ -240,6 +240,7 @@ Requires:       %{name} = %{version}-%{release}
 # spirit but not in fact: it Requires the base package, which is not,
 # and splitting it further to gain that would mean two source packages
 # for one product.
+BuildArch:      noarch
 Requires:       python3 >= 3.9
 Requires:       python3-gobject
 Requires:       gtk4 >= 4.10
@@ -277,6 +278,7 @@ RETIREMENT.md.
 
 %package selfheal
 Summary:        Optional local-model advisory layer for foSSH self-healing
+BuildArch:      noarch
 Requires:       %{name} = %{version}-%{release}
 Requires:       httpd
 Requires:       gnupg2
@@ -468,6 +470,9 @@ install -m0644 gui/fossh_console/views/*.py %{buildroot}%{python3_sitelib}/fossh
 
 install -D -m0755 gui/fossh-console %{buildroot}%{_bindir}/fossh-console
 
+install -D -m0644 docs/man/fossh-console.1 \
+    %{buildroot}%{_mandir}/man1/fossh-console.1
+
 install -D -m0644 gui/data/org.fossh.Console.desktop \
     %{buildroot}%{_datadir}/applications/org.fossh.Console.desktop
 install -D -m0644 gui/data/org.fossh.Console.metainfo.xml \
@@ -489,6 +494,8 @@ appstream-util validate-relax --nonet \
 # --- fossh-selfheal (optional local-model advisory layer) ---
 install -D -m0644 packaging/apache/fossh-model.conf \
     %{buildroot}%{_sysconfdir}/httpd/conf.d/fossh-model.conf
+install -D -m0644 packaging/model/Modelfile \
+    %{buildroot}%{_datadir}/%{name}/model/Modelfile
 
 
 %pre
@@ -562,6 +569,25 @@ runuser -u fossh-watchdog -- %{_bindir}/fossh-watchdog generate-manifest \
 # application requests until the setup wizard (fossh-agent) completes.
 %endif
 
+%post selfheal
+# The secret Apache checks against, generated once, as root, with
+# ownership neither side could have arranged for itself: Apache runs
+# as `apache` and the agent as `fossh-svc`, so a file readable by only
+# one of them makes the endpoint either unreachable or unguarded.
+#
+# `printf`, never `echo`: a trailing newline here silently breaks the
+# comparison in fossh-model.conf forever. See that file's own comment.
+if [ ! -s %{_sysconfdir}/fossh/model-access-secret ]; then
+    install -d -m0755 %{_sysconfdir}/fossh
+    umask 077
+    printf '%%s' "$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')" \
+        > %{_sysconfdir}/fossh/model-access-secret
+    chgrp apache %{_sysconfdir}/fossh/model-access-secret 2>/dev/null || :
+    chmod 0640 %{_sysconfdir}/fossh/model-access-secret
+fi
+# So the agent can read the same file Apache does.
+usermod -a -G apache fossh-svc >/dev/null 2>&1 || :
+
 %preun
 %systemd_preun fossh-fcgiwrap.socket fossh-fcgiwrap.service
 %systemd_preun fossh-fcgi.service
@@ -617,6 +643,7 @@ fi
 %license LICENSE
 %doc RETIREMENT.md
 %{_bindir}/fossh-console
+%{_mandir}/man1/fossh-console.1*
 %{python3_sitelib}/fossh_console/
 %{_datadir}/applications/org.fossh.Console.desktop
 %{_metainfodir}/org.fossh.Console.metainfo.xml
@@ -625,11 +652,15 @@ fi
 
 %files selfheal
 %license LICENSE
+%doc docs/SELF-HEALING.md
 # %%config(noreplace): an operator who has edited the vhost -- a
 # different port, an extra Require -- must not have it silently
 # replaced on upgrade. rpm leaves theirs and writes ours alongside as
 # .rpmnew.
 %config(noreplace) %{_sysconfdir}/httpd/conf.d/fossh-model.conf
+%dir %{_datadir}/%{name}
+%dir %{_datadir}/%{name}/model
+%{_datadir}/%{name}/model/Modelfile
 
 
 %changelog

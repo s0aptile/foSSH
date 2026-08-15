@@ -170,8 +170,9 @@ fn core_quic_client_interops_with_the_real_watchdog_command_server() {
     // Core's own identity, generated via the real product function —
     // not a throwaway openssl-only fixture — the same one
     // quic_client::run itself calls.
-    let core_identity = fossh_admin::tls_identity::ensure_identity(&core_tls_dir, "fossh-svc-interop-test")
-        .expect("ensure_identity for core");
+    let core_identity =
+        fossh_admin::tls_identity::ensure_identity(&core_tls_dir, "fossh-svc-interop-test")
+            .expect("ensure_identity for core");
 
     // Stands in for a completed §2.4 bootstrap handoff: that exchange
     // already has its own dedicated real cross-language test

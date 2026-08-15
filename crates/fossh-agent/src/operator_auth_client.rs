@@ -120,7 +120,9 @@ fn read_line_bounded(
             return Err("timed out waiting for a full line".to_string());
         }
         if buf.len() >= max_len {
-            return Err(format!("line exceeded {max_len} bytes without a '\\n' terminator"));
+            return Err(format!(
+                "line exceeded {max_len} bytes without a '\\n' terminator"
+            ));
         }
         match reader.read(&mut byte) {
             Ok(0) => {
@@ -435,7 +437,9 @@ impl std::fmt::Display for SetupError {
                  awaiting setup"
             ),
             Self::MalformedKey(e) => write!(f, "that doesn't look like a valid key: {e}"),
-            Self::EnrollFailed(code) => write!(f, "the watchdog refused to enroll this key: {code}"),
+            Self::EnrollFailed(code) => {
+                write!(f, "the watchdog refused to enroll this key: {code}")
+            }
             Self::GpgNotAvailable(e) => write!(f, "could not run gpg: {e}"),
             Self::GpgFailed(e) => write!(f, "gpg failed: {e}"),
             Self::Protocol(e) => write!(f, "operator setup protocol error: {e}"),
@@ -468,7 +472,10 @@ fn parse_setup_reply(line: &str) -> Result<(), SetupError> {
 }
 
 fn parse_enroll_reply(line: &str) -> Result<String, SetupError> {
-    if let Some(fpr) = line.strip_prefix("ENROLLED ").and_then(|r| r.strip_suffix('\n')) {
+    if let Some(fpr) = line
+        .strip_prefix("ENROLLED ")
+        .and_then(|r| r.strip_suffix('\n'))
+    {
         if fpr.is_empty() {
             return Err(SetupError::Protocol(format!(
                 "ENROLLED with no fingerprint: {line:?}"
@@ -639,8 +646,9 @@ fn ensure_gnupghome_exists(gnupghome_override: Option<&Path>) -> Result<(), Setu
     }
     std::fs::create_dir_all(&dir)
         .map_err(|e| SetupError::GpgFailed(format!("creating {}: {e}", dir.display())))?;
-    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
-        .map_err(|e| SetupError::GpgFailed(format!("setting permissions on {}: {e}", dir.display())))?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| {
+        SetupError::GpgFailed(format!("setting permissions on {}: {e}", dir.display()))
+    })?;
     Ok(())
 }
 
@@ -911,7 +919,10 @@ mod tests {
         );
         let elapsed = start.elapsed();
         let _ = server.join();
-        assert!(result.is_err(), "a line that never completes must time out, not hang forever");
+        assert!(
+            result.is_err(),
+            "a line that never completes must time out, not hang forever"
+        );
         assert!(
             elapsed < Duration::from_millis(800),
             "must give up close to the 200ms deadline, not wait out the full drip (elapsed: {elapsed:?})"
@@ -1347,7 +1358,8 @@ mod tests {
             .env("FOSSH_WATCHDOG_ALLOW_NO_PRIVDROP", "1")
             .stdout(Stdio::null())
             .stderr(Stdio::from(
-                std::fs::File::create(&watchdog_log).expect("could not create the watchdog log file"),
+                std::fs::File::create(&watchdog_log)
+                    .expect("could not create the watchdog log file"),
             ))
             .spawn()
             .expect("failed to spawn the real fossh-watchdog binary");
@@ -1407,7 +1419,10 @@ mod tests {
 
     #[test]
     fn setup_denied_line_is_the_token_denied_error() {
-        assert_eq!(parse_setup_reply("SETUP_DENIED\n"), Err(SetupError::TokenDenied));
+        assert_eq!(
+            parse_setup_reply("SETUP_DENIED\n"),
+            Err(SetupError::TokenDenied)
+        );
     }
 
     #[test]
@@ -1484,7 +1499,8 @@ mod tests {
     fn setup_at_rejects_a_multiline_token_before_ever_connecting() {
         let dir = scratch_dir("setup-multiline-token");
         let socket_path = dir.join("does-not-exist.sock");
-        let valid_key = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nx\n-----END PGP PUBLIC KEY BLOCK-----\n";
+        let valid_key =
+            "-----BEGIN PGP PUBLIC KEY BLOCK-----\nx\n-----END PGP PUBLIC KEY BLOCK-----\n";
 
         let result = setup_at(&socket_path, "line-one\nline-two", valid_key);
 
@@ -1496,7 +1512,8 @@ mod tests {
     fn setup_at_rejects_an_empty_token_before_ever_connecting() {
         let dir = scratch_dir("setup-empty-token");
         let socket_path = dir.join("does-not-exist.sock");
-        let valid_key = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nx\n-----END PGP PUBLIC KEY BLOCK-----\n";
+        let valid_key =
+            "-----BEGIN PGP PUBLIC KEY BLOCK-----\nx\n-----END PGP PUBLIC KEY BLOCK-----\n";
 
         let result = setup_at(&socket_path, "", valid_key);
 
@@ -1508,7 +1525,8 @@ mod tests {
     fn setup_at_reports_unreachable_for_a_missing_socket() {
         let dir = scratch_dir("setup-missing-socket");
         let socket_path = dir.join("does-not-exist.sock");
-        let valid_key = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nx\n-----END PGP PUBLIC KEY BLOCK-----\n";
+        let valid_key =
+            "-----BEGIN PGP PUBLIC KEY BLOCK-----\nx\n-----END PGP PUBLIC KEY BLOCK-----\n";
 
         let result = setup_at(&socket_path, "sometoken", valid_key);
 
@@ -1558,7 +1576,8 @@ mod tests {
 
         let server = std::thread::spawn(move || {
             let (mut conn, _) = listener.accept().unwrap();
-            conn.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            conn.set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
             conn.write_all(b"NOT_ENROLLED\n").unwrap();
             let line = read_setup_line(&mut conn);
             assert_eq!(line, "SETUP the-real-token\n");
@@ -1583,7 +1602,8 @@ mod tests {
 
         let server = std::thread::spawn(move || {
             let (mut conn, _) = listener.accept().unwrap();
-            conn.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            conn.set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
             conn.write_all(b"NOT_ENROLLED\n").unwrap();
             let _line = read_setup_line(&mut conn);
             conn.write_all(b"SETUP_DENIED\n").unwrap();
@@ -1605,7 +1625,8 @@ mod tests {
 
         let server = std::thread::spawn(move || {
             let (mut conn, _) = listener.accept().unwrap();
-            conn.write_all(format!("NONCE {nonce}\n").as_bytes()).unwrap();
+            conn.write_all(format!("NONCE {nonce}\n").as_bytes())
+                .unwrap();
             // A correct client must never send a SETUP line here — see
             // the assertion in the test body below, which proves it by
             // reusing this same connection for a second read that
@@ -1628,7 +1649,8 @@ mod tests {
 
         let server = std::thread::spawn(move || {
             let (mut conn, _) = listener.accept().unwrap();
-            conn.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            conn.set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
             conn.write_all(b"NOT_ENROLLED\n").unwrap();
             let _line = read_setup_line(&mut conn);
             conn.write_all(b"SETUP_OK\n").unwrap();
@@ -1773,7 +1795,8 @@ mod tests {
         let dir = scratch_dir("setup-real-interop");
 
         let watchdog_gnupghome = dir.join("watchdog-gnupghome");
-        let watchdog_fpr = generate_test_key(&watchdog_gnupghome, "fossh-watchdog-setup-interop-test");
+        let watchdog_fpr =
+            generate_test_key(&watchdog_gnupghome, "fossh-watchdog-setup-interop-test");
         let supervised_program = "/bin/sleep";
         let manifest = sign_manifest(&watchdog_gnupghome, &watchdog_fpr, &[supervised_program]);
         let manifest_path = dir.join("manifest.clearsigned");
@@ -1814,7 +1837,8 @@ mod tests {
             .env("FOSSH_WATCHDOG_ALLOW_NO_PRIVDROP", "1")
             .stdout(Stdio::null())
             .stderr(Stdio::from(
-                std::fs::File::create(&watchdog_log).expect("could not create the watchdog log file"),
+                std::fs::File::create(&watchdog_log)
+                    .expect("could not create the watchdog log file"),
             ))
             .spawn()
             .expect("failed to spawn the real fossh-watchdog binary");
@@ -1834,7 +1858,8 @@ mod tests {
         let operator_pubkey = export_pubkey_armored(&operator_gnupghome, &operator_fpr);
 
         // Wrong token first -- must not consume/burn the real one.
-        let wrong_token_result = setup_at(&auth_socket, "definitely-not-the-token", &operator_pubkey);
+        let wrong_token_result =
+            setup_at(&auth_socket, "definitely-not-the-token", &operator_pubkey);
         assert_eq!(
             wrong_token_result,
             Err(SetupError::TokenDenied),
@@ -1855,7 +1880,9 @@ mod tests {
             Ok(fpr) => fpr,
             Err(e) => {
                 let _ = watchdog_process.kill();
-                panic!("expected the real watchdog to enroll a valid key with the real token, got: {e}");
+                panic!(
+                    "expected the real watchdog to enroll a valid key with the real token, got: {e}"
+                );
             }
         };
         assert_eq!(

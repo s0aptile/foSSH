@@ -5,11 +5,27 @@
 //! ## 1. Access — a per-install bearer secret
 //!
 //! Apache sits in front of Ollama on loopback and requires a secret
-//! that is generated once, at random, and stored 0600 readable only by
-//! `fossh-svc`. Nothing else can reach the model: Ollama itself binds
-//! `127.0.0.1`, Apache is the only thing in front of it, and the
-//! person whose visit is being counted is on a different machine
-//! entirely.
+//! generated once, at random. Nothing else can reach the model: Ollama
+//! itself binds `127.0.0.1`, Apache is the only thing in front of it,
+//! and the person whose visit is being counted is on a different
+//! machine entirely.
+//!
+//! Two properties of that file are load-bearing and neither is
+//! obvious:
+//!
+//! * **No trailing newline.** Apache's `file()` expression function
+//!   returns the file's bytes verbatim, so a secret written with a
+//!   newline compares as `"abc\n"` against a header of `"abc"` and
+//!   the check denies every request forever while looking entirely
+//!   correct. Written without one here, and asserted by a test.
+//! * **Readable by two different accounts.** Apache runs as `apache`
+//!   and this code runs as `fossh-svc`. A file readable by only one
+//!   of them leaves the endpoint either unreachable or unguarded, so
+//!   the packaged path is `root:apache` mode 0640 with `fossh-svc`
+//!   added to the `apache` group — arranged by the subpackage's
+//!   `%post`, because neither account can grant it to itself. The
+//!   0600 written below is for the development case, where one
+//!   account is running everything.
 //!
 //! It is a bearer secret rather than an OpenPGP challenge-response
 //! because Apache can check the former with one directive it already
@@ -227,21 +243,27 @@ pub fn parse_verified_manifest(
             // Any of these means do not proceed, regardless of
             // GOODSIG, and regardless of gpg's exit code.
             Some("REVKEYSIG") => {
-                return Err(LockError::Tampered("the signing key is revoked".to_string()))
+                return Err(LockError::Tampered(
+                    "the signing key is revoked".to_string(),
+                ));
             }
             Some("EXPKEYSIG") => {
-                return Err(LockError::Tampered("the signing key has expired".to_string()))
+                return Err(LockError::Tampered(
+                    "the signing key has expired".to_string(),
+                ));
             }
             Some("EXPSIG") => {
-                return Err(LockError::Tampered("the signature has expired".to_string()))
+                return Err(LockError::Tampered("the signature has expired".to_string()));
             }
             Some("BADSIG") => {
-                return Err(LockError::Tampered("the signature does not match".to_string()))
+                return Err(LockError::Tampered(
+                    "the signature does not match".to_string(),
+                ));
             }
             Some("ERRSIG") => {
                 return Err(LockError::Tampered(
                     "the signature could not be checked".to_string(),
-                ))
+                ));
             }
             Some("VALIDSIG") => {
                 if let Some(fpr) = parts.next() {
@@ -379,11 +401,9 @@ mod tests {
 
     #[test]
     fn an_unsigned_manifest_is_refused() {
-        let err = parse_verified_manifest(
-            "endpoint=http://127.0.0.1:11434\nmodel=x\nthreads=1\n",
-            FPR,
-        )
-        .unwrap_err();
+        let err =
+            parse_verified_manifest("endpoint=http://127.0.0.1:11434\nmodel=x\nthreads=1\n", FPR)
+                .unwrap_err();
         assert!(matches!(err, LockError::Tampered(ref m) if m.contains("no good signature")));
     }
 
@@ -402,11 +422,16 @@ mod tests {
     fn fingerprint_comparison_is_case_insensitive() {
         // gpg emits uppercase; a fingerprint stored lowercase
         // elsewhere in this codebase must still match.
-        assert!(parse_verified_manifest(
-            &status(&["GOODSIG 1 x", &format!("VALIDSIG {} 2026", FPR.to_lowercase())]),
-            FPR,
-        )
-        .is_ok());
+        assert!(
+            parse_verified_manifest(
+                &status(&[
+                    "GOODSIG 1 x",
+                    &format!("VALIDSIG {} 2026", FPR.to_lowercase())
+                ]),
+                FPR,
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -440,12 +465,35 @@ mod tests {
     }
 
     #[test]
+    fn a_generated_secret_has_no_trailing_newline() {
+        // Apache's file() returns the bytes verbatim. A newline here
+        // makes `Require expr` compare "abc\n" against a header of
+        // "abc" and deny everything, permanently, while the config
+        // reads as correct. This is the assertion that keeps the two
+        // sides agreeing.
+        let dir = scratch("no-newline");
+        let secret = load_or_generate_secret(&dir).unwrap();
+        let raw = fs::read(secret_path(&dir)).unwrap();
+        assert!(
+            !raw.ends_with(b"\n"),
+            "the secret file must not end in a newline"
+        );
+        assert!(!raw.ends_with(b"\r"));
+        assert_eq!(raw, secret.as_bytes());
+        assert!(raw.iter().all(|b| b.is_ascii_hexdigit()));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn a_generated_secret_is_owner_only_and_reused_on_the_next_call() {
         let dir = scratch("secret");
         let first = load_or_generate_secret(&dir).unwrap();
         assert_eq!(first.len(), SECRET_BYTES * 2, "hex of 32 bytes");
 
-        let mode = fs::metadata(secret_path(&dir)).unwrap().permissions().mode();
+        let mode = fs::metadata(secret_path(&dir))
+            .unwrap()
+            .permissions()
+            .mode();
         assert_eq!(mode & 0o777, 0o600, "got {:o}", mode & 0o777);
 
         let second = load_or_generate_secret(&dir).unwrap();

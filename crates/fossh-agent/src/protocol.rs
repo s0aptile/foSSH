@@ -159,7 +159,8 @@ mod tests {
         // The console distinguishes the two shapes by `ok`, but a
         // stray `"error": null` would still be a lie in the transcript
         // and in any log an operator pastes into a bug report.
-        let line = serde_json::to_string(&Response::success(7, serde_json::json!({"a": 1}))).unwrap();
+        let line =
+            serde_json::to_string(&Response::success(7, serde_json::json!({"a": 1}))).unwrap();
         assert!(line.contains("\"ok\":true"));
         assert!(!line.contains("error"));
     }
@@ -213,6 +214,9 @@ mod tests {
             MethodError::internal("first line\nsecond line"),
         ))
         .unwrap();
-        assert!(!line.contains('\n'), "a response must never contain a raw newline");
+        assert!(
+            !line.contains('\n'),
+            "a response must never contain a raw newline"
+        );
     }
 }

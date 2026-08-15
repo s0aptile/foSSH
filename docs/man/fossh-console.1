@@ -1,0 +1,102 @@
+.TH FOSSH\-CONSOLE 1 "2026-08-15" "foSSH 0.2.0" "foSSH Manual"
+.SH NAME
+fossh\-console \- desktop console for administering a foSSH install
+.SH SYNOPSIS
+.B fossh\-console
+.SH DESCRIPTION
+.B fossh\-console
+is the local administration interface for a foSSH install. It shows
+what each site recorded today, runs k\-anonymised queries against the
+rollup store, manages external services added with an API key, and
+drives first\-run operator enrollment.
+.PP
+It takes no arguments and opens nothing it was not started with. All
+of its data comes from
+.BR fossh\-agent (8),
+a helper process it spawns over a pipe; the console itself never
+listens on a socket and holds no credential longer than the call that
+carries it.
+.SH "PRIVACY BEHAVIOUR WORTH KNOWING"
+Breakdowns are folded before they reach this window. Any group with
+fewer than
+.I k_anonymity
+estimated unique visitors (default 5) is combined into a single
+.B (other)
+row inside the store's own query engine, so no read path can bypass
+it. On a low\-traffic site this is the normal case, not a malfunction,
+and the Telemetry page says so explicitly rather than drawing an empty
+chart.
+.PP
+Totals are unaffected by the fold; only per\-group breakdowns can
+disappear this way.
+.SH "API KEYS"
+A key added under Integrations is sealed on disk under the install's
+own data key and is never sent back to this window. The list shows at
+most the last four characters, and only when the key is long enough
+for four to be a hint rather than most of it. There is no way to
+reveal a stored key from the interface, because the interface does not
+have it. Replacing a key means removing the integration and adding it
+again.
+.PP
+Plain
+.B http://
+is refused for anything but a loopback address: a key sent over it is
+readable by anything on the path.
+.SH "KEYBOARD"
+.TP
+.BR Ctrl+R ", " F5
+Refresh the current page.
+.TP
+.BR Ctrl+1 " .. " Ctrl+4
+Jump to Overview, Telemetry, Integrations or Setup.
+.TP
+.B Ctrl+?
+Show the keyboard shortcuts.
+.TP
+.B Ctrl+W
+Close the window.
+.TP
+.B Ctrl+Q
+Quit.
+.SH ENVIRONMENT
+.TP
+.B FOSSH_DATA_DIR
+The install's data directory. Default
+.IR /var/lib/fossh .
+.TP
+.B FOSSH_AGENT_BIN
+Path to the helper binary, for running against a build tree. Default
+.IR /usr/libexec/fossh/fossh\-agent .
+.TP
+.B FOSSH_K_ANONYMITY
+Overrides the k\-anonymity threshold the helper reports. An explicit
+.B 0
+is rejected and the safe default used instead, because a threshold of
+zero does not weaken the guarantee, it removes it.
+.TP
+.B FOSSH_SETUP_TOKEN_PATH
+Where the watchdog's one\-time setup token is read from. Default
+.IR /etc/fossh/setup\-token .
+.SH FILES
+.TP
+.I /var/lib/fossh/fossh.db
+The rollup store this console reads.
+.TP
+.I /var/lib/fossh/integrations.enc
+Configured external services, sealed.
+.SH "EXIT STATUS"
+Returns 0 on a clean quit. A failure to start the helper is reported
+in the window rather than on exit, so that an operator who launched
+this from a desktop menu sees it.
+.SH "SEE ALSO"
+.BR fossh (1),
+.BR fossh\-fcgi (8),
+.BR fossh\-watchdog (8)
+.PP
+.IR /usr/share/doc/fossh/README.md ,
+.I /usr/share/doc/fossh-console/RETIREMENT.md
+.SH NOTES
+This console replaces the
+.B fossh\-tui
+terminal interface shipped up to 0.1.3. That release line is retired;
+see RETIREMENT.md for what was wrong with it.

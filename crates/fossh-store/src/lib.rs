@@ -446,7 +446,10 @@ mod tests {
                 .conn
                 .query_row("SELECT v FROM props LIMIT 1", [], |r| r.get(0))
                 .unwrap();
-            assert_eq!(stored, MARKER, "the real API must still read back the exact marker");
+            assert_eq!(
+                stored, MARKER,
+                "the real API must still read back the exact marker"
+            );
             drop(store);
             cleanup(&path);
         }
@@ -485,7 +488,10 @@ mod tests {
 
             let result = Store::open_encrypted(&path, &KEY_B);
             assert!(
-                matches!(result, Err(StoreError::EncryptionKeyMismatchOrCorrupt { .. })),
+                matches!(
+                    result,
+                    Err(StoreError::EncryptionKeyMismatchOrCorrupt { .. })
+                ),
                 "opening with the wrong key must fail cleanly, not return a usable Store: got {result:?}"
             );
             cleanup(&path);
@@ -530,7 +536,10 @@ mod tests {
                 .conn
                 .query_row("SELECT v FROM props LIMIT 1", [], |r| r.get(0))
                 .unwrap();
-            assert_eq!(recovered, MARKER, "migration must preserve existing data, not discard it");
+            assert_eq!(
+                recovered, MARKER,
+                "migration must preserve existing data, not discard it"
+            );
             drop(store);
 
             let raw_after = all_bytes_on_disk(&path);

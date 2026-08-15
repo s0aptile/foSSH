@@ -66,16 +66,7 @@ const SITE_COLUMNS: &str =
 #[allow(clippy::type_complexity)]
 fn map_site_row(
     row: &rusqlite::Row,
-) -> rusqlite::Result<(
-    i64,
-    String,
-    Vec<u8>,
-    Option<Vec<u8>>,
-    String,
-    i64,
-    i64,
-    i64,
-)> {
+) -> rusqlite::Result<(i64, String, Vec<u8>, Option<Vec<u8>>, String, i64, i64, i64)> {
     Ok((
         row.get(0)?,
         row.get(1)?,
@@ -174,7 +165,11 @@ impl Store {
     /// verifying key. Independent of `rotate_site_key`: a site's bearer
     /// write key and its signed-mode keypair are two different
     /// credentials, rotated separately.
-    pub fn set_sign_pubkey(&self, slug: &str, new_sign_pubkey: &[u8; 32]) -> Result<bool, StoreError> {
+    pub fn set_sign_pubkey(
+        &self,
+        slug: &str,
+        new_sign_pubkey: &[u8; 32],
+    ) -> Result<bool, StoreError> {
         let affected = self.conn.execute(
             "UPDATE sites SET sign_pubkey = ?1 WHERE slug = ?2",
             params![new_sign_pubkey.as_slice(), slug],
@@ -322,7 +317,11 @@ mod tests {
         assert!(store.set_sign_pubkey("blog", &hash_of(9)).unwrap());
 
         let site = store.find_site_by_slug("blog").unwrap().unwrap();
-        assert_eq!(site.key_hash, hash_of(1), "bearer key_hash must be untouched");
+        assert_eq!(
+            site.key_hash,
+            hash_of(1),
+            "bearer key_hash must be untouched"
+        );
         assert_eq!(site.sign_pubkey, Some(hash_of(9)));
     }
 

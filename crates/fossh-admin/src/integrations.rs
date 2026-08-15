@@ -121,8 +121,7 @@ impl Method {
 /// purpose: whoever is on the receiving end, possibly months later
 /// reading a log, should be able to tell what this was without having
 /// to ask.
-pub const TEST_BODY: &str =
-    r#"{"source":"fossh","event":"connectivity-test","note":"sent by an operator from the foSSH console to verify this integration's endpoint and credential; carries no telemetry"}"#;
+pub const TEST_BODY: &str = r#"{"source":"fossh","event":"connectivity-test","note":"sent by an operator from the foSSH console to verify this integration's endpoint and credential; carries no telemetry"}"#;
 
 /// One configured service. `api_key` is deliberately not `pub`: every
 /// path that reads it has to go through `api_key()`, which makes the
@@ -311,10 +310,7 @@ fn validate_host_present(rest: &str) -> Result<(), IntegrationError> {
 /// host a real URL parser would find, not to whatever a naive
 /// last-`@`-wins split returns.
 fn host_of(rest: &str) -> &str {
-    let authority = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or("");
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     let after_userinfo = match authority.rsplit_once('@') {
         Some((_, h)) => h,
         None => authority,
@@ -433,8 +429,8 @@ impl Integrations {
         if meta.len() > MAX_FILE_LEN {
             return Err(IntegrationError::Corrupt);
         }
-        let sealed =
-            fs::read(&path).map_err(|e| IntegrationError::Io(format!("{}: {e}", path.display())))?;
+        let sealed = fs::read(&path)
+            .map_err(|e| IntegrationError::Io(format!("{}: {e}", path.display())))?;
         let plaintext = Zeroizing::new(
             fossh_ingest::crypto::open(key, &sealed).map_err(|_| IntegrationError::Corrupt)?,
         );
@@ -769,8 +765,15 @@ mod tests {
         // configuration and then happily overwrite it on the next save.
         let dir = scratch_dir("wrongkey");
         let mut set = Integrations::default();
-        set.add("a", "https://x.example", Auth::Bearer, Method::Get, "sk_abcdefghijkl", 0)
-            .unwrap();
+        set.add(
+            "a",
+            "https://x.example",
+            Auth::Bearer,
+            Method::Get,
+            "sk_abcdefghijkl",
+            0,
+        )
+        .unwrap();
         set.save(&dir, &[7u8; 32]).unwrap();
 
         assert!(matches!(
@@ -785,8 +788,15 @@ mod tests {
         let dir = scratch_dir("tampered");
         let key = [9u8; 32];
         let mut set = Integrations::default();
-        set.add("a", "https://x.example", Auth::Bearer, Method::Get, "sk_abcdefghijkl", 0)
-            .unwrap();
+        set.add(
+            "a",
+            "https://x.example",
+            Auth::Bearer,
+            Method::Get,
+            "sk_abcdefghijkl",
+            0,
+        )
+        .unwrap();
         set.save(&dir, &key).unwrap();
 
         let path = store_path(&dir);
@@ -805,10 +815,24 @@ mod tests {
     #[test]
     fn adding_a_duplicate_name_is_refused_rather_than_shadowing() {
         let mut set = Integrations::default();
-        set.add("a", "https://x.example", Auth::Bearer, Method::Get, "sk_abcdefghijkl", 0)
-            .unwrap();
+        set.add(
+            "a",
+            "https://x.example",
+            Auth::Bearer,
+            Method::Get,
+            "sk_abcdefghijkl",
+            0,
+        )
+        .unwrap();
         assert!(matches!(
-            set.add("a", "https://y.example", Auth::Bearer, Method::Get, "sk_mnopqrstuvwx", 0),
+            set.add(
+                "a",
+                "https://y.example",
+                Auth::Bearer,
+                Method::Get,
+                "sk_mnopqrstuvwx",
+                0
+            ),
             Err(IntegrationError::Duplicate(_))
         ));
         assert_eq!(set.items.len(), 1);
@@ -828,12 +852,20 @@ mod tests {
         // Validation runs before the push, so a bad key must not
         // half-add anything.
         let mut set = Integrations::default();
-        assert!(set
-            .add("ok-name", "https://x.example", Auth::Bearer, Method::Get, "bad\nkey", 0)
-            .is_err());
+        assert!(
+            set.add(
+                "ok-name",
+                "https://x.example",
+                Auth::Bearer,
+                Method::Get,
+                "bad\nkey",
+                0
+            )
+            .is_err()
+        );
         assert!(set.items.is_empty());
-        assert!(set
-            .add(
+        assert!(
+            set.add(
                 "ok-name",
                 "https://x.example",
                 Auth::Header {
@@ -843,7 +875,8 @@ mod tests {
                 "sk_abcdefghijkl",
                 0
             )
-            .is_err());
+            .is_err()
+        );
         assert!(set.items.is_empty());
     }
 
@@ -862,7 +895,14 @@ mod tests {
             .unwrap();
         }
         assert!(matches!(
-            set.add("one-too-many", "https://x.example", Auth::Bearer, Method::Get, "sk_abcdefghijkl", 0),
+            set.add(
+                "one-too-many",
+                "https://x.example",
+                Auth::Bearer,
+                Method::Get,
+                "sk_abcdefghijkl",
+                0
+            ),
             Err(IntegrationError::TooMany)
         ));
     }
@@ -886,11 +926,25 @@ mod tests {
         let dir = scratch_dir("replace");
         let key = [10u8; 32];
         let mut set = Integrations::default();
-        set.add("a", "https://x.example", Auth::Bearer, Method::Get, "sk_abcdefghijkl", 0)
-            .unwrap();
+        set.add(
+            "a",
+            "https://x.example",
+            Auth::Bearer,
+            Method::Get,
+            "sk_abcdefghijkl",
+            0,
+        )
+        .unwrap();
         set.save(&dir, &key).unwrap();
-        set.add("b", "https://y.example", Auth::Bearer, Method::Get, "sk_mnopqrstuvwx", 0)
-            .unwrap();
+        set.add(
+            "b",
+            "https://y.example",
+            Auth::Bearer,
+            Method::Get,
+            "sk_mnopqrstuvwx",
+            0,
+        )
+        .unwrap();
         set.save(&dir, &key).unwrap();
 
         assert_eq!(Integrations::load(&dir, &key).unwrap().items.len(), 2);
@@ -900,7 +954,10 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| n.contains("tmp"))
             .collect();
-        assert!(leftovers.is_empty(), "temp files left behind: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 }
