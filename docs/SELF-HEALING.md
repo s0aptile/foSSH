@@ -128,7 +128,7 @@ foSSH's own:
 
 ```
 ollama pull lfm2.5-thinking
-ollama create fossh-advisor:0.0.2.1 -f /usr/share/fossh/model/Modelfile
+ollama create fossh-advisor:0.0.2.2 -f /usr/share/fossh/model/Modelfile
 ```
 
 Without Ollama, the endpoint is simply unreachable and foSSH reports

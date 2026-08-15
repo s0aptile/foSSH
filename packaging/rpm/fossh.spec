@@ -10,7 +10,7 @@
 # `0.1.3` with no suffix, which is the ordering an alpha needs) is what
 # actually appears in the built package's metadata. Kept separate so
 # neither has to deal with the other's separator character.
-%global srcversion 0.0.2.1
+%global srcversion 0.0.2.2
 # Cargo's own release profile (strip = true) already strips every
 # binary before %%install even runs; there's no meaningful debug info
 # left for rpm's own automatic debuginfo/debugsource extraction to
@@ -35,7 +35,7 @@ Name:           fossh
 # Deleting this line would silently strand every existing install on
 # the retired line with no upgrade path and no error to explain it.
 Epoch:          1
-Version:        0.0.2.1
+Version:        0.0.2.2
 Release:        1%{?dist}
 Summary:        Privacy-preserving, embeddable telemetry (self-hosted analytics)
 
@@ -736,6 +736,52 @@ fi
 
 
 %changelog
+* Sat Aug 15 2026 s0aptile <noreply@example.invalid> - 1:0.0.2.2-1
+- Security: the PHP binding sent the site write key as a Bearer token to
+  whatever endpoint was configured, including a plain http:// one, and
+  neither of its two transports disabled redirects -- so even a vetted
+  https:// endpoint could 302 the credential onto cleartext. Endpoints
+  are now required to be https:// (or http:// to loopback) and redirects
+  are not followed. Verified against a two-hop server: the previous code
+  hands the key to the cleartext hop, this one does not.
+- Data loss: the PHP binding's FFI mode read the constructor's key
+  parameter rather than the field that folds in the FOSSH_KEY
+  environment variable -- the configuration the documentation
+  recommends. That built a keyless context, marked it usable, and
+  dropped every event for the life of the process with no fallback.
+- Privacy: X-Forwarded-For was read leftmost-first, the one entry the
+  client itself writes. Fabricated addresses became fabricated visitors,
+  which can carry a group past k_anonymity and publish a row that was
+  being suppressed. Measured: six requests from one real relay reported
+  six uniques before, two after. FOSSH_TRUST_FORWARDED_FOR is now a
+  count of trusted proxies; existing =1 settings keep working unchanged.
+- Privacy: k_anonymity = 0 or 1 disabled the small-group fold entirely
+  and validated cleanly from either the config file or the environment.
+  The minimum is now 2 (the default remains 5) and foSSH refuses to
+  start below it. retention_days and rate_limit gained bounds too.
+- Availability: a client-supplied timestamp of i64::MIN overflowed the
+  freshness check before any authentication ran. Harmless in the shipped
+  release profile by luck; a panic in any overflow-checked build, and
+  with panic=abort that is one request ending every site on a
+  fossh-fcgi process.
+- Availability: fossh_record_env dereferenced null entries in the
+  environment array, segfaulting the *host* process -- a PHP-FPM worker,
+  a Go binary -- where catch_unwind cannot reach. Null entries are now
+  skipped and the entries after them still read.
+- Availability: the PHP CGI fallback waited on a subprocess with no
+  ceiling, so a stalled fossh-cgi held the page request open
+  indefinitely. Bounded at 2s, and it now kills the binary itself rather
+  than an intervening shell.
+- New: `fossh site enable`. Disabling a site was previously a one-way
+  door out of the product -- the only way back was editing SQLite by
+  hand. The top-level help also omitted `rotate-signing-key`.
+- Watchdog: session tokens issued and then abandoned were never
+  reclaimed, growing for the process's whole lifetime. Now swept on
+  issue, with a cap of 256 live sessions.
+- Watchdog: the window between verifying a binary's hash and executing
+  it is narrowed from the full verification to two syscalls. This is a
+  mitigation and not a fix; ADR-0075 records exactly what remains.
+
 * Sat Aug 15 2026 s0aptile <noreply@example.invalid> - 1:0.0.2.1-1
 - Renumber to the 0.0.2.x line, where x is a revision counter that goes
   up by one per complete revision. scripts/set-revision.sh is the only

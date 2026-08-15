@@ -53,7 +53,7 @@ from typing import Callable
 #: Identifies the visit in the operator's own data afterwards.
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36 foSSH-Verify/0.0.2.1"
+    "Chrome/131.0.0.0 Safari/537.36 foSSH-Verify/0.0.2.2"
 )
 
 #: Hard ceiling on a run. A page that has not fired its beacon within

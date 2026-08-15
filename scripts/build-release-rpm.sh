@@ -27,7 +27,7 @@
 set -eu
 
 project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-tag=fossh-0.0.2.1
+tag=fossh-0.0.2.2
 
 if [ -d "$project_root/watchdog/_opam" ]; then
   echo "build-release-rpm: local opam switch found — sourcing its env for %build" >&2

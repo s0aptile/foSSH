@@ -457,7 +457,7 @@ checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
 
 [[package]]
 name = "fossh-admin"
-version = "0.0.2+rev.1"
+version = "0.0.2+rev.2"
 dependencies = [
  "fossh-core",
  "fossh-ingest",
@@ -472,7 +472,7 @@ dependencies = [
 
 [[package]]
 name = "fossh-agent"
-version = "0.0.2+rev.1"
+version = "0.0.2+rev.2"
 dependencies = [
  "fossh-admin",
  "fossh-core",
@@ -487,7 +487,7 @@ dependencies = [
 
 [[package]]
 name = "fossh-cgi"
-version = "0.0.2+rev.1"
+version = "0.0.2+rev.2"
 dependencies = [
  "blake3",
  "fossh-admin",
@@ -499,7 +499,7 @@ dependencies = [
 
 [[package]]
 name = "fossh-cli"
-version = "0.0.2+rev.1"
+version = "0.0.2+rev.2"
 dependencies = [
  "blake3",
  "ed25519-dalek",
@@ -515,7 +515,7 @@ dependencies = [
 
 [[package]]
 name = "fossh-core"
-version = "0.0.2+rev.1"
+version = "0.0.2+rev.2"
 dependencies = [
  "blake3",
  "proptest",
@@ -526,7 +526,7 @@ dependencies = [
 
 [[package]]
 name = "fossh-fcgi"
-version = "0.0.2+rev.1"
+version = "0.0.2+rev.2"
 dependencies = [
  "blake3",
  "fossh-admin",
@@ -540,7 +540,7 @@ dependencies = [
 
 [[package]]
 name = "fossh-ingest"
-version = "0.0.2+rev.1"
+version = "0.0.2+rev.2"
 dependencies = [
  "blake3",
  "chacha20poly1305",
@@ -556,14 +556,14 @@ dependencies = [
 
 [[package]]
 name = "fossh-ipc"
-version = "0.0.2+rev.1"
+version = "0.0.2+rev.2"
 dependencies = [
  "quiche",
 ]
 
 [[package]]
 name = "fossh-selfheal"
-version = "0.0.2+rev.1"
+version = "0.0.2+rev.2"
 dependencies = [
  "fossh-core",
  "fossh-ingest",
@@ -575,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "fossh-store"
-version = "0.0.2+rev.1"
+version = "0.0.2+rev.2"
 dependencies = [
  "fossh-core",
  "rusqlite",

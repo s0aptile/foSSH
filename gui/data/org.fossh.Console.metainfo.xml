@@ -146,6 +146,42 @@
   </requires>
 
   <releases>
+    <release version="0.0.2.2" date="2026-08-15">
+      <description>
+        <p>
+          Corrects several faults found by review, three of which could
+          expose a site's write key or lose its data without anything
+          appearing to go wrong.
+        </p>
+        <ul>
+          <li>
+            The PHP integration no longer sends the write key to a plain
+            http:// address, and no longer follows a redirect that would
+            move it onto one.
+          </li>
+          <li>
+            Setting the key through the FOSSH_KEY environment variable
+            now works. Previously that configuration recorded nothing at
+            all, silently, for as long as it ran.
+          </li>
+          <li>
+            X-Forwarded-For is read as the address the trusted proxy
+            observed rather than the one the visitor claimed, so
+            fabricated addresses can no longer inflate a visitor count
+            past the small-group threshold and publish a figure that
+            should have stayed hidden.
+          </li>
+          <li>
+            A k-anonymity setting of 0 or 1 turned the small-group fold
+            off entirely, and is now refused rather than accepted.
+          </li>
+          <li>
+            Sites can be re-enabled. Disabling one was previously
+            permanent.
+          </li>
+        </ul>
+      </description>
+    </release>
     <release version="0.0.2.1" date="2026-08-15">
       <description>
         <p>
