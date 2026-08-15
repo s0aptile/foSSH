@@ -636,9 +636,25 @@ pub unsafe extern "C" fn fossh_record_env(
     let result = catch_unwind(|| {
         let mut env = std::collections::HashMap::new();
         for i in 0..envc {
-            // SAFETY: caller contract guarantees `envp` has `envc` valid
-            // entries; each entry is a valid NUL-terminated C string.
-            let entry = unsafe { CStr::from_ptr(*envp.add(i)) };
+            // SAFETY: caller contract guarantees `envp` has `envc`
+            // readable entries. It does NOT guarantee each entry is
+            // non-null, and this is the one entry point in this file
+            // that walks an array of pointers rather than checking a
+            // single one.
+            //
+            // A null hole is not a Rust panic and `catch_unwind`
+            // cannot save it: `CStr::from_ptr(null)` dereferences it,
+            // which is undefined behaviour and in practice a SIGSEGV
+            // *inside the host process* -- somebody's PHP-FPM worker
+            // or Go binary, not ours. Every other pointer in this file
+            // is defended; this one was not. Skipping a null entry is
+            // the only sane reading of "the environment has a hole in
+            // it", and it keeps the remaining entries usable.
+            let raw = unsafe { *envp.add(i) };
+            if raw.is_null() {
+                continue;
+            }
+            let entry = unsafe { CStr::from_ptr(raw) };
             let Ok(entry) = entry.to_str() else { continue };
             if let Some((k, v)) = entry.split_once('=') {
                 env.insert(k.to_string(), v.to_string());
@@ -1197,6 +1213,48 @@ mod tests {
             let body = br#"{"name":"pageview"}"#;
             let rc = fossh_record_env(ctx, envp.as_ptr(), envp.len(), body.as_ptr(), body.len());
             assert_eq!(rc, 0);
+            fossh_free(ctx);
+        }
+    }
+
+    /// A null hole in `envp` must be skipped, not dereferenced.
+    ///
+    /// This is the one entry point that walks an array of pointers, and
+    /// it used to trust every element. `CStr::from_ptr(null)` is UB, and
+    /// the SIGSEGV it produces lands in whoever linked this — a PHP-FPM
+    /// worker, a Go binary — where `catch_unwind` cannot reach it. A
+    /// caller assembling `envp` by hand from a map with a missing value
+    /// gets a null there without doing anything exotic.
+    ///
+    /// The surviving entries must still be read: a hole is a hole, not
+    /// a terminator.
+    #[test]
+    fn record_env_skips_null_entries_rather_than_dereferencing_them() {
+        unsafe {
+            let (ctx, token) = setup("record-env-null-hole");
+            let token_c = CString::new(token).unwrap();
+            assert_eq!(fossh_set_key(ctx, token_c.as_ptr()), 0);
+
+            let head = CString::new("REMOTE_ADDR=203.0.113.5").unwrap();
+            let tail = CString::new("QUERY_STRING=name=pageview").unwrap();
+            let envp: Vec<*const c_char> = vec![
+                head.as_ptr(),
+                std::ptr::null(), // the hole
+                tail.as_ptr(),
+                std::ptr::null(), // and one at the end
+            ];
+
+            let rc = fossh_record_env(ctx, envp.as_ptr(), envp.len(), std::ptr::null(), 0);
+            assert_eq!(rc, 0, "a null hole must not fail the call");
+
+            let state = (*ctx).inner.lock().unwrap();
+            let site_id = state.site.as_ref().unwrap().id;
+            assert_eq!(
+                state.store.count_events(site_id).unwrap(),
+                1,
+                "QUERY_STRING sat after the hole and must still have been read"
+            );
+            drop(state);
             fossh_free(ctx);
         }
     }

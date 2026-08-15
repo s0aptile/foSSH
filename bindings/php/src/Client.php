@@ -45,6 +45,9 @@ final class Client
         int32_t fossh_flush(fossh_ctx *ctx);
         CDEF;
 
+    /** Ceiling on how long a `fossh-cgi` subprocess may hold up the host request. */
+    private const CGI_TIMEOUT_SECS = 2.0;
+
     private ?\FFI $ffi = null;
     /** @var \FFI\CData|null */
     private $ctx = null;
@@ -60,7 +63,9 @@ final class Client
         ?string $remoteEndpoint = null
     ) {
         $this->key = $key ?? (getenv('FOSSH_KEY') ?: null);
-        $this->remoteEndpoint = rtrim($remoteEndpoint ?? (getenv('FOSSH_ENDPOINT') ?: ''), '/') ?: null;
+        $this->remoteEndpoint = self::vetEndpoint(
+            rtrim($remoteEndpoint ?? (getenv('FOSSH_ENDPOINT') ?: ''), '/') ?: null
+        );
         $this->cgiBinaryPath = $cgiBinaryPath ?? (getenv('FOSSH_CGI_BIN') ?: null);
 
         if (!\extension_loaded('ffi')) {
@@ -82,8 +87,16 @@ final class Client
         }
         $this->ctx = $ctx;
 
-        if ($key !== null) {
-            $rc = $this->ffi->fossh_set_key($this->ctx, $key);
+        // `$this->key`, not `$key`: the constructor parameter is only
+        // half the story — `FOSSH_KEY` is the documented way to
+        // configure this on shared hosting, and reading the raw
+        // parameter here meant an install using the env var built a
+        // keyless FFI context, marked it usable, and then had every
+        // pageview()/event()/timing() rejected forever with no
+        // fallback to HTTP or CGI. Silent, permanent, total data loss
+        // for the configuration the docs recommend.
+        if ($this->key !== null) {
+            $rc = $this->ffi->fossh_set_key($this->ctx, $this->key);
             if ($rc !== 0) {
                 $this->ffi = null;
                 $this->ctx = null;
@@ -92,6 +105,80 @@ final class Client
         }
 
         $this->usable = true;
+    }
+
+    /**
+     * Refuses to keep a remote endpoint that would send the write key
+     * in cleartext.
+     *
+     * `sendHttp()` puts the key in an `Authorization: Bearer` header on
+     * every call. Over `http://` that is the whole credential, in the
+     * clear, on every page view of the site — recoverable by anything
+     * between this server and the endpoint, and it grants write access
+     * to the operator's analytics until they notice and rotate it.
+     *
+     * `http://` to a loopback address is allowed, because it never
+     * leaves the machine and is a normal way to run foSSH beside PHP on
+     * one box. Everything else must be `https://`.
+     *
+     * Rejection drops the endpoint rather than throwing — this class
+     * does not raise — but it emits an `E_USER_WARNING` so the reason
+     * lands in the PHP error log instead of the operator being left to
+     * wonder why nothing records.
+     */
+    private static function vetEndpoint(?string $endpoint): ?string
+    {
+        if ($endpoint === null) {
+            return null;
+        }
+
+        $scheme = strtolower((string) parse_url($endpoint, PHP_URL_SCHEME));
+        if ($scheme === 'https') {
+            return $endpoint;
+        }
+
+        if ($scheme === 'http' && self::isLoopback($endpoint)) {
+            return $endpoint;
+        }
+
+        trigger_error(
+            'foSSH: refusing to use endpoint ' . $endpoint . ' — the write key is sent as a '
+            . 'Bearer token on every request, so the endpoint must be https:// (or http:// to '
+            . 'loopback). Telemetry is disabled until this is corrected.',
+            E_USER_WARNING
+        );
+        return null;
+    }
+
+    /**
+     * True only for a host that cannot leave this machine.
+     *
+     * The test is deliberately on a parsed IP literal rather than on
+     * the text of the host. `str_starts_with($host, '127.')` reads as
+     * equivalent and is not: `127.0.0.1.evil.tld` is a perfectly
+     * registrable domain name that satisfies it, resolves to whatever
+     * its owner likes, and would have been handed the write key in
+     * cleartext by the very check meant to prevent that. Caught by this
+     * binding's own test case of the same name.
+     *
+     * `localhost` is accepted by name because it is the one hostname
+     * whose loopback meaning is guaranteed by RFC 6761 rather than by
+     * DNS.
+     */
+    private static function isLoopback(string $endpoint): bool
+    {
+        $host = strtolower(trim((string) parse_url($endpoint, PHP_URL_HOST), '[]'));
+        if ($host === 'localhost') {
+            return true;
+        }
+        if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false) {
+            return inet_pton($host) === inet_pton('::1');
+        }
+        if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+            // The whole 127.0.0.0/8 block, not just 127.0.0.1.
+            return (ip2long($host) & 0xFF000000) === (127 << 24);
+        }
+        return false;
     }
 
     public function __destruct()
@@ -172,8 +259,21 @@ final class Client
             return null;
         }
         $buf = \FFI::new('char[64]');
-        $this->ffi->fossh_last_error($this->ctx, $buf, 64);
-        return \FFI::string($buf);
+        if ($this->ffi->fossh_last_error($this->ctx, $buf, 64) !== 0) {
+            return null;
+        }
+        // Trimmed at the NUL by hand rather than relying on
+        // `FFI::string($buf)`'s one-argument form: for a `char[N]`
+        // *array* (as opposed to a `char*`) that form is documented
+        // around zero-terminated data, and the C side only writes the
+        // message plus its terminator — it does not clear the tail. Two
+        // explicit arguments plus this trim give the same answer under
+        // either reading, so the binding does not depend on which one a
+        // given PHP build implements.
+        $raw = \FFI::string($buf, 64);
+        $nul = strpos($raw, "\0");
+        $message = $nul === false ? $raw : substr($raw, 0, $nul);
+        return $message === '' ? null : $message;
     }
 
     /** Drains any spooled events for this process into the database immediately. Safe to call at shutdown. */
@@ -253,6 +353,13 @@ final class Client
             CURLOPT_CONNECTTIMEOUT_MS => 1500,
             CURLOPT_TIMEOUT_MS => 2000,
             CURLOPT_HTTPHEADER => $headers,
+            // Explicit, though it is also libcurl's default: a 301/302
+            // from the endpoint to a plain `http://` URL would otherwise
+            // have curl resend the `Authorization: Bearer` header — the
+            // write key, in the clear — to wherever the redirect points.
+            // The endpoint scheme is vetted at construction; this closes
+            // the path that gets around that check after the fact.
+            CURLOPT_FOLLOWLOCATION => false,
         ]);
         if ($method === 'POST') {
             curl_setopt($ch, CURLOPT_POST, true);
@@ -277,6 +384,12 @@ final class Client
                 'content' => $body ?? '',
                 'timeout' => 2.0,
                 'ignore_errors' => true, // still want $http_response_header on a 4xx/5xx
+                // Same reasoning as CURLOPT_FOLLOWLOCATION above, and
+                // here it is not the default: PHP's HTTP stream wrapper
+                // follows redirects on its own and carries the headers
+                // across, so an endpoint that 302s to `http://` would
+                // resend the Bearer key in cleartext.
+                'follow_location' => 0,
             ],
         ]);
         $result = @file_get_contents($url, false, $context);
@@ -314,13 +427,49 @@ final class Client
             'HTTP_USER_AGENT' => $ua ?? ($_SERVER['HTTP_USER_AGENT'] ?? ''),
         ];
         $descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
-        $process = @proc_open($this->cgiBinaryPath, $descriptors, $pipes, null, $env);
+        // Array form, so PHP execs the binary directly instead of
+        // handing the string to `/bin/sh -c`. Two things follow from
+        // that, both of which this needs. The path never gets a shell
+        // parse, so a space or a metacharacter in it is a path and not
+        // syntax. And the process this holds a handle to is fossh-cgi
+        // itself rather than a shell wrapping it — which is what makes
+        // the timeout below able to actually stop it. Through a shell,
+        // terminating the child kills only the shell and leaves the
+        // real binary running, orphaned; that is not theoretical, it is
+        // what this binding did before and what its own timeout test
+        // showed still alive afterwards.
+        $process = @proc_open([$this->cgiBinaryPath], $descriptors, $pipes, null, $env);
         if (!\is_resource($process)) {
             return false;
         }
         fclose($pipes[1]);
         fclose($pipes[2]);
-        proc_close($process);
-        return true;
+
+        // Bounded rather than a bare proc_close(), which blocks until
+        // the child exits with no ceiling. A fossh-cgi that stalls —
+        // waiting on a lock, a full disk, an NFS mount that stopped
+        // answering — would otherwise hold this PHP request open for as
+        // long as the stall lasts, and every concurrent visitor's
+        // request with it. Telemetry taking the host site down is the
+        // one thing this whole class is arranged to prevent.
+        $deadline = microtime(true) + self::CGI_TIMEOUT_SECS;
+        $delayUs = 200;
+        while (true) {
+            $status = proc_get_status($process);
+            if ($status === false || !$status['running']) {
+                proc_close($process);
+                return true;
+            }
+            if (microtime(true) >= $deadline) {
+                proc_terminate($process, 9);
+                proc_close($process);
+                return false;
+            }
+            usleep($delayUs);
+            // Backs off so a slow-but-healthy child is not polled
+            // thousands of times, while a fast one still returns in
+            // well under a millisecond.
+            $delayUs = min($delayUs * 2, 20000);
+        }
     }
 }

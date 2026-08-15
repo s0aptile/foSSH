@@ -145,6 +145,13 @@ if (!function_exists('fossh_send')) {
                         CURLOPT_CONNECTTIMEOUT_MS => 1500,
                         CURLOPT_TIMEOUT_MS => 2000,
                         CURLOPT_HTTPHEADER => $headers,
+                        // The https:// check below guards the URL you
+                        // paste in. It cannot guard where that URL then
+                        // redirects to: a 302 to a plain http:// address
+                        // would have the Authorization header — your
+                        // write key — resent in the clear. So redirects
+                        // are simply not followed.
+                        CURLOPT_FOLLOWLOCATION => false,
                     ]);
                     curl_exec($ch);
                     curl_close($ch);
@@ -158,6 +165,11 @@ if (!function_exists('fossh_send')) {
                         'header' => implode("\r\n", $headers),
                         'timeout' => 2.0,
                         'ignore_errors' => true,
+                        // Same reason as CURLOPT_FOLLOWLOCATION above,
+                        // and here it matters more: PHP's HTTP stream
+                        // wrapper follows redirects by default and
+                        // carries these headers across.
+                        'follow_location' => 0,
                     ],
                 ]);
                 @file_get_contents($url, false, $context);
