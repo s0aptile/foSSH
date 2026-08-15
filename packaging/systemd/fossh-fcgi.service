@@ -43,6 +43,16 @@ Environment=FOSSH_FCGI_WORKERS=8
 # pattern and fossh_ingest::forwarded for what this trusts and why it's
 # opt-in. Uncomment only if this instance sits behind something that
 # legitimately relays on a real visitor's behalf.
+#
+# The value is a count of proxies you control, not an on/off switch:
+# 1 = one hop in front of foSSH, 2 = a CDN in front of that, and so on.
+# foSSH reads the entry that hop appended (the rightmost), because the
+# leftmost one is whatever the visitor's own browser sent. Anything
+# unrecognised reads as 0 and the header is ignored. See ADR-0073.
+#
+# This is only safe if the port is not reachable by anyone other than
+# that hop -- whoever connects directly IS the last hop. See
+# docs/INTEGRATION-php.md.
 #Environment=FOSSH_TRUST_FORWARDED_FOR=1
 
 Restart=on-failure

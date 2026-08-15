@@ -210,6 +210,12 @@ The database and the spool get different treatment on purpose: `Store::open` is 
 
 ## ADR-0025 — Opt-in `X-Forwarded-For` trust (`FOSSH_TRUST_FORWARDED_FOR`), for reverse-proxy and shared-hosting-relay deployments
 
+> **Amended by ADR-0073 (0.0.2.2).** The opt-in stands. The
+> leftmost-entry selection described below does not — it is now a hop
+> count read from the right, because the leftmost entry is the one the
+> client wrote.
+
+
 **Decision:** `fossh-cgi` reads `REMOTE_ADDR` as-is unless the operator explicitly sets `FOSSH_TRUST_FORWARDED_FOR=1`, in which case it takes the leftmost entry of `X-Forwarded-For` (if present) instead. Implemented as a pure function (`fossh_ingest::forwarded::resolve_client_ip`, 5 tests — moved here from `fossh-cgi` when M7's `fossh-fcgi` needed the identical logic) called once in `main.rs`'s `read_cgi_env`, before `handler::authenticate` ever runs.
 **Context:** two real deployment shapes need this to produce correct per-visitor stats (P2's `BLAKE3(daily_salt ‖ client_ip ‖ ua_string ‖ site_id)` hashing) rather than silently collapsing every visitor into one: (a) nginx terminating the real client connection and proxying to `fcgiwrap`/`fossh-cgi` over a Unix socket — nginx already sets `REMOTE_ADDR` correctly for its own CGI dispatch in the common case, but an operator running nginx behind another edge (Cloudflare) that doesn't fix up `real_ip` first would otherwise see every visitor collapse to the edge's IP; (b) a shared-hosting PHP script (`bindings/php/src/Client.php`'s HTTP-remote mode, `docs/INTEGRATION-php.md`) making a server-side relay call to a foSSH instance running elsewhere — the TCP peer address on that call is *always* the shared host's own egress IP, never the original visitor's, with no way around that at the connection layer at all; only the relaying script itself knows the real visitor IP (from its own `$_SERVER['REMOTE_ADDR']`), and can only communicate it via a header/field the receiving end chooses to trust.
 **Alternatives rejected:** (a) always trusting `X-Forwarded-For` unconditionally — rejected, since any caller could then forge a client identity for hashing/rate-limiting purposes on a deployment that *isn't* actually behind a relay; (b) a bespoke JSON body field (`"client_ip": "..."`) instead of the standard header — rejected as extra surface on the already-tested ingest JSON schema (`fossh-ingest::pipeline`) for no benefit over reusing the header every HTTP client/library already knows how to set; (c) trusting it unconditionally once a request is already authenticated (bearer/signed) — rejected even though the trust boundary is arguably no weaker (a valid write-key holder can already submit somewhat-fabricated telemetry; that's inherent to server-side/beacon-based analytics, not something this changes) because *silent*, non-opt-in trust of a spoofable header is a worse default to ship than an explicit flag, independent of how bad the actual exposure is.
@@ -1406,3 +1412,89 @@ performs 200 reads and checks the process's own fd count.
 **The wider point.** A convention that requires every future caller to
 remember something is a convention that will be broken. Where the
 guarantee can live in one place, it should.
+
+## ADR-0073 — `X-Forwarded-For` is read from the right, and the setting counts proxies
+
+**Status:** accepted, 0.0.2.2. Amends ADR-0025.
+
+**Context.** ADR-0025 made trusting `X-Forwarded-For` opt-in and took
+the header's **leftmost** entry. Opt-in was the right call; leftmost was
+not. `X-Forwarded-For` is built left to right, each hop appending the
+peer it saw, so the leftmost entry is precisely the one no trustworthy
+party wrote — it is whatever the client sent, and a client can send
+anything.
+
+Three things read the resolved address, which is what made this worth
+changing rather than documenting: the visitor hash (P2), `IpFailBucket`,
+and country attribution. Fabricated addresses therefore become
+fabricated *visitors*, which can push a group past `k_anonymity` and get
+a previously-suppressed row published — a P6 bypass, not merely noisy
+data — and they defeat the write-key-guessing throttle outright, since
+each invented address gets its own untouched allowance.
+
+That last part was already known and already documented in
+`docs/INTEGRATION-php.md`, verified against the compiled binary: 40
+wrong-key requests with 40 distinct spoofed values, 40 × `401`, never a
+`429`. Documentation is not a control.
+
+**Decision.** `resolve_client_ip` takes a hop count instead of a
+boolean and selects the entry that many places from the **right** — the
+address the outermost hop the operator vouches for actually observed.
+An entry that does not parse as an IP address is not used at all, so
+client-supplied bytes of any other shape cannot reach the hash, the
+rate-limit key, or the geo lookup. Any failure (header absent, fewer
+entries than declared, unparseable) falls back to `REMOTE_ADDR`, which
+is always a genuinely observed peer.
+
+`FOSSH_TRUST_FORWARDED_FOR=1` keeps working and keeps meaning what its
+users meant by it — it now reads as "one trusted proxy" rather than
+"trust the header", which is the topology anyone who set it has.
+Unrecognised values, including typos, read as `0`: a mistake here should
+cost the feature, not grant a forgeable one. The parser lives in
+`fossh_ingest::forwarded` rather than in each binary, because
+`fossh-cgi` and `fossh-fcgi` had each hand-written the same `matches!`
+and were one edit from disagreeing.
+
+**What this does not fix, stated plainly.** Hop counting secures the
+*chain*; it cannot establish that a request came through the chain.
+Anyone who can open a connection to `fossh-cgi` directly is the last
+hop, and whatever they write is what the last hop wrote. Restricting who
+can reach the port remains a prerequisite for enabling this at all, and
+`docs/INTEGRATION-php.md` now says so as a requirement rather than as
+advice. The improvement is real and bounded: against an appending proxy
+(nginx's `$proxy_add_x_forwarded_for`, most CDNs) the header becomes
+unspoofable by construction, where before it was unspoofable only by
+the attacker's forbearance.
+
+## ADR-0074 — the k-anonymity fold has a floor, and the config file has bounds
+
+**Status:** accepted, 0.0.2.2.
+
+**Context.** `Config::validate()` checked the listener bind address and
+nothing else. `k_anonymity`, `retention_days`, and `rate_limit` accepted
+any `u32` that parsed, from the file or from the environment.
+
+The fold in `query_rollup` is `uniques < k_anonymity`. At `k = 0` that
+comparison is false for every `u64`, and at `k = 1` it is false for
+every group that appears in a result at all, since a group with zero
+uniques is not in the result. Either setting reports a lone visitor by
+exact path and exact hit count — the one outcome P6 exists to prevent.
+
+It fails open and it fails silently. A report with the fold disabled is
+indistinguishable from a report where nothing needed folding, so nothing
+about the output tells the operator their central privacy setting is
+off. The environment path is worse still: it leaves no trace in any file
+anyone reads.
+
+**Decision.** A floor of `k_anonymity >= 2`, refused at load with a
+message that says what the value does rather than that it is invalid.
+Two is a floor, not a recommendation; the default stays 5. While there,
+`retention_days` gained `1..=10_000` — zero would delete every event as
+it was written, and the upper bound catches `36500` meaning "forever" —
+and `rate_limit` gained `per_sec > 0` and `burst >= per_sec`, either of
+which silently refuses traffic.
+
+**The general point.** A privacy guarantee implemented as a comparison
+against a configurable number is only as good as the bounds on that
+number, and a setting whose failure mode is invisible needs its bounds
+enforced where it is read, not where it is documented.

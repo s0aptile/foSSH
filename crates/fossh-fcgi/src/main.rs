@@ -125,7 +125,7 @@ struct Shared {
     rate_limit_per_sec: u32,
     rate_limit_burst: u32,
     respect_optout_signals: bool,
-    trust_forwarded_for: bool,
+    trusted_hops: u8,
     events_tx: Sender<fossh_core::types::Event>,
     /// Opened once at process start from `Config.country_db` (see
     /// `main` below), shared read-only across every worker thread for
@@ -137,7 +137,7 @@ struct Shared {
 
 fn handle_connection(mut stream: UnixStream, shared: &Shared) {
     loop {
-        let request = match connection::read_request(&mut stream, shared.trust_forwarded_for) {
+        let request = match connection::read_request(&mut stream, shared.trusted_hops) {
             Ok(connection::RequestOutcome::ConnectionClosed) => return,
             Ok(connection::RequestOutcome::Ingest(req)) => req,
             Err(connection::ReadError::Unsupported { request_id, status }) => {
@@ -387,9 +387,8 @@ fn main() {
     thread::spawn(move || writer::run(store, events_rx));
     spawn_maintenance_thread(db_path, config.retention_days, data_key);
 
-    let trust_forwarded_for = matches!(
+    let trusted_hops = fossh_ingest::forwarded::trusted_hops_from_env(
         env_var("FOSSH_TRUST_FORWARDED_FOR").as_deref(),
-        Some("1") | Some("true")
     );
     // Opened once here, not per request — see `Shared::country_db`'s own
     // doc comment. A missing/corrupt/unconfigured database degrades to
@@ -402,7 +401,7 @@ fn main() {
         rate_limit_per_sec: config.rate_limit.per_sec,
         rate_limit_burst: config.rate_limit.burst,
         respect_optout_signals: config.respect_optout_signals,
-        trust_forwarded_for,
+        trusted_hops,
         events_tx,
         country_db,
     });
@@ -523,7 +522,7 @@ mod tests {
             rate_limit_per_sec: 60,
             rate_limit_burst: 600,
             respect_optout_signals: true,
-            trust_forwarded_for: false,
+            trusted_hops: 0,
             events_tx,
             country_db: GeoipReader::none(),
         });

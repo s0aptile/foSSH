@@ -141,6 +141,9 @@ fn default_retention_days() -> u32 {
 fn default_k_anonymity() -> u32 {
     5
 }
+/// ~27 years. Not a privacy limit — a typo guard, so `retention_days =
+/// 36500` is caught rather than silently meaning "forever".
+pub const RETENTION_DAYS_MAX: u32 = 10_000;
 fn default_true() -> bool {
     true
 }
@@ -211,7 +214,29 @@ pub enum ConfigError {
         key: &'static str,
         value: String,
     },
+    KAnonymityTooLow {
+        value: u32,
+    },
+    RetentionOutOfRange {
+        value: u32,
+    },
+    RateLimitInvalid {
+        reason: &'static str,
+    },
 }
+
+/// The smallest group size that still hides anybody.
+///
+/// Below this the fold in `query_rollup` stops folding: at `k = 0` the
+/// test `uniques < k` is false for every `u64`, and at `k = 1` it is
+/// false for every group that exists at all, since a group with zero
+/// uniques is not in the result to begin with. Either value reports a
+/// lone visitor by exact path and exact hit count — the single outcome
+/// P6 exists to prevent — and it does so silently, because nothing
+/// about the output says the suppression was off.
+///
+/// 2 is the floor, not the recommendation. The default is 5.
+pub const K_ANONYMITY_MIN: u32 = 2;
 
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -240,6 +265,22 @@ impl fmt::Display for ConfigError {
                     f,
                     "environment variable {key}=\"{value}\" could not be applied"
                 )
+            }
+            ConfigError::KAnonymityTooLow { value } => write!(
+                f,
+                "k_anonymity = {value} disables the small-group fold entirely (P6): a group with \
+                 one visitor would be reported by exact path and exact hit count. The minimum is \
+                 {K_ANONYMITY_MIN} and the default is {}. If you want no aggregation privacy at \
+                 all, that is not a setting — do not run this.",
+                default_k_anonymity()
+            ),
+            ConfigError::RetentionOutOfRange { value } => write!(
+                f,
+                "retention_days = {value} is outside 1..={RETENTION_DAYS_MAX}; 0 would delete \
+                 every event as soon as it is written"
+            ),
+            ConfigError::RateLimitInvalid { reason } => {
+                write!(f, "rate_limit is unusable: {reason}")
             }
         }
     }
@@ -384,6 +425,35 @@ impl Config {
                 });
             }
         }
+
+        // Until this was added, `validate()` checked the bind address
+        // and nothing else — so the three settings that decide how much
+        // is retained, how much is disclosed, and how hard the ingest
+        // path can be hammered all accepted any u32 that parsed,
+        // including zero, from either the file or the environment. The
+        // k_anonymity case is the one that matters: it fails open and
+        // fails silently, since a report with the fold disabled looks
+        // exactly like a report where nothing needed folding.
+        if self.k_anonymity < K_ANONYMITY_MIN {
+            return Err(ConfigError::KAnonymityTooLow {
+                value: self.k_anonymity,
+            });
+        }
+        if self.retention_days == 0 || self.retention_days > RETENTION_DAYS_MAX {
+            return Err(ConfigError::RetentionOutOfRange {
+                value: self.retention_days,
+            });
+        }
+        if self.rate_limit.per_sec == 0 {
+            return Err(ConfigError::RateLimitInvalid {
+                reason: "per_sec = 0 refuses every event; to accept everything, raise the limit",
+            });
+        }
+        if self.rate_limit.burst < self.rate_limit.per_sec {
+            return Err(ConfigError::RateLimitInvalid {
+                reason: "burst is below per_sec, so the bucket can never hold one second's worth",
+            });
+        }
         Ok(())
     }
 }
@@ -419,6 +489,100 @@ mod tests {
         map: &'a HashMap<&'a str, &'a str>,
     ) -> impl Fn(&str) -> Option<OsString> + 'a {
         move |key| map.get(key).map(|v| OsString::from(*v))
+    }
+
+    /// The fold in `query_rollup` is `uniques < k_anonymity`. At k=0
+    /// that is false for every `u64`; at k=1 it is false for every group
+    /// that appears in a result at all. Both publish a lone visitor's
+    /// exact path and exact hit count, and both used to validate
+    /// cleanly from the file or from `FOSSH_K_ANONYMITY`.
+    #[test]
+    fn k_anonymity_below_the_floor_is_refused() {
+        for k in [0, 1] {
+            let config = Config {
+                k_anonymity: k,
+                ..Config::default()
+            };
+            assert!(
+                matches!(
+                    config.validate(),
+                    Err(ConfigError::KAnonymityTooLow { value }) if value == k
+                ),
+                "k_anonymity = {k} disables the fold and must be refused"
+            );
+        }
+        for k in [K_ANONYMITY_MIN, 5, 100] {
+            let config = Config {
+                k_anonymity: k,
+                ..Config::default()
+            };
+            assert!(config.validate().is_ok(), "k_anonymity = {k} is fine");
+        }
+    }
+
+    #[test]
+    fn k_anonymity_floor_is_enforced_through_the_environment_too() {
+        // The env path is the one that slips past review, since it
+        // leaves no trace in any file anybody reads.
+        for (value, ok) in [("0", false), ("1", false), ("2", true), ("5", true)] {
+            let env = HashMap::from([("FOSSH_K_ANONYMITY", value)]);
+            let mut config = Config::default();
+            // The same two steps `load()` performs, in the same order.
+            config
+                .apply_env_overrides(lookup_from(&env))
+                .expect("the value parses; it is validate() that must judge it");
+            assert_eq!(
+                config.validate().is_ok(),
+                ok,
+                "FOSSH_K_ANONYMITY={value} should {} be accepted",
+                if ok { "" } else { "not" }
+            );
+        }
+    }
+
+    #[test]
+    fn retention_and_rate_limit_bounds_are_enforced() {
+        let zero_retention = Config {
+            retention_days: 0,
+            ..Config::default()
+        };
+        assert!(matches!(
+            zero_retention.validate(),
+            Err(ConfigError::RetentionOutOfRange { value: 0 })
+        ));
+
+        let absurd_retention = Config {
+            retention_days: RETENTION_DAYS_MAX + 1,
+            ..Config::default()
+        };
+        assert!(matches!(
+            absurd_retention.validate(),
+            Err(ConfigError::RetentionOutOfRange { .. })
+        ));
+
+        let no_events = Config {
+            rate_limit: RateLimit {
+                per_sec: 0,
+                burst: 10,
+            },
+            ..Config::default()
+        };
+        assert!(matches!(
+            no_events.validate(),
+            Err(ConfigError::RateLimitInvalid { .. })
+        ));
+
+        let burst_below_rate = Config {
+            rate_limit: RateLimit {
+                per_sec: 60,
+                burst: 10,
+            },
+            ..Config::default()
+        };
+        assert!(matches!(
+            burst_below_rate.validate(),
+            Err(ConfigError::RateLimitInvalid { .. })
+        ));
     }
 
     #[test]

@@ -75,8 +75,26 @@ pub fn verify_signature_b32(
 }
 
 /// §8: "Reject if `|now − ts| > 300`."
+///
+/// `ts` is whatever the client put in the timestamp header, parsed as an
+/// `i64` and checked here before any site lookup or signature check — so
+/// `i64::MIN` reaches this function from an unauthenticated request with
+/// no valid key. `now - ts` then overflows, and `.abs()` on `i64::MIN`
+/// overflows too.
+///
+/// In the shipped release profile that wrapped rather than panicked, and
+/// the wrapped magnitude happened to land outside the 300-second window,
+/// so the request was still rejected. Correct by luck. In any build with
+/// `overflow-checks` on — every `cargo test` and `cargo build`, and any
+/// release build hardened the usual way — the same request panics, and
+/// this workspace ships `panic = "abort"`, which for the persistent
+/// `fossh-fcgi` transport means one crafted request takes down the
+/// process serving every site on it.
+///
+/// Saturating arithmetic gives the same answer as the ideal-integer
+/// version for every input, and the same answer in every profile.
 pub fn timestamp_in_window(ts: i64, now: i64) -> bool {
-    (now - ts).abs() <= TIMESTAMP_WINDOW_SECS
+    now.saturating_sub(ts).saturating_abs() <= TIMESTAMP_WINDOW_SECS
 }
 
 /// Bearer-mode key check (§8's "Bearer-only mode... permitted for browser-
@@ -322,6 +340,34 @@ mod tests {
         assert!(timestamp_in_window(1000, 700));
         assert!(!timestamp_in_window(1000, 1301));
         assert!(!timestamp_in_window(1000, 699));
+    }
+
+    /// `ts` is client-controlled and reaches `timestamp_in_window`
+    /// before any authentication, so these are reachable from an
+    /// anonymous request. Under `overflow-checks` — which is on for
+    /// this very test binary — the old `(now - ts).abs()` panicked on
+    /// each of them.
+    #[test]
+    fn extreme_timestamps_are_rejected_without_overflowing() {
+        let now = 1_700_000_000_i64;
+        for ts in [i64::MIN, i64::MIN + 1, -i64::MAX, i64::MAX, i64::MAX - 1] {
+            assert!(
+                !timestamp_in_window(ts, now),
+                "ts={ts} is nowhere near now={now} and must be rejected"
+            );
+        }
+        // And the same from the other side, in case `now` is ever
+        // sourced from something less trustworthy than the system clock.
+        for now in [i64::MIN, i64::MAX] {
+            assert!(!timestamp_in_window(1_700_000_000, now));
+        }
+        // Saturation must not create a false accept: two extremes that
+        // are genuinely far apart stay far apart.
+        assert!(!timestamp_in_window(i64::MIN, i64::MAX));
+        assert!(!timestamp_in_window(i64::MAX, i64::MIN));
+        // ...and two that are genuinely equal stay equal.
+        assert!(timestamp_in_window(i64::MAX, i64::MAX));
+        assert!(timestamp_in_window(i64::MIN, i64::MIN));
     }
 
     #[test]

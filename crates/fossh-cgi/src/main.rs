@@ -55,11 +55,11 @@ fn env_var(key: &str) -> Option<String> {
         .filter(|s| !s.is_empty() && s.len() <= fossh_core::validate::ENV_VALUE_MAX)
 }
 
-fn read_cgi_env(trust_forwarded_for: bool) -> CgiEnv {
+fn read_cgi_env(trusted_hops: u8) -> CgiEnv {
     let remote_addr = forwarded::resolve_client_ip(
         &env_var("REMOTE_ADDR").unwrap_or_default(),
         env_var("HTTP_X_FORWARDED_FOR").as_deref(),
-        trust_forwarded_for,
+        trusted_hops,
     );
     CgiEnv {
         method: env_var("REQUEST_METHOD").unwrap_or_default(),
@@ -161,11 +161,9 @@ fn main() {
     // Off by default (see fossh_ingest::forwarded's module doc comment) — an
     // operator opts in only when this instance genuinely sits behind
     // something that relays on a real visitor's behalf.
-    let trust_forwarded_for = matches!(
-        env_var("FOSSH_TRUST_FORWARDED_FOR").as_deref(),
-        Some("1") | Some("true")
-    );
-    let env = read_cgi_env(trust_forwarded_for);
+    let trusted_hops =
+        forwarded::trusted_hops_from_env(env_var("FOSSH_TRUST_FORWARDED_FOR").as_deref());
+    let env = read_cgi_env(trusted_hops);
     let data_dir = std::env::var_os("FOSSH_DATA_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/var/lib/fossh"));

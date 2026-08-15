@@ -78,7 +78,7 @@ fn read_header_or_eof<R: Read>(r: &mut R) -> std::io::Result<Option<protocol::He
     Ok(Some(protocol::read_header(&mut &buf[..])?))
 }
 
-fn build_env(params: &protocol::NameValuePairs, trust_forwarded_for: bool) -> IngestEnv {
+fn build_env(params: &protocol::NameValuePairs, trusted_hops: u8) -> IngestEnv {
     let mut get = std::collections::HashMap::with_capacity(params.len());
     for (k, v) in params {
         get.insert(
@@ -91,7 +91,7 @@ fn build_env(params: &protocol::NameValuePairs, trust_forwarded_for: bool) -> In
     let remote_addr = fossh_ingest::forwarded::resolve_client_ip(
         &get("REMOTE_ADDR").unwrap_or_default(),
         get("HTTP_X_FORWARDED_FOR").as_deref(),
-        trust_forwarded_for,
+        trusted_hops,
     );
 
     IngestEnv {
@@ -112,10 +112,7 @@ fn build_env(params: &protocol::NameValuePairs, trust_forwarded_for: bool) -> In
     }
 }
 
-pub fn read_request<R: Read>(
-    r: &mut R,
-    trust_forwarded_for: bool,
-) -> Result<RequestOutcome, ReadError> {
+pub fn read_request<R: Read>(r: &mut R, trusted_hops: u8) -> Result<RequestOutcome, ReadError> {
     let Some(begin_header) = read_header_or_eof(r)? else {
         return Ok(RequestOutcome::ConnectionClosed);
     };
@@ -204,7 +201,7 @@ pub fn read_request<R: Read>(
 
     Ok(RequestOutcome::Ingest(Box::new(IngestRequest {
         request_id,
-        env: build_env(&params, trust_forwarded_for),
+        env: build_env(&params, trusted_hops),
         body,
         keep_conn: begin.keep_conn,
     })))
@@ -302,7 +299,7 @@ mod tests {
     #[test]
     fn a_clean_connection_close_before_any_request_is_not_an_error() {
         let mut cursor = Cursor::new(Vec::<u8>::new());
-        let outcome = read_request(&mut cursor, false).unwrap();
+        let outcome = read_request(&mut cursor, 0).unwrap();
         assert!(matches!(outcome, RequestOutcome::ConnectionClosed));
     }
 
@@ -319,7 +316,7 @@ mod tests {
             true,
         );
         let mut cursor = Cursor::new(data);
-        let outcome = read_request(&mut cursor, false).unwrap();
+        let outcome = read_request(&mut cursor, 0).unwrap();
         let RequestOutcome::Ingest(req) = outcome else {
             panic!("expected Ingest");
         };
@@ -335,21 +332,34 @@ mod tests {
         assert!(req.keep_conn);
     }
 
+    /// Same resolution as `fossh-cgi`, including the part that matters:
+    /// with one trusted hop the entry that hop appended wins, so the
+    /// `198.51.100.1` a client put at the head of the header does not
+    /// become the stored address. See `fossh_ingest::forwarded`.
     #[test]
-    fn remote_addr_honors_trust_forwarded_for_exactly_like_cgi_does() {
-        let data = full_request(
-            &[
-                ("REMOTE_ADDR", "127.0.0.1"),
-                ("HTTP_X_FORWARDED_FOR", "198.51.100.1, 127.0.0.1"),
-            ],
-            b"",
-            false,
-        );
-        let mut cursor = Cursor::new(data);
-        let RequestOutcome::Ingest(req) = read_request(&mut cursor, true).unwrap() else {
+    fn remote_addr_honors_trusted_hops_exactly_like_cgi_does() {
+        let params = &[
+            ("REMOTE_ADDR", "127.0.0.1"),
+            ("HTTP_X_FORWARDED_FOR", "198.51.100.1, 203.0.113.7"),
+        ];
+
+        let mut cursor = Cursor::new(full_request(params, b"", false));
+        let RequestOutcome::Ingest(req) = read_request(&mut cursor, 1).unwrap() else {
             panic!("expected Ingest");
         };
-        assert_eq!(req.env.remote_addr, "198.51.100.1");
+        assert_eq!(
+            req.env.remote_addr, "203.0.113.7",
+            "the trusted proxy's own observation, not the client's claim"
+        );
+
+        let mut cursor = Cursor::new(full_request(params, b"", false));
+        let RequestOutcome::Ingest(req) = read_request(&mut cursor, 0).unwrap() else {
+            panic!("expected Ingest");
+        };
+        assert_eq!(
+            req.env.remote_addr, "127.0.0.1",
+            "with no trusted hops the header is ignored entirely"
+        );
     }
 
     #[test]
@@ -359,7 +369,7 @@ mod tests {
         begin_body[0..2].copy_from_slice(&2u16.to_be_bytes()); // Authorizer
         write_record(&mut buf, RecordType::BeginRequest, 1, &begin_body);
         let mut cursor = Cursor::new(buf);
-        let err = read_request(&mut cursor, false).unwrap_err();
+        let err = read_request(&mut cursor, 0).unwrap_err();
         assert!(matches!(
             err,
             ReadError::Unsupported {
@@ -384,7 +394,7 @@ mod tests {
             &encode_params(&[("A", "1")]),
         );
         let mut cursor = Cursor::new(buf);
-        let err = read_request(&mut cursor, false).unwrap_err();
+        let err = read_request(&mut cursor, 0).unwrap_err();
         assert!(matches!(
             err,
             ReadError::Unsupported {
@@ -399,7 +409,7 @@ mod tests {
         let big = vec![b'x'; BODY_MAX + 1];
         let data = full_request(&[("REQUEST_METHOD", "POST")], &big, false);
         let mut cursor = Cursor::new(data);
-        let err = read_request(&mut cursor, false).unwrap_err();
+        let err = read_request(&mut cursor, 0).unwrap_err();
         assert!(matches!(err, ReadError::BodyTooLarge { request_id: 1 }));
     }
 
@@ -427,7 +437,7 @@ mod tests {
         write_record(&mut buf, RecordType::Params, 1, b"yy"); // 65535 + 2 > MAX_PARAMS_BYTES (65536)
 
         let mut cursor = Cursor::new(buf);
-        let err = read_request(&mut cursor, false).unwrap_err();
+        let err = read_request(&mut cursor, 0).unwrap_err();
         assert!(matches!(
             err,
             ReadError::Protocol(protocol::ProtocolError::ParamsTooLarge)
