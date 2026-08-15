@@ -169,6 +169,19 @@ pub fn run(args: &[String]) -> i32 {
         pass: config.retention_days >= 1,
         detail: format!("{} days", config.retention_days),
     });
+    // Config::validate() refuses to load below this, so a running
+    // install cannot fail it -- but `doctor` is also what an operator
+    // runs while editing the config, and a check that names the
+    // invariant is worth more than one that can never fire.
+    checks.push(Check {
+        name: "k_anonymity is high enough to actually fold (P6)",
+        pass: config.k_anonymity >= fossh_core::config::K_ANONYMITY_MIN,
+        detail: format!(
+            "{} (minimum {}, default 5)",
+            config.k_anonymity,
+            fossh_core::config::K_ANONYMITY_MIN
+        ),
+    });
     checks.push(Check {
         name: "respect_optout_signals (P5)",
         pass: true, // both true and explicit-false are valid, documented configurations

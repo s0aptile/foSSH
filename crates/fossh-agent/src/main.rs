@@ -62,15 +62,18 @@ fn main() -> std::process::ExitCode {
     let data_dir = std::env::var_os("FOSSH_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/var/lib/fossh"));
-    // `.filter(|&k| k >= 1)`: the same P6 invariant `fossh doctor`
-    // names — `k_anonymity = 0` would fold nothing into `(other)` at
-    // all, silently defeating the k-anonymity the console's own header
-    // claims. An unset or unparseable value already fell back to the
-    // safe default; an explicit but invalid `0` must too.
+    // The floor comes from `fossh_core::config` rather than being
+    // spelled here, because this guard used to say `k >= 1` and 1 is
+    // not safe: the fold is `uniques < k`, which at k=1 is false for
+    // every group that appears in a result at all, so a lone visitor is
+    // reported by exact path and exact hit count — the same outcome
+    // k=0 produces, which this guard was written to prevent. Two
+    // places deciding the same invariant is how one of them ends up
+    // wrong.
     let k_anonymity: u32 = std::env::var("FOSSH_K_ANONYMITY")
         .ok()
         .and_then(|s| s.parse().ok())
-        .filter(|&k| k >= 1)
+        .filter(|&k| k >= fossh_core::config::K_ANONYMITY_MIN)
         .unwrap_or(5);
     // §2.6's fixed path; overridable so this can be exercised end to
     // end without root in a development environment.
