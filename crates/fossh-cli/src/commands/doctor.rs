@@ -120,11 +120,12 @@ pub fn run(args: &[String]) -> i32 {
         }
     };
 
-    checks.push(check_permissions(
-        &config.data_dir,
-        0o700,
-        "data_dir permissions (0700)",
-    ));
+    // data_dir permissions and existence are the self-healing
+    // engine's rules now -- see `self_healing_findings` below. They
+    // used to be checked here as well, and the two implementations
+    // disagreed: with k_anonymity = 2 this table printed a [PASS] row
+    // and a [FAIL] row for the same setting, two lines apart. One rule
+    // lives in one place.
     checks.push(check_permissions(
         &db_path(&config.data_dir),
         0o600,
@@ -136,18 +137,6 @@ pub fn run(args: &[String]) -> i32 {
         "salt file permissions (0600, P2)",
     ));
 
-    match std::fs::metadata(&config.data_dir) {
-        Ok(_) => checks.push(Check {
-            name: "data_dir exists",
-            pass: true,
-            detail: config.data_dir.display().to_string(),
-        }),
-        Err(e) => checks.push(Check {
-            name: "data_dir exists",
-            pass: false,
-            detail: e.to_string(),
-        }),
-    }
 
     // §3.8: opening the real store here means opening it *encrypted*,
     // the same way every other real caller does — a `doctor` pass that
@@ -176,11 +165,6 @@ pub fn run(args: &[String]) -> i32 {
     };
     checks.push(db_check);
 
-    checks.push(Check {
-        name: "k_anonymity threshold (P6)",
-        pass: config.k_anonymity >= 1,
-        detail: format!("k = {}", config.k_anonymity),
-    });
     checks.push(Check {
         name: "retention_days is positive (P7)",
         pass: config.retention_days >= 1,
@@ -217,8 +201,76 @@ pub fn run(args: &[String]) -> i32 {
         detail: "structural: fossh-cgi's response writer has no header-setting API at all — not independently probed here".to_string(),
     });
 
+    // The self-healing rules, run here rather than duplicated.
+    //
+    // `fossh-selfheal`'s engine and this table were checking
+    // overlapping things from two separate implementations — the
+    // README, docs/SELF-HEALING.md and the upgrade guide all told
+    // operators that `fossh doctor` runs those rules, and it did not.
+    // Rather than keep two sets of checks that can disagree, the
+    // engine's findings are folded into the same table, so there is
+    // one place a rule lives and one place an operator reads it.
+    for finding in self_healing_findings(&config) {
+        checks.push(finding);
+    }
+
     print_table(&checks);
     if checks.iter().all(|c| c.pass) { 0 } else { 1 }
+}
+
+/// Runs `fossh-selfheal`'s deterministic rules and renders each finding
+/// as a row of this table.
+///
+/// Only the deterministic half: `doctor` never consults the optional
+/// local model. A diagnostic tool whose output changed depending on
+/// whether a language model happened to be installed would be worth
+/// very little, and the model cannot alter a finding anyway — it may
+/// only annotate one (ADR-0065).
+fn self_healing_findings(config: &fossh_core::config::Config) -> Vec<Check> {
+    use fossh_selfheal::engine::{self, Severity};
+
+    let ctx = engine::Context {
+        data_dir: config.data_dir.clone(),
+        config_path: config.data_dir.join("fossh.toml"),
+        setup_token_path: std::env::var_os("FOSSH_SETUP_TOKEN_PATH")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("/etc/fossh/setup-token")),
+        k_anonymity: config.k_anonymity,
+        // `doctor` deliberately makes no network call (S6), and asking
+        // the watchdog is one. Left unknown rather than reported as
+        // unreachable, which would be a false alarm on every run.
+        watchdog_reachable: None,
+        country_db: match &config.country_db {
+            fossh_core::config::CountryDb::Custom(path) => {
+                Some(path.to_string_lossy().into_owned())
+            }
+            fossh_core::config::CountryDb::None => Some("none".to_string()),
+            fossh_core::config::CountryDb::Builtin => Some("builtin".to_string()),
+        },
+    };
+
+    engine::check(&ctx)
+        .into_iter()
+        .map(|finding| {
+            // An `Info` finding is something worth knowing, not a
+            // failure, so it must not make `doctor` exit non-zero.
+            let pass = finding.severity == Severity::Info;
+            let remedy = match &finding.remedy {
+                engine::Remedy::None => String::new(),
+                engine::Remedy::Automatic { description } => format!(" — {description}"),
+                engine::Remedy::Operator { command, .. } => format!(" — run: {command}"),
+            };
+            Check {
+                // Leaked deliberately: `Check::name` is `&'static str`
+                // and these come from the engine at runtime. One small
+                // leak per finding, once per process, in a
+                // short-lived CLI that is about to exit.
+                name: Box::leak(finding.title.clone().into_boxed_str()),
+                pass,
+                detail: format!("{}{}", finding.detail, remedy),
+            }
+        })
+        .collect()
 }
 
 fn print_table(checks: &[Check]) {

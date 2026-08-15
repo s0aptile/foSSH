@@ -504,6 +504,7 @@ dependencies = [
  "fossh-admin",
  "fossh-core",
  "fossh-ingest",
+ "fossh-selfheal",
  "fossh-store",
  "serde_json",
  "toml",
