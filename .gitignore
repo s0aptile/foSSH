@@ -20,3 +20,10 @@ __MACOSX/
 # release artifact, so it must never be committed either.
 /assets/geoip/*.mmdb
 /assets/geoip/*.mmdb.gz
+
+# Python bytecode. Generated on every import of gui/fossh_console, and
+# it reached a release zip once because the zip includes untracked
+# files by design (so the public source drop is the real tree, not
+# just what happens to be committed).
+__pycache__/
+*.py[cod]
