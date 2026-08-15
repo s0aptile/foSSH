@@ -58,6 +58,52 @@ RHEL itself isn't directly buildable-against without a subscription; Copr's `epe
 
 **One SRPM, multiple chroots — confirmed, not assumed.** `dist/fossh-0.0.2.1-1.fc44.src.rpm`'s filename says `fc44` because that's this dev machine's own local `%dist` at the moment `scripts/build-release-rpm.sh` ran `rpmbuild -bs` — but the *spec bundled inside that SRPM* still has `Release: 1%{?dist}` with `%{?dist}` unexpanded (confirmed by extracting it with `rpm2cpio ... | cpio -idm` and reading the spec directly), not baked to a literal `.fc44` string. That means the exact same SRPM can be submitted to any chroot via `copr-cli build s0aptile/fossh --chroot <chroot> <srpm>` and Copr's build backend re-evaluates `%dist` inside that chroot correctly — real build logs back this: the same source SRPM came back tagged `fossh-0.1.3~alpha.1-1.el9.src.rpm` on `epel-9-x86_64` and `...-1.el10.src.rpm` on `epel-10-x86_64`. `scripts/build-release-rpm.sh` does not need a per-distro variant; the `fc44` in the filename is cosmetic, not a real constraint.
 
+### Item 3 (the EVP_MAC link failure) is fixed — 2026-08-15
+
+**Everything in the 2026-08-07 section below is preserved as written,
+but item 3 is no longer accurate and item 4 has not been retested.**
+Read this first.
+
+`scripts/build-release.sh` now hands the linker the system
+`libcrypto.so` as an explicit file argument, found via `pkg-config`,
+so SQLCipher's `EVP_MAC_*` calls resolve against real OpenSSL before
+BoringSSL's colliding `libcrypto.a` is ever reached. A full
+`scripts/build-release-rpm.sh` on Fedora 44 now produces all four
+packages plus the SRPM:
+
+    dist/fossh-0.0.2.2-1.fc44.src.rpm
+    dist/fossh-0.0.2.2-1.fc44.x86_64.rpm
+    dist/fossh-console-0.0.2.2-1.fc44.noarch.rpm
+    dist/fossh-selfheal-0.0.2.2-1.fc44.noarch.rpm
+    dist/fossh-watchdog-0.0.2.2-1.fc44.x86_64.rpm
+
+Not just link-clean — functionally correct. `fossh-fcgi` resolves
+`libcrypto.so.3` dynamically, and a freshly created database opens with
+sixteen random bytes where an unencrypted SQLite file would read
+`SQLite format 3`, which is SQLCipher genuinely running through that
+OpenSSL rather than silently degrading.
+
+**What is still open:**
+
+- **No Copr build has been attempted since the fix.** The last
+  submission predates it. Fedora chroots are expected to pass now; that
+  is an expectation, not a result, and this file should not claim
+  otherwise until a build number can be cited here.
+- **Item 4 (EPEL 9's stale Rust) is untouched by this.** It fails before
+  compilation on an MSRV check and needs Copr's EL9 buildroot snapshot
+  to catch up to CentOS Stream's own `rust` 1.97.
+- **The advice below still holds:** do not tell anyone to
+  `dnf copr enable` any chroot until a build succeeds there.
+
+One hardening from this: the `libcrypto.so` lookup used to warn and
+carry on when `pkg-config` could not answer, which produced the
+`undefined reference to EVP_MAC_fetch` failure several minutes later
+with nothing pointing at the cause — that is how this was originally
+recorded as an unexplained Rust-level regression. It now falls back to
+well-known library paths, and failing that stops with a message naming
+the missing build dependency. `pkgconfig` was added to the spec's
+`BuildRequires` so the question does not arise in a chroot.
+
 ### EPEL/RHEL-family build status (as of 2026-08-07)
 
 **The `ocaml-ctypes-devel` blocker below (item 2) is fixed as of `packaging/rpm/fossh.spec` Release 2** — the spec now builds two RPMs from one SRPM: a base `fossh` package (pure Rust — `fossh`, `fossh-cgi`, `fossh-fcgi`, `fossh-tui`, the SELinux module — buildable everywhere) and a `fossh-watchdog` subpackage (the OCaml watchdog, `ocaml-ctypes-devel` and all) gated behind `%if 0%{?fedora}` in every section that touches it (`%package`, `BuildRequires`, `%build`, `%install`, `%files`, scriptlets). On EPEL/CentOS Stream chroots `%fedora` is unset, so the entire watchdog subpackage — declaration, dependencies, and build steps — is skipped, not merely excluded from the file list. **Confirmed for real, not by inspection**: three fresh Copr builds submitted against the same SRPM (`fossh-0.0.2.1-1.fc44.src.rpm`) — `epel-9-x86_64` (build [10835124](https://copr.fedorainfracloud.org/coprs/build/10835124)), `epel-10-x86_64` (build [10835127](https://copr.fedorainfracloud.org/coprs/build/10835127)), `fedora-44-x86_64` (build [10835128](https://copr.fedorainfracloud.org/coprs/build/10835128)). Both EPEL builds' own `root.log`/`builder-live.log` show `ocaml-srpm-macros` installed (a generic macro package, unrelated) and **zero** occurrences of `ocaml`, `ocaml-dune`, `ocaml-ctypes-devel`, `ocaml-findlib`, or `jq` anywhere in the dependency-resolution or install log — the exact packages that used to be requested and fail to resolve are now never even asked for. `%files` for base+watchdog together, cross-checked against the last known-good full single-package build's own `rpm -qlp` output (`dist/fossh-0.1.3~alpha.1-1.fc44.x86_64.rpm`, built before this split), accounts for every one of that build's 19 paths with none missing and none duplicated.

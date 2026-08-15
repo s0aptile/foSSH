@@ -4,7 +4,7 @@ A modular platform for self-hosted, privacy-preserving measurement. Its flagship
 
 The crates below are factored so telemetry is *a* module rather than the whole system; `MODULES.md` documents how to write another. Stated plainly: telemetry is the only module of substance today, and the module interface is not stable yet.
 
-**Status: open alpha (`0.0.2.1`).** Every release before this one is retired — see `RETIREMENT.md` for what was actually wrong with the 0.1.x line, and `docs/UPGRADING-from-0.1.md` if you are running one.
+**Status: open alpha (`0.0.2.2`).** Every release before this one is retired — see `RETIREMENT.md` for what was actually wrong with the 0.1.x line, and `docs/UPGRADING-from-0.1.md` if you are running one.
 
 **Previously:** Working, tested, not yet exhaustively hardened everywhere — see `dev/DURUM.md` for exactly what's done versus in progress in the current development chapter, and `DECISIONS.md` for the reasoning behind every non-obvious choice made along the way.
 
@@ -35,7 +35,7 @@ The usual way to get basic site analytics is a hosted service that sees every vi
 - **Embedded (FFI)** — `libfossh`, a C ABI (`cdylib`/`staticlib`) linked directly into Go, PHP, Ruby, or anything else that can call a C function. No process, no socket, no open port. See `bindings/`.
 - **Shared hosting** — no shell, no compiled extensions available? The PHP binding's HTTP-remote transport talks to a foSSH instance running elsewhere over plain HTTPS. See `docs/INTEGRATION-php.md`.
 - **Fedora-native** — `sudo dnf install fossh` (in progress — see `dev/DURUM.md`'s current chapter): the portable core (`fossh-cgi`/`fossh-fcgi`/`fossh` CLI/`fossh-agent`), hardened systemd units, and an SELinux policy module confining `fossh-cgi`/`fossh-fcgi`, plus an optional `fossh-watchdog` subpackage — the OCaml watchdog, tamper detection, and the operator-auth enrollment gate the console's setup flow drives.
-- **RHEL family (RHEL, Rocky, Alma) via EPEL** — as of `packaging/rpm/fossh.spec`'s subpackage split, the same portable core (`fossh-cgi`/`fossh-fcgi`/`fossh` CLI/`fossh-agent`/SELinux module) is a *separate*, everywhere-buildable package from `fossh-watchdog` — `dnf copr enable s0aptile/fossh epel-9-x86_64` (or `epel-10-x86_64`) once a build actually succeeds there. No `fossh-watchdog` on EPEL/RHEL, ever, as things stand: it needs `ocaml-ctypes-devel`, not packaged for EPEL. That means no supervised restart-on-crash, no tamper detection, and no operator-auth gate — `fossh-fcgi` runs as a plain, unsupervised systemd service, and the console's Overview and Setup pages report an honest "watchdog unreachable" rather than doing anything (its Telemetry page, reading straight from the SQLite store, is unaffected). Not yet installable at all, on *any* chroot including Fedora's own: two separate, newly-discovered build regressions (unrelated to the EPEL split itself) currently block every chroot — see `docs/PACKAGING-copr.md`'s "EPEL/RHEL-family build status" for exactly what's confirmed fixed, what's still blocking, and why.
+- **RHEL family (RHEL, Rocky, Alma) via EPEL** — as of `packaging/rpm/fossh.spec`'s subpackage split, the same portable core (`fossh-cgi`/`fossh-fcgi`/`fossh` CLI/`fossh-agent`/SELinux module) is a *separate*, everywhere-buildable package from `fossh-watchdog` — `dnf copr enable s0aptile/fossh epel-9-x86_64` (or `epel-10-x86_64`) once a build actually succeeds there. No `fossh-watchdog` on EPEL/RHEL, ever, as things stand: it needs `ocaml-ctypes-devel`, not packaged for EPEL. That means no supervised restart-on-crash, no tamper detection, and no operator-auth gate — `fossh-fcgi` runs as a plain, unsupervised systemd service, and the console's Overview and Setup pages report an honest "watchdog unreachable" rather than doing anything (its Telemetry page, reading straight from the SQLite store, is unaffected). Not installable from a repository yet. The link failure that blocked every chroot including Fedora's own is fixed as of 0.0.2.2 — a full RPM build now succeeds locally, all four packages — but no Copr build has been attempted since, so there is still nothing published to install. See `docs/PACKAGING-copr.md` for what is confirmed fixed and what remains.
 - **Fedora Atomic (Silverblue, Kinoite, CoreOS)** — `rpm-ostree install fossh` plus a reboot, once the Copr repo is added the ostree-appropriate way. See `docs/DEPLOY-atomic.md`.
 
 ## Quick start — pick your path
@@ -63,6 +63,15 @@ first-run operator enrollment flow.
 sudo dnf install fossh-console
 fossh-console
 ```
+
+**That command does not work yet**, and will not until the packages are
+published — foSSH is not in Fedora, and the Copr repository has no
+successful build to install. Today the console is run from a source
+build, alongside the rest: see "Quick start" above for the workspace
+build, then
+`python3 -m fossh_console` from `gui/`. `docs/PACKAGING-copr.md` tracks
+what is still blocking the packages, and this line changes the day that
+is finished rather than before it.
 
 It never listens on a socket. Everything it shows comes from
 `fossh-agent`, a helper it spawns over a pipe, and no credential

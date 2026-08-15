@@ -54,7 +54,45 @@ openssl_libdir=$(pkg-config --variable=libdir openssl 2>/dev/null || true)
 if [ -n "$openssl_libdir" ] && [ -e "${openssl_libdir}/libcrypto.so" ]; then
     export RUSTFLAGS="${RUSTFLAGS} -C link-arg=${openssl_libdir}/libcrypto.so"
 else
-    echo "build-release: warning: could not locate libcrypto.so via pkg-config (openssl-devel installed?) — the --features ...quic build below may fail to link fossh-fcgi/fossh-agent against SQLCipher's OpenSSL backend" >&2
+    # Fails here rather than warning and building on. This script always
+    # builds with the quic features, so the condition that makes the
+    # workaround necessary is always present — carrying on produces a
+    # link failure a few minutes later reading
+    #
+    #     undefined reference to `EVP_MAC_fetch'
+    #
+    # which says nothing about pkg-config, openssl-devel, or this
+    # script. That is not a hypothetical: it is what a Copr chroot
+    # reported, and what the packaging notes then recorded as an
+    # unexplained Rust-level regression blocking every build. A missing
+    # build dependency should say it is a missing build dependency.
+    #
+    # The fallback exists because pkg-config's absence is a likelier
+    # cause than OpenSSL's, and a build host that has the library but
+    # not the query tool should not be stopped by the query tool.
+    for candidate in /usr/lib64/libcrypto.so /usr/lib/x86_64-linux-gnu/libcrypto.so /usr/lib/libcrypto.so; do
+        if [ -e "$candidate" ]; then
+            openssl_libdir=$(dirname "$candidate")
+            break
+        fi
+    done
+    if [ -n "$openssl_libdir" ] && [ -e "${openssl_libdir}/libcrypto.so" ]; then
+        echo "build-release: pkg-config could not answer; using ${openssl_libdir}/libcrypto.so found directly" >&2
+        export RUSTFLAGS="${RUSTFLAGS} -C link-arg=${openssl_libdir}/libcrypto.so"
+    else
+        echo "build-release: cannot find the system libcrypto.so." >&2
+        echo "build-release:" >&2
+        echo "build-release:   This build links BoringSSL (via quiche, for the watchdog" >&2
+        echo "build-release:   channel) and SQLCipher (via rusqlite, for data at rest) into" >&2
+        echo "build-release:   the same binaries. BoringSSL ships its own file named" >&2
+        echo "build-release:   libcrypto.a on the linker's -L path and does not implement" >&2
+        echo "build-release:   the OpenSSL 3 EVP_MAC family SQLCipher needs, so the real" >&2
+        echo "build-release:   libcrypto.so has to be named explicitly or the link fails" >&2
+        echo "build-release:   with undefined EVP_MAC_* symbols." >&2
+        echo "build-release:" >&2
+        echo "build-release:   Install openssl-devel (and pkgconf-pkg-config), then re-run." >&2
+        exit 1
+    fi
 fi
 
 # CFLAGS/CXXFLAGS alongside RUSTFLAGS, same reasoning and same fix

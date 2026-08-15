@@ -98,9 +98,21 @@ sed -i -E "s|fossh-advisor:[0-9][0-9.]*|fossh-advisor:$display|g" docs/SELF-HEAL
 # operator can identify the visit in their own data.
 sed -i -E "s|foSSH-Verify/[0-9][0-9.]*|foSSH-Verify/$display|" gui/fossh_console/verify.py
 
-# The software-centre listing.
-sed -i -E "s|<release version=\"[^\"]+\"|<release version=\"$display\"|" \
-    gui/data/org.fossh.Console.metainfo.xml
+# The software-centre listing. Only the newest <release> entry, which
+# is the first one in the file -- AppStream orders releases newest
+# first, and the ones below it are history. Rewriting all of them
+# (which is what this did before there was more than one) would
+# renumber every past release to the current version on every bump,
+# quietly destroying the changelog a person reads in the software
+# centre before deciding to install.
+awk -v v="$display" '
+    !done && /<release version="/ { sub(/<release version="[^"]+"/, "<release version=\"" v "\""); done = 1 }
+    { print }
+' gui/data/org.fossh.Console.metainfo.xml > gui/data/org.fossh.Console.metainfo.xml.tmp
+mv gui/data/org.fossh.Console.metainfo.xml.tmp gui/data/org.fossh.Console.metainfo.xml
+
+# The status line a stranger reads first.
+sed -i -E "s|\*\*Status: open alpha \(\`[0-9][0-9.]*\`\)\.\*\*|**Status: open alpha (\`$display\`).**|" README.md
 
 # Cargo.lock records the workspace members' own versions.
 cargo update --workspace --offline >/dev/null 2>&1 || cargo update --workspace >/dev/null 2>&1 || true

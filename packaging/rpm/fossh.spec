@@ -61,6 +61,13 @@ BuildRequires:  rust
 BuildRequires:  gcc
 BuildRequires:  git
 BuildRequires:  openssl-devel
+# scripts/build-release.sh asks pkg-config where the real libcrypto.so
+# is, so it can hand the linker that exact file -- BoringSSL (vendored
+# by quiche) ships its own libcrypto.a on the -L path and lacks the
+# OpenSSL 3 EVP_MAC family SQLCipher calls. Without the query tool the
+# script falls back to well-known paths and then fails loudly, but
+# naming it here means it never has to.
+BuildRequires:  pkgconfig
 # The `openssl` CLI itself, not just -devel: `fossh-admin::tls_identity`
 # (core's §3.4 mTLS identity, shelled out to via a hardcoded
 # `/usr/bin/openssl`) has its own real `cargo test` suite that
