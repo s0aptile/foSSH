@@ -34,6 +34,7 @@ zeroize.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+nix = { workspace = true, features = ["signal", "process"] }
 
 # Deliberately NOT a dependency here: any HTTP/TLS client crate.
 # `integrations_net.rs` shells out to the system `curl` instead, and

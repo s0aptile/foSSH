@@ -323,6 +323,7 @@ fn load_one(path: &Path) -> Result<Manifest, ModuleError> {
 ///   protocol uses, so a module is written the same way a client is.
 pub fn dispatch(manifest: &Manifest, request_line: &str) -> Result<String, ModuleError> {
     use std::io::{BufRead, BufReader, Read, Write};
+    use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
     /// Generous for a JSON reply, small enough that a runaway module
@@ -336,6 +337,17 @@ pub fn dispatch(manifest: &Manifest, request_line: &str) -> Result<String, Modul
 
     let mut child = Command::new(&manifest.exec)
         .args(&manifest.args)
+        // Its own process group, so a timeout can kill the module AND
+        // anything it started. Without this, `child.kill()` reaps only
+        // the program named in the manifest: a module that is a shell
+        // script wrapping a long-running command leaves that command
+        // running forever. Observed directly — a module that hung was
+        // killed on schedule and left two orphans behind.
+        //
+        // `process_group` is safe and stable; the alternative is a
+        // pre_exec closure, which is `unsafe` and this crate forbids
+        // it.
+        .process_group(0)
         // env_clear first: everything the module sees is below this
         // line and nothing above it leaks in.
         .env_clear()
@@ -379,7 +391,11 @@ pub fn dispatch(manifest: &Manifest, request_line: &str) -> Result<String, Modul
     let deadline = std::time::Duration::from_secs(manifest.timeout_secs);
     let outcome = rx.recv_timeout(deadline);
     // Reaped either way: a module that timed out is a module that must
-    // not be left running.
+    // not be left running — and neither must anything it started.
+    // SIGKILL to the whole group, which `process_group(0)` above made
+    // the module the leader of.
+    let pgid = nix::unistd::Pid::from_raw(child.id() as i32);
+    let _ = nix::sys::signal::killpg(pgid, nix::sys::signal::Signal::SIGKILL);
     let _ = child.kill();
     let _ = child.wait();
 

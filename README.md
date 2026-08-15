@@ -1,6 +1,8 @@
 # foSSH
 
-Privacy-preserving, embeddable telemetry. Self-hosted site analytics without sending your visitors' data to a third party.
+A modular platform for self-hosted, privacy-preserving measurement. Its flagship module is site analytics — telemetry without sending your visitors' data to a third party — and that module is why most people install it.
+
+The crates below are factored so telemetry is *a* module rather than the whole system; `MODULES.md` documents how to write another. Stated plainly: telemetry is the only module of substance today, and the module interface is not stable yet.
 
 **Status: open alpha (`0.0.2.1`).** Every release before this one is retired — see `RETIREMENT.md` for what was actually wrong with the 0.1.x line, and `docs/UPGRADING-from-0.1.md` if you are running one.
 
@@ -139,6 +141,7 @@ This is a lot of root-level files — most of them sit here because the project'
 | `AUTHORS`, `LICENSE` | Exactly what they say. |
 | `RULES.md` | Naming, tone, the public/private boundary, platform support, positioning. |
 | `DECISIONS.md` | The ADR log — every non-obvious choice, and why. |
+| `MODULES.md` | How to write a module: the protocol, the manifest, and why a module is a process rather than a plugin. |
 | `RETIREMENT.md` | Which releases are retired, and what was actually wrong with them. |
 | `docs/SELF-HEALING.md` | The deterministic rules, and the fence around the optional model. |
 | `dev/` | How this project is actually being built, right now — chapter status (`dev/DURUM.md`), retrospectives. Not end-user documentation; read `docs/` for that. |
@@ -157,4 +160,4 @@ foSSH accepts donations on:
 
 - **Solana (SPL):** `J7wgrgySAVvWmreXiM51ig3rqY1vNnpdpvqZsHZLPfwD`
 - **Neon (Neon EVM):** `0xEde8Dd4413b667269e3Df902C49532C2212475AF`
-- **Monero** (not recommended): `87NdV4EUcpQWsBR77L4PdCcWZjxhxcy91YGH1hJCdeXU7ERZrwwRZYT843gCojF7wsWfTUm8zH83BRNA7DTLdh9xC8pxnmZ`
+- **Monero** — accepted, but a transfer is harder to reconcile against a donation than the two above, so it is the last resort rather than the first choice: `87NdV4EUcpQWsBR77L4PdCcWZjxhxcy91YGH1hJCdeXU7ERZrwwRZYT843gCojF7wsWfTUm8zH83BRNA7DTLdh9xC8pxnmZ`

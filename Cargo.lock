@@ -478,6 +478,7 @@ dependencies = [
  "fossh-core",
  "fossh-ipc",
  "fossh-store",
+ "nix",
  "serde",
  "serde_json",
  "toml",

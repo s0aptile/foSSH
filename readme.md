@@ -1,12 +1,16 @@
 # foSSH
 
-Privacy-preserving, embeddable telemetry. Light. Small. Compact.
+A modular platform for self-hosted, privacy-preserving measurement. Light. Small. Compact.
 
-**OPEN ALPHA (0.1.3_oa).** Alpha means the *interfaces* are unstable. It does not mean the *invariants* are.
+**OPEN ALPHA (0.0.2.1).** Alpha means the *interfaces* are unstable. It does not mean the *invariants* are. Every release before this one is retired — see `RETIREMENT.md`.
 
 ## What it is
 
-A single binary that speaks CGI, plus a C-ABI shared library you link straight into your own process — Go, PHP, Ruby, C, or anything else that can call a C function. No process to run, no socket to open, no port to expose: the embedded shape links in and stays there.
+A platform, and one module that is the reason most people install it.
+
+**Telemetry** is that module: a single binary that speaks CGI, plus a C-ABI shared library you link straight into your own process — Go, PHP, Ruby, C, or anything else that can call a C function. No process to run, no socket to open, no port to expose: the embedded shape links in and stays there.
+
+The rest — the store, the supervising watchdog, the desktop console, self-healing — is factored so telemetry is *a* module rather than the whole system. `MODULES.md` documents how to write another one. Today telemetry is the only module of substance that exists, and the interface is not stable yet; both of those are stated plainly rather than implied.
 
 ## What it will never do
 
@@ -17,15 +21,15 @@ A single binary that speaks CGI, plus a C-ABI shared library you link straight i
 - No user-agent strings at rest (parsed to coarse buckets, then discarded).
 - No free-text fields from end users. Event names are allowlisted by the embedder.
 - No session recording, no heatmaps, no keystrokes, no mouse paths.
-- No third-party egress. foSSH never phones home to anyone, including its own authors.
+- No third-party egress from the path that receives events, enforced by which crates are in its dependency tree rather than by configuration.
 - No JavaScript SDK in v1. The pixel/beacon endpoint exists, but the primary integration is server-side.
-- No dashboard in v1. A read API and a `fossh query` CLI ship; UI is a separate project.
+- foSSH never phones home to anyone, including its own authors. There is no telemetry about your telemetry.
 
 ## 60-second quickstart
 
 ```
 sha256sum -c SHA256SUMS            # verify the checksum first (the file shipped alongside this zip on the download page)
-unzip fossh-<version>.zip
+unzip 'fossh-0.0.2.1(this).zip'
 cd fossh/dist
 ./fossh-x86_64-unknown-linux-gnu init --dir ./data     # target-triple-suffixed names in dist/, not a plain "fossh" — and
                                                         # --dir is required unless you're root: the default (/var/lib/fossh)
@@ -43,7 +47,7 @@ Point your webserver's CGI config at `fossh-cgi-x86_64-unknown-linux-gnu` (see `
 | FastCGI | `fossh-fcgi`, persistent, direct-to-SQLite | Higher-throughput deployments — one process, a Unix socket, its own retention/vacuum maintenance instead of cron |
 | Embedded (FFI) | `libfossh` — `cdylib`/`staticlib` | Go, PHP, Ruby, C, anything with a C ABI — no process, no socket, no open port |
 | Shared hosting | PHP binding's HTTP-remote transport | No shell, no compiled extensions available — plain HTTPS to a foSSH instance you run elsewhere |
-| Fedora-native | `dnf install fossh` (in progress) | Self-hosted Fedora Server, with a watchdog, hardened systemd units, SELinux confinement, and a local TUI setup wizard |
+| Fedora-native | `dnf install fossh` (in progress) | Self-hosted Fedora Server, with a watchdog, hardened systemd units, SELinux confinement, and a desktop console with a setup wizard |
 
 ## Where the real docs are
 
