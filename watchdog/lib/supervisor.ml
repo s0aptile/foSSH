@@ -63,7 +63,40 @@ let privdrop_argv ~(user : string) ~(program : string) (args : string array) :
       Array.sub args 1 (Array.length args - 1);
     ]
 
-let spawn (t : t) : int =
+exception Program_changed_since_verification of string
+
+(* [verified_as] is what `t.program` was when its hash was checked. The
+   check reads the file by path and this reopens the same path, so
+   between them the path can be repointed at a different file -- a
+   tampered binary would then execute having passed verification.
+
+   Re-stating here does not close that gap; nothing short of holding the
+   file open across both steps does, and the exec goes through `setpriv`
+   by path, so doing that properly means changing how privileges are
+   dropped -- the part of this program that has been the hardest to get
+   right. What it does is reduce the window from the whole verification
+   (a gpg subprocess plus one sha256sum per manifest entry) to the two
+   syscalls between this stat and the exec.
+
+   Refusing rather than logging: the entire purpose of this supervisor
+   is declining to run something it cannot vouch for. *)
+let ensure_unchanged (t : t) (verified_as : Manifest.file_identity option) : unit =
+  match verified_as with
+  | None -> ()
+  | Some expected -> (
+      match Manifest.identity_of t.program with
+      | Error msg ->
+          raise
+            (Program_changed_since_verification
+               (Printf.sprintf "%s could not be re-stat'ed after verification: %s" t.program msg))
+      | Ok actual ->
+          if actual <> expected then
+            raise
+              (Program_changed_since_verification
+                 (Printf.sprintf "%s was replaced between verification and launch" t.program)))
+
+let spawn ?(verified_as : Manifest.file_identity option) (t : t) : int =
+  ensure_unchanged t verified_as;
   let real_prog, real_args =
     match t.drop_privileges_to with
     | None -> (t.program, t.args)
@@ -107,14 +140,17 @@ let wait_for_exit (t : t) : wait_outcome =
    is now exactly one path into `spawn`, from either caller. See
    ADR-0041. *)
 let tamper_check (t : t) ~(gnupghome : string) ~(expected_key_fingerprint : string)
-    ~(clearsigned_manifest : string) : (unit, Manifest.check_result) result =
+    ~(clearsigned_manifest : string) :
+    (Manifest.file_identity option, Manifest.check_result) result =
   match
     Manifest.check ~gnupghome ~expected_key_fingerprint ~program:t.program
       ~clearsigned_manifest
   with
-  | Ok_manifest _ -> Ok ()
-  | (Signature_invalid _ | Hash_mismatch _ | Program_not_covered _ | Io_error _)
-    as result ->
+  (* Captured here, immediately after the hash matched, so `spawn` can
+     tell whether the path still refers to the file that was checked. *)
+  | Ok_manifest _ -> Ok (Result.to_option (Manifest.identity_of t.program))
+  | (Signature_invalid _ | Hash_mismatch _ | Program_not_covered _ | Io_error _
+    | Program_replaced _) as result ->
       Error result
 
 type spawn_decision =
@@ -125,7 +161,11 @@ let spawn_if_safe (t : t) ~(gnupghome : string) ~(expected_key_fingerprint : str
     ~(clearsigned_manifest : string) : spawn_decision =
   match tamper_check t ~gnupghome ~expected_key_fingerprint ~clearsigned_manifest with
   | Error result -> Spawn_refused_tamper result
-  | Ok () -> Spawned (spawn t)
+  | Ok verified_as -> (
+      match spawn ?verified_as t with
+      | pid -> Spawned pid
+      | exception Program_changed_since_verification msg ->
+          Spawn_refused_tamper (Manifest.Program_replaced msg))
 
 type restart_decision =
   | Restarted of int
@@ -136,9 +176,13 @@ let restart_if_safe (t : t) ~(gnupghome : string) ~(expected_key_fingerprint : s
     ~(clearsigned_manifest : string) : restart_decision =
   match tamper_check t ~gnupghome ~expected_key_fingerprint ~clearsigned_manifest with
   | Error result -> Restart_refused_tamper result
-  | Ok () ->
-      if record_restart_and_check_storm t then Restarted (spawn t)
-      else Restart_refused_storm
+  | Ok verified_as ->
+      if not (record_restart_and_check_storm t) then Restart_refused_storm
+      else (
+        match spawn ?verified_as t with
+        | pid -> Restarted pid
+        | exception Program_changed_since_verification msg ->
+            Restart_refused_tamper (Manifest.Program_replaced msg))
 
 (* §3.4: lets a verified `restart`/`reload` command received over the
    QUIC command channel (a different thread than the one running the
@@ -240,4 +284,8 @@ let restart_after_requested_termination (t : t) ~(gnupghome : string)
     requested_restart_decision =
   match tamper_check t ~gnupghome ~expected_key_fingerprint ~clearsigned_manifest with
   | Error result -> Requested_restart_refused_tamper result
-  | Ok () -> Requested_restart_completed (spawn t)
+  | Ok verified_as -> (
+      match spawn ?verified_as t with
+      | pid -> Requested_restart_completed pid
+      | exception Program_changed_since_verification msg ->
+          Requested_restart_refused_tamper (Manifest.Program_replaced msg))

@@ -88,7 +88,7 @@ let live_tamper_state (supervisor : Supervisor.t) (config : config) : Command_pr
           Supervisor.tamper_check supervisor ~gnupghome:config.gnupghome
             ~expected_key_fingerprint:config.expected_key_fingerprint ~clearsigned_manifest
         with
-        | Ok () -> Command_protocol.Tamper_clean
+        | Ok _ -> Command_protocol.Tamper_clean
         | Error _ -> Command_protocol.Tamper_tampered
       with Unix.Unix_error _ -> Command_protocol.Tamper_unknown)
 

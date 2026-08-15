@@ -265,7 +265,21 @@ let handle_one_connection (conn : Unix.file_descr) ~(operator_key_dir : string) 
                 Auth.verify_signature ~gnupghome ~expected_key_fingerprint ~data:nonce
                   ~signature_binary:signature_armored
               in
-              let reply = if verified then Printf.sprintf "OK %s" (Session.issue ()) else "DENIED" in
+              (* Session.issue can refuse once the live-session cap is
+                 reached. Letting that exception escape would take the
+                 whole watchdog down over a full table, which is a
+                 far worse outcome than one operator being told to try
+                 again -- and the watchdog is the component whose job is
+                 to still be running. *)
+              let reply =
+                if not verified then "DENIED"
+                else
+                  match Session.issue () with
+                  | token -> Printf.sprintf "OK %s" token
+                  | exception Session.Too_many_sessions ->
+                      log "refusing a new session: %d already live" (Session.live_count ());
+                      "DENIED"
+              in
               ignore (send_line oc reply)))
 
 let rec accept_loop ~(connection_timeout_seconds : float) (config : config) (listener : Unix.file_descr) :

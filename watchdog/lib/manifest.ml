@@ -183,7 +183,38 @@ type check_result =
   | Signature_invalid of string
   | Hash_mismatch of { path : string; expected : string; actual : string }
   | Program_not_covered of string
+  (* The path verified fine, but by the time it was launched it no
+     longer referred to the same file. See Supervisor.ensure_unchanged. *)
+  | Program_replaced of string
   | Io_error of string
+
+(* Which file a path referred to at a particular moment.
+
+   The hash check below reads a file by *path*, and whoever spawns it
+   later opens that path again. Between the two the path can be pointed
+   at a different file -- the classic time-of-check/time-of-use gap.
+   Comparing the identity recorded here against a fresh stat right
+   before the exec does not eliminate that gap, but it shrinks it from
+   the whole verification (a gpg subprocess plus one sha256sum per
+   entry -- tens of milliseconds) to two syscalls.
+
+   Size and mtime are included alongside the inode because inode
+   numbers are reused: a delete-and-recreate can land on the same
+   (dev, ino) pair, and on a busy filesystem that is not exotic. *)
+type file_identity = { dev : int; ino : int; size : int; mtime : float }
+
+let identity_of (path : string) : (file_identity, string) result =
+  match Unix.stat path with
+  | s ->
+      Ok
+        {
+          dev = s.Unix.st_dev;
+          ino = s.Unix.st_ino;
+          size = s.Unix.st_size;
+          mtime = s.Unix.st_mtime;
+        }
+  | exception Unix.Unix_error (e, fn, _) ->
+      Error (Printf.sprintf "%s: %s: %s" path fn (Unix.error_message e))
 
 (* The one function `Supervisor` actually calls before every spawn
    and every restart: verify the manifest's own signature first (so a

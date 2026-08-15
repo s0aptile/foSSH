@@ -13,16 +13,44 @@ type entry = { expires_at : float }
 let sessions : (string, entry) Hashtbl.t = Hashtbl.create 16
 let default_lifetime_seconds = 900.0 (* 15 minutes *)
 
+(* Refusing rather than evicting: evicting to make room would let a
+   client that can complete challenge-response repeatedly push every
+   other operator's live session out, which is a worse failure than
+   declining to open a new one. Well above any legitimate use — an
+   install has a handful of operators, not hundreds. *)
+let max_live_sessions = 256
+
+exception Too_many_sessions
+
+(* Drops every expired entry, not merely the one being looked up.
+   Lazy pruning on lookup covers a token that is used again; it does
+   nothing for one that is issued and then abandoned, and abandonment is
+   the ordinary case — a client that reconnects completes a fresh
+   challenge-response and simply never mentions the old token again.
+   Those accumulated for the life of the process, which for a watchdog
+   is measured in months. *)
+let prune_expired () : unit =
+  let now = Unix.gettimeofday () in
+  let dead = Hashtbl.fold (fun t e acc -> if now > e.expires_at then t :: acc else acc) sessions [] in
+  List.iter (Hashtbl.remove sessions) dead
+
+let live_count () : int =
+  prune_expired ();
+  Hashtbl.length sessions
+
 let issue ?(lifetime_seconds = default_lifetime_seconds) () : string =
+  (* Before the table grows, not after: this is the only entry point
+     that adds to it, so it is the only place a bound can hold. *)
+  prune_expired ();
+  if Hashtbl.length sessions >= max_live_sessions then raise Too_many_sessions;
   let token = Nonce.generate () in
   Hashtbl.replace sessions token
     { expires_at = Unix.gettimeofday () +. lifetime_seconds };
   token
 
-(* Expired entries are pruned lazily, on lookup, rather than by a
-   background timer — this module has no thread/event loop of its own
-   and shouldn't need one just to garbage-collect a handful of tokens
-   that expire in minutes. *)
+(* Expired entries are also pruned lazily, on lookup — that path stays
+   as it was, because it is the one that matters for correctness (an
+   expired token must not validate) as opposed to for memory. *)
 let is_valid (token : string) : bool =
   match Hashtbl.find_opt sessions token with
   | None -> false

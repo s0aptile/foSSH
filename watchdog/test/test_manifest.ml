@@ -253,7 +253,9 @@ let () =
                  ~program:file_a ~clearsigned_manifest:signed
              with
             | Ok_manifest _ -> false (* must not silently pass under fd exhaustion *)
-            | Signature_invalid _ | Hash_mismatch _ | Program_not_covered _ | Io_error _ -> true));
+            | Signature_invalid _ | Hash_mismatch _ | Program_not_covered _ | Io_error _
+            | Program_replaced _ ->
+                true));
       check "a real check() call succeeds again once fds are released (no lingering state)"
         (match
            Manifest.check ~gnupghome:k.gnupghome ~expected_key_fingerprint:k.fingerprint

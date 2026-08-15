@@ -118,6 +118,13 @@ let looks_like_a_token (s : string) : bool =
 let issue_session ?lifetime_seconds () : session_token =
   Issued_token (Session.issue ?lifetime_seconds ())
 
+(* The non-raising form, for callers that must not die over a full
+   session table -- see Session.max_live_sessions. *)
+let issue_session_opt ?lifetime_seconds () : session_token option =
+  match Session.issue ?lifetime_seconds () with
+  | token -> Some (Issued_token token)
+  | exception Session.Too_many_sessions -> None
+
 let revoke_session (Issued_token token) : unit = Session.revoke token
 
 let encode_session_hello (Issued_token token) : string = "SESSION " ^ token ^ "\n"

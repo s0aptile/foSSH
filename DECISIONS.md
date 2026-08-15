@@ -1498,3 +1498,55 @@ which silently refuses traffic.
 against a configurable number is only as good as the bounds on that
 number, and a setting whose failure mode is invisible needs its bounds
 enforced where it is read, not where it is documented.
+
+## ADR-0075 — two ways the watchdog degraded over a long uptime
+
+**Status:** accepted, 0.0.2.2.
+
+**Context.** Both findings come from the watchdog chief, and both are
+invisible on the timescale anyone tests at.
+
+**Session tokens accumulated.** `Session` pruned expired entries lazily,
+on lookup — which handles a token that is used again and does nothing
+for one that is issued and abandoned. Abandonment is the ordinary case:
+a client that reconnects completes a fresh challenge-response and never
+mentions the old token again. Those entries stayed for the life of the
+process, and a watchdog's life is measured in months.
+
+**Decision.** Sweep the whole table on `issue`, which is the only entry
+point that grows it, plus a hard cap of 256 live sessions. The cap
+refuses rather than evicting: evicting to make room would let a client
+that can complete challenge-response repeatedly push every other
+operator's live session out, which is worse than declining to open a
+new one. Both call sites handle the refusal — an exception escaping
+here would take down the process whose entire job is to still be
+running.
+
+**The verified binary could be swapped before it was launched.**
+`Manifest.check` hashes a file by path; `Supervisor.spawn` reopens that
+path. Between them the path can be pointed at a different file, and the
+replacement executes having passed verification.
+
+**Decision, and its limit — stated plainly because the limit matters.**
+The identity of the program (device, inode, size, mtime) is recorded at
+the moment its hash matched, and re-checked immediately before the exec.
+This does **not** close the gap. Closing it means holding the file open
+across both steps and exec'ing the descriptor, and the exec goes through
+`setpriv` by path — so a real fix means changing how privileges are
+dropped, which is the part of this program that has been hardest to get
+right and has already needed several corrections. What this does is
+reduce the window from the whole verification (a gpg subprocess plus one
+`sha256sum` per manifest entry, tens of milliseconds) to the two
+syscalls between the stat and the exec.
+
+Size and mtime are compared alongside the inode because inode numbers
+are reused; a delete-and-recreate can land on the same `(dev, ino)`
+pair, and on a busy filesystem that is not exotic.
+
+A detected swap is a `Program_replaced` refusal, not an exception. The
+supervisor declining to launch something it cannot vouch for is the
+supervisor working; the supervisor dying is not.
+
+**The honest summary.** One of these is fixed. The other is mitigated by
+about four orders of magnitude, and the residual is recorded here rather
+than described as closed.

@@ -103,6 +103,57 @@ let () =
           check "restart_if_safe refuses a restart when a watched file changed" true
       | _ -> check "restart_if_safe refuses a restart when a watched file changed" false);
 
+      (* The time-of-check/time-of-use gap: the manifest verifies the
+         file at a path, and the exec reopens that path. Simulated by
+         letting verification pass and then replacing the program before
+         the launch, which is exactly what an attacker with write access
+         to the binary would arrange to happen in between. *)
+      let swappable = Filename.concat watched_dir "swappable" in
+      write_file swappable "#!/bin/sh\nexit 0\n";
+      Unix.chmod swappable 0o755;
+      let t_race = Supervisor.create ~program:swappable [| swappable |] in
+      let manifest_for_swappable = sign_manifest_for [ swappable ] in
+
+      (match
+         Supervisor.spawn_if_safe t_race ~gnupghome:k.gnupghome
+           ~expected_key_fingerprint:k.fingerprint
+           ~clearsigned_manifest:manifest_for_swappable
+       with
+      | Spawned _ -> check "the unmodified program launches normally" true
+      | Spawn_refused_tamper _ -> check "the unmodified program launches normally" false);
+      (match Supervisor.wait_for_exit t_race with Exited 0 -> () | _ -> ());
+
+      (* Verify against the real file, then swap it for another one at
+         the same path -- unlink and recreate, so the inode changes the
+         way a replaced binary's would. *)
+      let verified_as =
+        match Manifest.identity_of swappable with Ok id -> Some id | Error _ -> None
+      in
+      check "the program's identity was captured at verification time" (verified_as <> None);
+      Unix.unlink swappable;
+      write_file swappable "#!/bin/sh\nexit 1\n";
+      Unix.chmod swappable 0o755;
+
+      (match Supervisor.spawn ?verified_as t_race with
+      | _pid ->
+          check "a program swapped after verification is NOT launched" false
+      | exception Supervisor.Program_changed_since_verification _ ->
+          check "a program swapped after verification is NOT launched" true);
+
+      (* And the refusal must arrive as a decision, never as an
+         exception escaping into the supervision loop -- a watchdog that
+         dies on tamper detection has stopped watching. *)
+      (match
+         Supervisor.restart_if_safe t_race ~gnupghome:k.gnupghome
+           ~expected_key_fingerprint:k.fingerprint
+           ~clearsigned_manifest:manifest_for_swappable
+       with
+      | Restart_refused_tamper (Hash_mismatch _) ->
+          check "the swapped file is caught by the hash check on the next cycle" true
+      | Restart_refused_tamper (Program_replaced _) ->
+          check "the swapped file is caught by the hash check on the next cycle" true
+      | _ -> check "the swapped file is caught by the hash check on the next cycle" false);
+
       (* §3.4: request_termination — the one cross-thread touch the
          real QUIC command server (Quic_command_server) makes on a
          live Supervisor.t, from a thread other than the one running

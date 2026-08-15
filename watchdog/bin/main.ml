@@ -280,6 +280,8 @@ let describe_check_result = function
   | Manifest.Signature_invalid e -> Printf.sprintf "manifest signature invalid: %s" e
   | Manifest.Hash_mismatch { path; expected; actual } ->
       Printf.sprintf "tamper detected in %s (expected %s, got %s)" path expected actual
+  | Manifest.Program_replaced msg ->
+      Printf.sprintf "refusing to launch: %s" msg
   | Manifest.Program_not_covered p ->
       Printf.sprintf "manifest does not cover the program about to run (%s)" p
   | Manifest.Io_error e -> Printf.sprintf "could not verify manifest: %s" e

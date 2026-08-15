@@ -21,7 +21,11 @@ val command_of_name : string -> command option
 val describe_child_state : child_state -> string
 val describe_tamper_state : tamper_state -> string
 
+(** Raises [Session.Too_many_sessions] once the live-session cap is
+    reached. Use [issue_session_opt] where that must not be fatal. *)
 val issue_session : ?lifetime_seconds:float -> unit -> session_token
+
+val issue_session_opt : ?lifetime_seconds:float -> unit -> session_token option
 val revoke_session : session_token -> unit
 val encode_session_hello : session_token -> string
 val decode_session_hello : string -> (string, error) result
