@@ -17,9 +17,10 @@ yourself.
 | `0.1.3_oa` | **Retired — do not use** | The last of the line, and the one carrying the defects in "What was actually broken" below. |
 | `0.2.0_oa` | Current | This one. |
 
-The final state of the retired line is preserved at the git tag
-`v0.1.3_oa-retired`, so the history is auditable. That tag is a record,
-not a supported artifact.
+The final state of the retired line is preserved two ways, so the
+history is auditable: the git tag `v0.1.3_oa-retired`, and a source
+archive of that exact tree under `graveyard/`. Both are records, not
+supported artifacts — see `graveyard/README.md`.
 
 ## What was actually broken
 

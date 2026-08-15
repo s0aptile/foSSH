@@ -27,3 +27,9 @@ __MACOSX/
 # just what happens to be committed).
 __pycache__/
 *.py[cod]
+
+# Graveyard archives. The tarballs are reproducible from their own
+# retirement tags (see graveyard/README.md), so committing them would
+# store a second copy of history inside history. The README and the
+# checksums are tracked; the archives are not.
+/graveyard/*/*.tar.gz
