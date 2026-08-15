@@ -1,0 +1,13 @@
+id = "honeycomb-events"
+name = "Honeycomb (Events API)"
+docs = "https://docs.honeycomb.io/get-started/best-practices/api-keys/"
+endpoint = "https://api.honeycomb.io/1/events/{dataset}"
+method = "post"
+auth_header = "X-Honeycomb-Team"
+key_hint = "an ingest key from Environment settings"
+
+[[fields]]
+key = "dataset"
+label = "Dataset"
+placeholder = "fossh"
+help = "Created automatically on the first event if it does not exist."

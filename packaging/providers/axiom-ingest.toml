@@ -1,0 +1,11 @@
+id = "axiom-ingest"
+name = "Axiom (dataset ingest)"
+docs = "https://axiom.co/docs/reference/tokens"
+endpoint = "https://api.axiom.co/v1/datasets/{dataset}/ingest"
+method = "post"
+key_hint = "an API token beginning with xaat-"
+
+[[fields]]
+key = "dataset"
+label = "Dataset"
+placeholder = "fossh"

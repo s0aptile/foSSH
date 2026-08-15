@@ -1,0 +1,13 @@
+id = "datadog-events"
+name = "Datadog (Events API)"
+docs = "https://docs.datadoghq.com/account_management/api-app-keys/"
+endpoint = "https://api.{site}/api/v1/events"
+method = "post"
+auth_header = "DD-API-KEY"
+key_hint = "an API key, 32 hex characters -- not an application key"
+
+[[fields]]
+key = "site"
+label = "Datadog site"
+placeholder = "datadoghq.com"
+help = "datadoghq.com, datadoghq.eu, us3.datadoghq.com and so on -- whichever appears in your Datadog URL."

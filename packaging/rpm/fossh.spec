@@ -470,11 +470,23 @@ install -m0644 gui/fossh_console/views/*.py %{buildroot}%{python3_sitelib}/fossh
 
 install -D -m0755 gui/fossh-console %{buildroot}%{_bindir}/fossh-console
 
+# Provider templates: shipped definitions in %%{_datadir}, plus the
+# empty drop-in directory an administrator adds their own to. The
+# directory is created here so it exists to be found rather than
+# having to be invented from documentation.
+install -d -m0755 %{buildroot}%{_datadir}/%{name}/providers
+install -m0644 packaging/providers/*.toml %{buildroot}%{_datadir}/%{name}/providers/
+install -d -m0755 %{buildroot}%{_sysconfdir}/%{name}/providers.d
+
 install -D -m0644 docs/man/fossh-console.1 \
     %{buildroot}%{_mandir}/man1/fossh-console.1
 
 install -D -m0644 gui/data/org.fossh.Console.desktop \
-    %{buildroot}%{_datadir}/applications/org.fossh.Console.desktop
+    %{buildroot}%dir %{_datadir}/%{name}
+%dir %{_datadir}/%{name}/providers
+%{_datadir}/%{name}/providers/*.toml
+%dir %{_sysconfdir}/%{name}/providers.d
+%{_datadir}/applications/org.fossh.Console.desktop
 install -D -m0644 gui/data/org.fossh.Console.metainfo.xml \
     %{buildroot}%{_metainfodir}/org.fossh.Console.metainfo.xml
 install -D -m0644 gui/data/icons/org.fossh.Console.svg \
@@ -487,7 +499,11 @@ install -D -m0644 gui/data/icons/org.fossh.Console-symbolic.svg \
 # or a metainfo file AppStream cannot parse installs perfectly happily
 # and then simply does not appear in anyone's software centre, which
 # is the kind of defect that is only ever found by a user.
-desktop-file-validate %{buildroot}%{_datadir}/applications/org.fossh.Console.desktop
+desktop-file-validate %{buildroot}%dir %{_datadir}/%{name}
+%dir %{_datadir}/%{name}/providers
+%{_datadir}/%{name}/providers/*.toml
+%dir %{_sysconfdir}/%{name}/providers.d
+%{_datadir}/applications/org.fossh.Console.desktop
 appstream-util validate-relax --nonet \
     %{buildroot}%{_metainfodir}/org.fossh.Console.metainfo.xml
 
@@ -645,6 +661,10 @@ fi
 %{_bindir}/fossh-console
 %{_mandir}/man1/fossh-console.1*
 %{python3_sitelib}/fossh_console/
+%dir %{_datadir}/%{name}
+%dir %{_datadir}/%{name}/providers
+%{_datadir}/%{name}/providers/*.toml
+%dir %{_sysconfdir}/%{name}/providers.d
 %{_datadir}/applications/org.fossh.Console.desktop
 %{_metainfodir}/org.fossh.Console.metainfo.xml
 %{_datadir}/icons/hicolor/scalable/apps/org.fossh.Console.svg
@@ -658,6 +678,11 @@ fi
 # replaced on upgrade. rpm leaves theirs and writes ours alongside as
 # .rpmnew.
 %config(noreplace) %{_sysconfdir}/httpd/conf.d/fossh-model.conf
+# %%{_datadir}/fossh itself is owned by fossh-console, which is not a
+# dependency of this subpackage -- so it is claimed here too. Shared
+# ownership of a directory is legal in rpm and is the correct fix;
+# leaving it unowned is what produces an orphaned directory after an
+# uninstall.
 %dir %{_datadir}/%{name}
 %dir %{_datadir}/%{name}/model
 %{_datadir}/%{name}/model/Modelfile

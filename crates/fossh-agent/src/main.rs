@@ -274,6 +274,7 @@ impl Agent {
             "setup.enroll" => self.setup_enroll(p),
             "operator.authenticate" => self.operator_authenticate(),
             "integrations.list" => self.integrations_list(),
+            "providers.list" => self.providers_list(),
             "integrations.add" => self.integrations_add(p),
             "integrations.remove" => self.integrations_remove(p),
             "integrations.test" => self.integrations_test(p),
@@ -475,6 +476,44 @@ impl Agent {
                     "key_hint": i.key_hint(),
                 }))
                 .collect::<Vec<_>>(),
+        }))
+    }
+
+    /// The provider templates the console offers as starting points.
+    ///
+    /// Read-only, and read fresh on every call rather than cached at
+    /// startup: an operator who drops a definition into
+    /// `providers.d/` should see it by reopening the dialog, not by
+    /// restarting the console.
+    fn providers_list(&self) -> MethodResult {
+        let (providers, problems) = fossh_admin::providers::load();
+        Ok(json!({
+            "providers": providers
+                .iter()
+                .map(|p| json!({
+                    "id": p.id,
+                    "name": p.name,
+                    "docs": p.docs,
+                    "endpoint": p.endpoint,
+                    "method": p.method.as_str(),
+                    "auth": match p.auth() {
+                        Auth::Bearer => json!({"placement": "bearer"}),
+                        Auth::Header { name } => json!({"placement": "header", "name": name}),
+                    },
+                    "key_hint": p.key_hint,
+                    "fields": p.fields.iter().map(|f| json!({
+                        "key": f.key,
+                        "label": f.label,
+                        "placeholder": f.placeholder,
+                        "help": f.help,
+                    })).collect::<Vec<_>>(),
+                }))
+                .collect::<Vec<_>>(),
+            // Reported rather than swallowed: a definition an operator
+            // added and that did not load is exactly the thing they
+            // need told, and the console shows it as a note under the
+            // list.
+            "problems": problems.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
         }))
     }
 

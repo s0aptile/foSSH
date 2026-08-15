@@ -103,6 +103,20 @@ if [ "$fail" -ne 0 ]; then
 fi
 
 mkdir -p "$project_root/dist"
+
+# Clear the old RPMs before copying the new ones in. Without this,
+# dist/ accumulates: a subpackage that changed architecture (the
+# console and selfheal became `noarch` in 0.2.0) leaves its previous
+# x86_64 build sitting alongside the new one, and anything that later
+# globs dist/*.rpm -- scripts/build-release-zip.sh does exactly that --
+# bundles both, or bundles the stale one. That is the same
+# "stale artifact shipped inside a freshly built zip" failure ADR-0058
+# already caught once by hand; this is the mechanical fix for it.
+#
+# Only *.rpm is removed, and only from dist/. Anything else an operator
+# has put there is left alone.
+rm -f "$project_root"/dist/*.rpm
+
 find "$topdir/RPMS" "$topdir/SRPMS" -name '*.rpm' -exec cp {} "$project_root/dist/" \;
 
 echo "build-release-rpm: done, clean. Packages in dist/." >&2

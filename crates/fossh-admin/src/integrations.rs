@@ -587,6 +587,48 @@ mod tests {
     }
 
     #[test]
+    fn every_alternate_loopback_spelling_curl_understands_is_refused_here() {
+        // A parser differential between this check and curl's real one
+        // is the way an API key ends up in cleartext on someone else's
+        // server, so the two were compared directly against a real
+        // curl. Each URL below is one curl resolves to 127.0.0.1 while
+        // this validator rejects it:
+        //
+        //   http://0177.0.0.1/          octal octets
+        //   http://2130706433/          the address as one integer
+        //   http://127.1/               the two-part short form
+        //   http://[::ffff:127.0.0.1]/  IPv4-mapped IPv6
+        //
+        // Being stricter than curl is the safe direction of that
+        // disagreement: the worst case is an operator having to write
+        // 127.0.0.1 the ordinary way. The dangerous direction —
+        // something accepted here that curl sends elsewhere — was
+        // tested for and not found, and these assertions are what stop
+        // a future "let's be more permissive" change from opening it.
+        assert!(validate_endpoint("http://0177.0.0.1/hook").is_err());
+        assert!(validate_endpoint("http://2130706433/hook").is_err());
+        assert!(validate_endpoint("http://127.1/hook").is_err());
+        assert!(validate_endpoint("http://[::ffff:127.0.0.1]/hook").is_err());
+        // Percent-encoding a dot: curl decodes it and resolves
+        // 127.0.0.1.evil.example, so this must not be read as an IP.
+        assert!(validate_endpoint("http://127.0.0.1%2eevil.example/").is_err());
+
+        // ...and the spellings that ARE accepted must be ones curl
+        // agrees are loopback, which was also checked against a real
+        // curl rather than assumed.
+        for ok in [
+            "http://127.0.0.1:9/",
+            "http://localhost:9/",
+            "http://[::1]:9/",
+            // curl connects to the host after the last '@', same as
+            // this validator reads it.
+            "http://127.0.0.1@localhost:9/",
+        ] {
+            assert!(validate_endpoint(ok).is_ok(), "{ok} should be accepted");
+        }
+    }
+
+    #[test]
     fn an_api_key_with_a_line_break_is_refused() {
         // The one check in this module that is genuinely a
         // vulnerability if it is missing: this value goes into an HTTP

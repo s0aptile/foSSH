@@ -1,0 +1,12 @@
+id = "betterstack-logs"
+name = "Better Stack (Telemetry ingest)"
+docs = "https://betterstack.com/docs/logs/http-rest-api/"
+endpoint = "https://{ingest_host}/"
+method = "post"
+key_hint = "the source token shown next to your source"
+
+[[fields]]
+key = "ingest_host"
+label = "Ingesting host"
+placeholder = "s1234567.eu-nbg-2.betterstackdata.com"
+help = "Shown on the source's own page; each source has its own."

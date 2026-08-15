@@ -1,0 +1,20 @@
+# The fallback, and the one most operators will use: any endpoint you
+# control that accepts a POST with a bearer token.
+id = "generic-webhook"
+name = "Generic webhook (bearer token)"
+docs = "https://github.com/s0aptile/foSSH"
+endpoint = "https://{host}/{path}"
+method = "post"
+key_hint = "whatever your endpoint expects after \"Bearer \""
+
+[[fields]]
+key = "host"
+label = "Host"
+placeholder = "hooks.example.com"
+help = "The hostname of your endpoint, without https:// and without a path."
+
+[[fields]]
+key = "path"
+label = "Path"
+placeholder = "services/fossh"
+help = "The path on that host, without a leading slash."

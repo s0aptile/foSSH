@@ -144,12 +144,22 @@ real resource-exhaustion path.
 
 So `fossh-selfheal` installs an Apache configuration
 (`/etc/httpd/conf.d/fossh-model.conf`) that puts the endpoint behind a
-per-install secret — 256 bits from `/dev/urandom`, written `0600`
-before anything else is written to the file, readable only by
-`fossh-svc`. It listens on `127.0.0.1` on its own port, distinct from
-Ollama's, so the two cannot be confused in a `netstat` listing or a
-firewall rule. It writes no access log, because request bodies are
-prompts.
+per-install secret: 256 bits from `/dev/urandom`, generated once by the
+package's own `%post`. It listens on `127.0.0.1` on its own port,
+distinct from Ollama's, so the two cannot be confused in a `netstat`
+listing or a firewall rule. It writes no access log, because request
+bodies are prompts.
+
+Two details of that secret file are load-bearing and neither is
+obvious. It is owned `root:apache` at mode `0640`, with `fossh-svc`
+added to the `apache` group — Apache runs as `apache` and foSSH's own
+helper as `fossh-svc`, and a file readable by only one of them leaves
+the endpoint either permanently unreachable or entirely unguarded.
+Neither account can arrange that for itself, which is why the package
+does it. And it is written with **no trailing newline**: Apache's
+`file()` function returns the bytes verbatim, so a secret written with
+`echo` would compare as `"abc\n"` against a header of `"abc"` and deny
+every request forever while the configuration read as correct.
 
 Separately, the model's configuration — which model, which endpoint,
 how many threads — is written to an OpenPGP-clearsigned manifest signed
