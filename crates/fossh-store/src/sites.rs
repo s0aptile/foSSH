@@ -143,9 +143,27 @@ impl Store {
 
     /// Returns whether a site was found and disabled.
     pub fn disable_site(&self, slug: &str) -> Result<bool, StoreError> {
+        self.set_site_disabled(slug, true)
+    }
+
+    /// Returns whether a site was found and re-enabled.
+    ///
+    /// The counterpart existed in the schema from the start — `disabled`
+    /// has always been a flag rather than a deletion — but for several
+    /// releases nothing could clear it. An operator who disabled a site
+    /// to stop it briefly had no way back short of opening the database
+    /// by hand, which is not something this project should ever ask of
+    /// anyone. Re-enabling deliberately does not touch the write key: a
+    /// site paused and resumed keeps working with the key its sites
+    /// already hold.
+    pub fn enable_site(&self, slug: &str) -> Result<bool, StoreError> {
+        self.set_site_disabled(slug, false)
+    }
+
+    fn set_site_disabled(&self, slug: &str, disabled: bool) -> Result<bool, StoreError> {
         let affected = self.conn.execute(
-            "UPDATE sites SET disabled = 1 WHERE slug = ?1",
-            params![slug],
+            "UPDATE sites SET disabled = ?1 WHERE slug = ?2",
+            params![i64::from(disabled), slug],
         )?;
         Ok(affected > 0)
     }
@@ -288,6 +306,34 @@ mod tests {
 
         let site = store.find_site_by_slug("blog").unwrap().unwrap();
         assert!(site.disabled);
+    }
+
+    /// Disabling was a one-way door for several releases: the flag went
+    /// up and nothing could put it back down without opening the
+    /// database by hand.
+    #[test]
+    fn enable_site_reverses_disable_without_touching_the_key() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .create_site("blog", &hash_of(1), None, &["pageview".into()], 1, false)
+            .unwrap();
+
+        assert!(store.disable_site("blog").unwrap());
+        assert!(store.find_site_by_slug("blog").unwrap().unwrap().disabled);
+
+        assert!(store.enable_site("blog").unwrap());
+        let site = store.find_site_by_slug("blog").unwrap().unwrap();
+        assert!(!site.disabled);
+
+        // The key a site's own pages already carry must keep working —
+        // otherwise "pause and resume" would silently mean "pause and
+        // redeploy every page".
+        assert!(store.find_site_by_key_hash(&hash_of(1)).unwrap().is_some());
+        assert_eq!(site.allowlist, vec!["pageview".to_string()]);
+
+        // Idempotent in both directions, and honest about a missing slug.
+        assert!(store.enable_site("blog").unwrap());
+        assert!(!store.enable_site("does-not-exist").unwrap());
     }
 
     #[test]

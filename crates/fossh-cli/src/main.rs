@@ -27,7 +27,9 @@ COMMANDS:
     site create <slug> [--allow name,name] [--public-key]
     site list
     site disable <slug>
+    site enable <slug>
     site rotate-key <slug>
+    site rotate-signing-key <slug>
         Manage sites and their write keys.
 
     query --site <slug> --from YYYY-MM-DD --to YYYY-MM-DD

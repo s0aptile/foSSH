@@ -1,16 +1,18 @@
-//! `fossh site create|list|disable|rotate-key` (§9).
+//! `fossh site create|list|disable|enable|rotate-key` (§9).
 
 use fossh_core::base32;
 
 use crate::args::{comma_list, flag_value, has_flag, positional, wants_help};
 use crate::common::{load_config, open_store, unix_now};
 
-const USAGE: &str = "usage: fossh site <create|list|disable|rotate-key|rotate-signing-key> ...";
+const USAGE: &str =
+    "usage: fossh site <create|list|disable|enable|rotate-key|rotate-signing-key> ...";
 const HELP: &str = "usage: fossh site <SUBCOMMAND>\n\n\
 SUBCOMMANDS:\n    \
     create <slug> [--allow name,name] [--public-key]\n    \
     list\n    \
     disable <slug>\n    \
+    enable <slug>\n    \
     rotate-key <slug>\n    \
     rotate-signing-key <slug>\n\n\
 Manage sites, their bearer write keys, and their signed-mode signing keys.";
@@ -31,6 +33,7 @@ pub fn run(args: &[String]) -> i32 {
         Some("create") => create(&args[1..]),
         Some("list") => list(&args[1..]),
         Some("disable") => disable(&args[1..]),
+        Some("enable") => enable(&args[1..]),
         Some("rotate-key") => rotate_key(&args[1..]),
         Some("rotate-signing-key") => rotate_signing_key(&args[1..]),
         _ => {
@@ -188,39 +191,66 @@ fn list(args: &[String]) -> i32 {
 }
 
 fn disable(args: &[String]) -> i32 {
+    set_disabled(args, true)
+}
+
+fn enable(args: &[String]) -> i32 {
+    set_disabled(args, false)
+}
+
+/// `disable` and `enable` are the same operation with the flag flipped,
+/// including the part that is easy to forget: the on-disk site cache
+/// that `fossh-cgi` reads must be rewritten, or the ingest path goes on
+/// answering from the old state until something else happens to touch
+/// it. Writing them as one function is how the second one cannot drift
+/// from the first.
+fn set_disabled(args: &[String], disabled: bool) -> i32 {
+    let verb = if disabled { "disable" } else { "enable" };
+    let usage = format!("usage: fossh site {verb} <slug>");
     if wants_help(args) {
-        println!("usage: fossh site disable <slug>");
+        println!("{usage}");
         return 0;
     }
     let Some(slug) = positional(args) else {
-        eprintln!("usage: fossh site disable <slug>");
+        eprintln!("{usage}");
         return 2;
     };
     let config = load_config();
     let store = open_store(&config.data_dir);
-    match store.disable_site(slug) {
+    let result = if disabled {
+        store.disable_site(slug)
+    } else {
+        store.enable_site(slug)
+    };
+    match result {
         Ok(true) => {}
         Ok(false) => {
-            eprintln!("fossh site disable: no such site '{slug}'");
+            eprintln!("fossh site {verb}: no such site '{slug}'");
             return 1;
         }
         Err(e) => {
-            eprintln!("fossh site disable: {e}");
+            eprintln!("fossh site {verb}: {e}");
             return 1;
         }
     }
     let site = match store.find_site_by_slug(slug) {
         Ok(Some(s)) => s,
         _ => {
-            eprintln!("fossh site disable: site was disabled but could not be re-read");
+            eprintln!(
+                "fossh site {verb}: the change was written but the site could not be re-read"
+            );
             return 1;
         }
     };
     if let Err(e) = fossh_ingest::site_cache::write(&config.data_dir, &site) {
-        eprintln!("fossh site disable: updating site cache: {e}");
+        eprintln!("fossh site {verb}: updating site cache: {e}");
         return 1;
     }
-    println!("Site '{slug}' disabled.");
+    if disabled {
+        println!("Site '{slug}' disabled. Re-enable it with: fossh site enable {slug}");
+    } else {
+        println!("Site '{slug}' enabled. Its existing write key still works.");
+    }
     0
 }
 
