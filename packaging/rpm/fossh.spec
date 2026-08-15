@@ -257,6 +257,11 @@ Requires:       curl
 Recommends:     google-roboto-fonts
 Recommends:     google-roboto-mono-fonts
 Recommends:     material-icons-fonts
+# Integration verification drives a real browser. Playwright is not
+# packaged by Fedora and its Chromium is a large download, so this is
+# a suggestion rather than a dependency: the console checks at runtime
+# and simply does not offer the check when it cannot run it.
+Suggests:       python3-playwright
 BuildRequires:  python3-devel
 BuildRequires:  desktop-file-utils
 BuildRequires:  libappstream-glib

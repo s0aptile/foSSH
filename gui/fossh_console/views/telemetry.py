@@ -76,6 +76,13 @@ class TelemetryView(Gtk.Box):
         spacer = Gtk.Box(hexpand=True)
         toolbar.append(spacer)
 
+        check = Gtk.Button(label="Verify integration")
+        check.set_tooltip_text(
+            "Load one of your pages in a real browser and see whether foSSH receives the event"
+        )
+        check.connect("clicked", lambda *_: self._open_verify())
+        toolbar.append(check)
+
         refresh = Gtk.Button(icon_name=symbolic_name("refresh"))
         refresh.set_tooltip_text("Refresh (Ctrl+R)")
         refresh.add_css_class("flat")
@@ -105,6 +112,11 @@ class TelemetryView(Gtk.Box):
         self._message_page = Adw.StatusPage()
         self._stack.add_named(self._message_page, "message")
         self._stack.set_visible_child_name("loading")
+
+    def _open_verify(self) -> None:
+        from .verify_dialog import VerifyDialog
+
+        VerifyDialog().present(self)
 
     # -- data --------------------------------------------------------
 

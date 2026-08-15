@@ -202,29 +202,48 @@ def verify(
                 context.set_default_timeout(timeout_ms)
                 page = context.new_page()
 
-                def on_request_finished(request) -> None:
-                    if not matcher.search(request.url):
-                        return
-                    status = None
-                    try:
-                        response = request.response()
-                        if response is not None:
-                            status = response.status
-                    except PlaywrightError:
-                        # A beacon sent during unload often has no
-                        # readable response. That it was *sent* is the
-                        # thing being tested, so this is not a failure.
-                        pass
-                    hits.append(
-                        Hit(
-                            url=request.url,
-                            method=request.method,
-                            status=status,
+                # Two events, not one, and the reason is a real trap.
+                #
+                # `requestfinished` fires when a response body has been
+                # fully read -- and a beacon endpoint answering `204 No
+                # Content` has no body, so for the exact request shape
+                # this feature exists to detect, it may never fire at
+                # all. Verified directly against a real Chromium: for a
+                # `fetch()` to a 204 endpoint, `request` and `response`
+                # both fire and `requestfinished` does not.
+                #
+                # So `request` records that the beacon was *sent* --
+                # which is the thing actually being tested, and is also
+                # all that is observable for a `sendBeacon` during
+                # unload -- and `response` fills in the status when
+                # there is one. Keyed by URL and method so the two
+                # events describe one hit rather than two.
+                by_key: dict[tuple[str, str], Hit] = {}
+
+                def record(url: str, method: str) -> Hit | None:
+                    if not matcher.search(url):
+                        return None
+                    key = (url, method)
+                    hit = by_key.get(key)
+                    if hit is None:
+                        hit = Hit(
+                            url=url,
+                            method=method,
+                            status=None,
                             ms_after_start=elapsed_ms(),
                         )
-                    )
+                        by_key[key] = hit
+                        hits.append(hit)
+                    return hit
 
-                page.on("requestfinished", on_request_finished)
+                page.on("request", lambda r: record(r.url, r.method))
+
+                def on_response(response) -> None:
+                    hit = record(response.request.url, response.request.method)
+                    if hit is not None:
+                        hit.status = response.status
+
+                page.on("response", on_response)
 
                 progress(f"Loading {url}…")
                 response = page.goto(url, wait_until="load")
