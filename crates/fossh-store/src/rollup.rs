@@ -250,21 +250,84 @@ impl Store {
                 .absorb(hits, &hll, &hist);
         }
 
-        let mut result = Vec::new();
+        let k = k_anonymity as u64;
+        let mut kept: Vec<(Vec<String>, Accumulator)> = Vec::new();
         let mut other = Accumulator::new();
         let mut other_present = false;
 
         for (key, acc) in groups {
-            let uniques = acc.hll.estimate().round() as u64;
-            if uniques < k_anonymity as u64 {
+            if acc.hll.estimate().round() as u64 >= k {
+                kept.push((key, acc));
+            } else {
                 other.absorb(acc.hits, &acc.hll, &acc.hist);
                 other_present = true;
-            } else {
-                let dims = group_by.iter().copied().zip(key).collect();
-                result.push(acc.into_row(dims));
             }
         }
-        if other_present && other.hll.estimate().round() as u64 >= k_anonymity as u64 {
+
+        // Complementary suppression.
+        //
+        // Dropping the small groups and publishing the rest looks safe
+        // and is not, because the caller can ask a second question. The
+        // same range with no grouping is one group, whose uniques
+        // comfortably clear `k`, so it is published in full — and the
+        // difference between that total and the sum of the published
+        // groups is exactly what was withheld. Run for real against the
+        // compiled binaries before this existed: three paths, one of
+        // them with a single visitor, `k = 5`.
+        //
+        //     group by path -> /a  hits 6, uniques 6
+        //                      /b  hits 6, uniques 6
+        //     no grouping   ->      hits 13, uniques 13
+        //
+        // 13 − 6 − 6 = 1. Not "a group was hidden" — its exact hit count
+        // and exact unique count, which with one hidden group is one
+        // visitor's exact activity. That is the outcome the whole fold
+        // exists to prevent, recovered with one subtraction.
+        //
+        // So when the withheld remainder is itself too small to publish,
+        // published groups are pulled into it, smallest first, until it
+        // is large enough to stand on its own. What subtraction then
+        // recovers is a bucket that already appears in the output.
+        //
+        // Smallest first because it costs the least: the groups nearest
+        // the threshold are the ones whose absence says least about
+        // anyone. It is still a real cost — a query can return fewer
+        // rows than the data has — and that is the price of the
+        // guarantee rather than a defect.
+        //
+        // This closes subtraction against the total. It is not a defense
+        // against differencing in general: a caller who queries many
+        // overlapping ranges and dimensions and solves the resulting
+        // system can still learn more than any single answer discloses.
+        // Nothing short of a query budget or differential privacy fixes
+        // that, and THREAT_MODEL.md says so rather than implying this
+        // covers it.
+        if other_present && (other.hll.estimate().round() as u64) < k {
+            // Descending, so `pop` — which takes from the end — yields
+            // the smallest remaining group each time.
+            kept.sort_by(|(_, a), (_, b)| {
+                b.hll
+                    .estimate()
+                    .partial_cmp(&a.hll.estimate())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            while (other.hll.estimate().round() as u64) < k {
+                match kept.pop() {
+                    Some((_, acc)) => other.absorb(acc.hits, &acc.hll, &acc.hist),
+                    // Everything there was, together, is still under the
+                    // threshold: the whole result is too small to
+                    // publish at all.
+                    None => return Ok(Vec::new()),
+                }
+            }
+        }
+
+        let mut result: Vec<GroupRow> = kept
+            .into_iter()
+            .map(|(key, acc)| acc.into_row(group_by.iter().copied().zip(key).collect()))
+            .collect();
+
+        if other_present {
             let dims = group_by
                 .iter()
                 .map(|&f| (f, "(other)".to_string()))
@@ -441,6 +504,97 @@ mod tests {
         assert!(
             other.uniques >= 5,
             "no reported group, including (other), may show uniques < k"
+        );
+    }
+
+    /// The whole reason complementary suppression exists: the grouped
+    /// answer and the ungrouped answer must not be subtractable.
+    ///
+    /// Before it, this exact data gave `/a` = 6 and `/b` = 6 grouped,
+    /// 13 ungrouped, and `13 - 6 - 6 = 1` handed back the suppressed
+    /// group's exact hits and exact uniques — one visitor's activity,
+    /// recovered with one subtraction. Reproduced against the compiled
+    /// binaries, not only here.
+    #[test]
+    fn the_hidden_remainder_cannot_be_recovered_by_subtracting_from_the_total() {
+        let mut store = Store::open_in_memory().unwrap();
+        for i in 0..6 {
+            store
+                .record_event(&event(1, 1_700_000_000 + i, "pageview", "/a", i as u64))
+                .unwrap();
+            store
+                .record_event(&event(
+                    1,
+                    1_700_000_000 + i,
+                    "pageview",
+                    "/b",
+                    100 + i as u64,
+                ))
+                .unwrap();
+        }
+        // The one that must never be identifiable.
+        store
+            .record_event(&event(1, 1_700_000_000, "pageview", "/c", 999))
+            .unwrap();
+
+        let grouped = store
+            .query_rollup(SiteId::new(1), 0, i64::MAX, &[GroupByField::Path], 5)
+            .unwrap();
+        let total = store
+            .query_rollup(SiteId::new(1), 0, i64::MAX, &[], 5)
+            .unwrap();
+        assert_eq!(total.len(), 1, "no grouping is one row");
+
+        assert!(
+            !grouped.iter().any(|r| r.dims[0].1 == "/c"),
+            "the single-visitor group must not be reported on its own"
+        );
+
+        let residual = total[0].hits - grouped.iter().map(|r| r.hits).sum::<i64>();
+        assert_eq!(
+            residual, 0,
+            "the total minus the published groups must leave nothing: {grouped:#?}"
+        );
+
+        // And the bucket that absorbed it must not be the group itself
+        // wearing a different label.
+        let other = grouped
+            .iter()
+            .find(|r| r.dims[0].1 == "(other)")
+            .expect("a fold happened, so (other) must be published");
+        assert!(
+            other.uniques >= 5,
+            "(other) with {} uniques would isolate what it is hiding",
+            other.uniques
+        );
+        assert!(
+            other.hits > 1,
+            "(other) holding exactly the hidden group's hits discloses it verbatim"
+        );
+    }
+
+    /// When even everything together is under the threshold, the answer
+    /// is nothing — not "everything, since none of it can be split."
+    #[test]
+    fn a_dataset_too_small_to_publish_at_all_returns_no_rows() {
+        let mut store = Store::open_in_memory().unwrap();
+        for (i, path) in ["/a", "/b", "/c"].iter().enumerate() {
+            store
+                .record_event(&event(
+                    1,
+                    1_700_000_000 + i as i64,
+                    "pageview",
+                    path,
+                    i as u64,
+                ))
+                .unwrap();
+        }
+        let rows = store
+            .query_rollup(SiteId::new(1), 0, i64::MAX, &[GroupByField::Path], 5)
+            .unwrap();
+        assert!(
+            rows.is_empty(),
+            "three groups of one visitor each is three visitors, still under k=5: {rows:#?}"
         );
     }
 
