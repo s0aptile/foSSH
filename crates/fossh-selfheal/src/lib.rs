@@ -44,6 +44,8 @@ pub mod advisor;
 pub mod capability;
 pub mod engine;
 pub mod keylock;
+pub mod memory;
+pub mod persona;
 
 pub use advisor::{Availability, MODEL};
 pub use capability::{Capability, Tier};

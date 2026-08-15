@@ -11,6 +11,9 @@ description = "foSSH self-healing: a deterministic remediation engine, plus an o
 
 [dependencies]
 fossh-core.workspace = true
+fossh-ingest.workspace = true
+nix = { workspace = true, features = ["fs"] }
+zeroize.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

@@ -72,6 +72,12 @@
       analytics server itself is the fossh package, which this depends
       on.
     </p>
+    <p>
+      An optional companion package can run a small local language model
+      on the same machine to explain a diagnostic in plain words. It runs
+      on the CPU, nothing it sees or produces leaves your machine, and it
+      cannot change what foSSH diagnoses or repairs.
+    </p>
   </description>
 
   <launchable type="desktop-id">org.fossh.Console.desktop</launchable>

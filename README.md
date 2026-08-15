@@ -99,8 +99,14 @@ to run.
 Optionally, `fossh-selfheal` adds a small local language model that can
 attach a plain-language explanation to a finding — and only that. It
 cannot create a finding, change a severity, alter a remedy, or cause
-anything to run. It is off unless the hardware clears a real capability
-gate and then a timed performance probe. See `docs/SELF-HEALING.md`.
+anything to run.
+
+It runs entirely on the CPU, on your own machine, and nothing it is
+shown or produces leaves that machine. It is off unless the hardware
+clears a floor — 4 physical cores with AVX2 (an Intel Core i7-6700K or
+AMD Ryzen 5 1500X and up), 8 GiB of RAM, 32 GiB of storage — and then
+passes a timed check for latency and throughput. See
+`docs/SELF-HEALING.md`.
 
 ## Privacy and security
 

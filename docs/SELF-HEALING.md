@@ -31,7 +31,7 @@ sudo fossh doctor
 
 ## The optional model, and the fence around it
 
-`fossh-selfheal` adds a local language model — `lfm2.5-thinking:1.2b`,
+`fossh-selfheal` adds a local language model — `lfm2.5-thinking`,
 served by Ollama, on your own machine — that can write exactly one
 thing: a plain-language explanation attached to a finding the rules
 already produced.
@@ -57,38 +57,57 @@ event, path, country, or aggregate.
 
 Two gates, both of which must pass.
 
-**Hardware.** AVX2 is required and AVX-512 is preferred; a 1.2B model
-quantised for CPU inference leans almost entirely on wide dot
-products, and without AVX2 the fallback paths are slower by a large
-multiple rather than a small one. Vulkan is a *fail-switch* — what a
-machine without AVX2 falls back to, not an upgrade an AVX2 machine is
-promoted into. Taking over a GPU for a background advisor on a server
-that is doing something else is a bigger imposition than the feature
-is worth.
+**Hardware.** The model runs entirely on the **CPU** — `num_gpu: 0` is
+set on every request. It has to work on machines with no GPU, and
+quietly claiming one on machines that have it would be taking a
+resource the operator bought for something else.
 
-The floor is **six physical cores and 8 GiB of RAM** — an AMD Ryzen 5
-2600 (Zen+, 2018) or Intel Core i5-8400 (Coffee Lake, 2017) and
-upward. Cores are counted physically, not logically: hyperthreads share
-the vector units this work is bound by, so counting twelve threads on a
-six-core chip and sizing a pool from it produces contention rather than
-throughput.
+The instruction set decides the tier: AVX is the floor, AVX2 is the
+ordinary case, AVX-512 is used where present. The runtime selects the
+matching backend itself.
 
-One thing worth knowing if you are matching Intel parts by age: AVX-512
-support is not monotonic. Skylake-X, Ice Lake and Rocket Lake have it;
-Alder Lake and everything after ship with it fused off on consumer
-chips. So a newer Intel CPU can land a tier below an older one, and
-that is correct rather than a detection bug — the tier comes from
-probing features, never from a model name.
+| | Minimum |
+|---|---|
+| Processor | 4 physical cores with AVX2 — Intel Core i7-6700K (2015) or AMD Ryzen 5 1500X (2017), or later |
+| Memory | 8 GiB |
+| Storage | 32 GiB free; a mechanical disk is sufficient, solid state recommended for the install generally |
+
+Cores are counted physically, not logically: hyperthreads share the
+vector units this work is bound by. Two cores are always held back and
+inference threads are capped at four — six threads measured no faster
+than four (75.6 against 76.5 tokens/second), so the extra two would be
+taken from the machine's real work for nothing.
+
+One thing worth knowing if you are matching Intel parts by age:
+AVX-512 support is not monotonic. Skylake-X, Ice Lake and Rocket Lake
+have it; Alder Lake and later ship it fused off on consumer chips. So
+a newer Intel CPU can land a tier below an older one, and that is
+correct rather than a detection bug — the tier comes from probing
+features, never from a model name.
+
 
 **Measured performance.** Passing the hardware gate only earns the
-right to be timed. A real generation is run and held to a throughput
-floor; anything below it switches the layer off for that session. This
-is what catches a VM whose CPUID advertises AVX-512 that the hypervisor
-emulates slowly, which no amount of static detection can see.
+right to be timed. A real generation is run and held to two limits,
+and failing either switches the layer off for that session:
 
-Two cores are always held back and inference threads are capped at
-four, so the advisor cannot saturate a machine whose actual job is
-serving requests.
+- **Time to first token: 1.7 seconds.** A background advisor that
+  makes an operator wait has already cost more than it is worth.
+- **Throughput: 38.5 tokens/second.**
+
+Measured on a Ryzen 5 8400F, CPU only, four threads: **0.171 s** to
+first token and **75.7 tokens/second** — roughly ten times the latency
+margin and twice the throughput the gate requires.
+
+That measurement is taken on the *warm* path, and the reason matters.
+Cold, the first token takes 1.626 s — inside the 1.7 s ceiling by
+seventy milliseconds, which is not a margin to build on. Warm it takes
+0.097 s. So the model is kept resident and warmed once at startup,
+because the warm path is the only one a real request ever takes.
+
+Timing also catches what no feature bit can: a virtual machine whose
+CPUID advertises AVX-512 that the hypervisor emulates slowly looks
+perfect to static detection and fails here.
+
 
 If either gate fails, self-healing runs its deterministic rules and
 says so. That is not a degraded mode; it is the same feature.
@@ -108,7 +127,7 @@ uninstallable. Install it yourself from
 foSSH's own:
 
 ```
-ollama pull lfm2.5-thinking:1.2b
+ollama pull lfm2.5-thinking
 ollama create fossh-advisor:0.0.2.1 -f /usr/share/fossh/model/Modelfile
 ```
 

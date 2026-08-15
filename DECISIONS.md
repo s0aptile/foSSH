@@ -1200,3 +1200,142 @@ Verified end to end against real gpg afterwards: a genuine manifest
 verifies; the forged one is refused; a genuine signature checked
 against a different expected fingerprint is refused; a missing manifest
 reads as "not configured" rather than as tampering.
+
+---
+
+## ADR-0068 — "Biased One": the advisory layer has no public face
+
+**Status:** accepted, 0.0.2.1.
+
+**Decision.** The optional local model is never named, never converses,
+and never explains itself. In public it is `Biased One` — a name chosen
+to identify a component without describing one. It does not appear in
+the interface, has no chat surface, and its output reaches an operator
+only as explanatory text attached to a diagnostic the deterministic
+rules already produced.
+
+**Two layers, and only one is a guarantee.** `classify_intent` reads
+untrusted input and decides whether it is a probe, an attempt at
+conversation, or an instruction-replacement attack, across the
+languages a probe is likely to arrive in. It is a heuristic and it will
+miss things; keyword intent classification is not a solved problem and
+building on the assumption that it is would be the actual danger.
+
+`scrub` is the guarantee. Every byte the model produces passes through
+it, and anything on the forbidden list is redacted regardless of what
+was asked, in what language, or what the model decided to say. If the
+classifier fails, the scrubber holds. If the model is jailbroken
+outright, the scrubber holds.
+
+**Untrusted input fails closed.** An earlier revision defaulted to
+"this is legitimate work" for anything without a question mark, so a
+bare greeting was classified as a diagnostic. For a component whose
+entire job is to refuse, the default must be refusal — the genuine
+diagnostic path never reaches the classifier at all, because it is
+built by `advisor::build_prompt` from a `Finding` this codebase wrote
+and is trusted for where it came from rather than for how it reads.
+
+**The forbidden list is shared, and multilingual because it had to
+be.** `packaging/model/forbidden-terms.json` is read by both
+`persona.rs` (compiled in) and `advisor_client.py` (at runtime), so the
+Rust and Python halves cannot drift — this project has been bitten
+before by one rule living in two implementations.
+
+It contains non-Latin entries because an English-only list demonstrably
+does not work. Asked in Chinese what it was, the real model answered
+`我是基于大语言模型设计的AI助手` — "an AI assistant based on a **large
+language model**". Nothing in an English list matches that. Found by
+running the probe, not by reasoning about it.
+
+**Verified against the live model:** 19 probe and hijack attempts
+across nine languages, zero disclosures.
+
+---
+
+## ADR-0069 — reached from Python, kept warm, and never from a terminal
+
+**Status:** accepted, 0.0.2.1.
+
+**Decision.** The model is reached over its HTTP API from inside the
+console's own process, using only the standard library. Not by
+shelling out, and not via the `ollama` Python package.
+
+**Never a terminal.** An operator must never see a console window
+appear because a background component decided to think about
+something. It looks like malware and it costs exactly the trust the
+rest of this product is built on. An in-process HTTP call also makes
+the model something that can be tunnelled, proxied, or moved behind a
+gateway without any caller changing.
+
+**Standard library rather than the package.** One POST to a loopback
+URL does not justify a dependency in a desktop application, and one
+code path is easier to keep correct than two.
+
+**Hot standby is the design, not an optimisation.** Measured on a
+Ryzen 5 8400F, CPU only, four threads: the first token takes **1.626 s
+cold and 0.097 s warm** — seventeen times apart. The cold figure clears
+the 1.7 s ceiling by seventy milliseconds, which is not a margin to
+build on. So the model is kept resident, warmed once at startup, and
+the performance gate is measured on the warm path, because that is the
+only path a real request takes.
+
+**CPU only, `num_gpu: 0` on every request.** This must work where
+there is no GPU, and taking one where there is would be claiming a
+resource the operator bought for something else. Measured: **75.7
+tokens/second on CPU alone**, against a floor of 38.5.
+
+**The gate is two numbers, both measured rather than assumed:** first
+token within 1.7 s, and 38.5 tokens/second. Either failing switches
+the layer off for the session. They fail for different reasons — a
+slow first token usually means the model was not resident, a low rate
+means the machine cannot keep up at all.
+
+**A reasoning trace nearly made the feature useless.** This model
+emits its reasoning before its answer. With the original 220-token
+budget it produced **587 reasoning tokens and zero answer tokens** —
+it spent everything thinking and returned nothing. The budget is now
+sized for both and the trace is stripped, including the unterminated
+case where generation was cut off mid-thought.
+
+---
+
+## ADR-0070 — the advisory layer's memory holds facts, never prose
+
+**Status:** accepted, 0.0.2.1.
+
+**Context.** A component running for months benefits from knowing that
+a finding has recurred four times, or that an automatic remedy was
+tried and did not hold. The deterministic engine cannot know that on
+its own.
+
+**The failure this is designed against.** A model whose context is
+filled with its own previous output reasons over its own reasoning.
+Small errors are restated as established fact, restated again with
+more confidence, and within a few cycles the component is elaborating
+on something that was never true. It is the same failure as training a
+model on its own generations, at conversational scale, and from the
+outside it is indistinguishable from a system that has gone mad:
+fluent, self-consistent, and unmoored.
+
+**Decision.** Nothing the model produces is ever stored. Not its
+explanations, not a confidence score, not a summary. `Observation` has
+three fields — a finding id, a timestamp, and an outcome enum — and no
+field that can hold a sentence. The one `String` is validated against
+the `[a-z0-9_]` shape `engine.rs` generates, so it cannot be used as a
+prose channel by a caller that means well and passes a description.
+
+The guarantee is structural rather than procedural: this file cannot
+store prose, so no later edit can start feeding the model its own words
+without changing the type and being seen to do it. A test asserts the
+field count.
+
+**Bounded, expiring, disposable.** Capped at 256 observations, oldest
+evicted, nothing older than 30 days retained. Sealed under the
+per-install data key. If it fails to decrypt or parse it is discarded
+and rebuilt empty — nothing depends on it, so the right response to a
+doubtful memory is to forget.
+
+**What reaches a prompt** is a single line assembled here from counts
+and enum names ("seen 4 times in the last 30 days; an automatic fix
+failed twice"). Facts about the world, never the model's own words.
+That is what keeps the loop open.

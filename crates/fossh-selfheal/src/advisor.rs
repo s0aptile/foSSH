@@ -48,7 +48,7 @@ use crate::capability::{Capability, Tier};
 use crate::engine::Finding;
 
 /// The base model this subsystem is built on.
-pub const BASE_MODEL: &str = "lfm2.5-thinking:1.2b";
+pub const BASE_MODEL: &str = "lfm2.5-thinking";
 
 /// What is actually invoked: a derived model built from `BASE_MODEL`
 /// by `packaging/model/Modelfile`.
@@ -74,12 +74,24 @@ pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:11434";
 /// The floor a timed probe has to clear, in tokens per second.
 ///
 /// Below this the advisory layer is not "slow", it is a background
-/// process competing with the thing the server is actually for. A
-/// 1.2B model quantised for CPU inference clears this comfortably on
-/// any machine that passes the static gate; a machine that does not is
-/// almost always one where CPUID advertises a feature the hypervisor
-/// emulates, which is exactly the case static detection cannot see.
-pub const MIN_TOKENS_PER_SECOND: f64 = 8.0;
+/// process competing with the thing the server is actually for.
+///
+/// Measured rather than guessed: 76.5 tokens/second on a Ryzen 5
+/// 8400F with four threads, entirely on CPU and with no GPU involved,
+/// against this floor of 38.5 — roughly twice the required margin.
+/// A machine that cannot reach half of that is one where the model
+/// would be taking cores the server needs.
+pub const MIN_TOKENS_PER_SECOND: f64 = 38.5;
+
+/// The other half of the gate: how long the first token may take.
+///
+/// A background advisor that makes an operator wait has already cost
+/// more than it is worth. Measured on a Ryzen 5 8400F, CPU only, four
+/// threads: **1.626 s cold, 0.097 s warm** — seventeen times apart,
+/// and the cold figure clears this ceiling by seventy milliseconds,
+/// which is not a margin to build on. That measurement is the reason
+/// the model is kept resident and the probe runs on the warm path.
+pub const MAX_TTFT_SECONDS: f64 = 1.7;
 
 /// The longest a single advisory generation may take before it is
 /// abandoned. Self-healing advice that arrives after the operator has
@@ -154,15 +166,33 @@ pub fn assess_hardware(capability: &Capability) -> Result<Tier, Availability> {
 /// The measured half. `measured_tokens_per_second` comes from a real
 /// generation — see `probe`.
 pub fn assess_measurement(tier: Tier, measured_tokens_per_second: f64) -> Availability {
-    if measured_tokens_per_second < MIN_TOKENS_PER_SECOND {
-        Availability::TooSlow {
+    assess_measured(tier, 0.0, measured_tokens_per_second)
+}
+
+/// Both halves of the measured gate.
+///
+/// Either failing switches the layer off for the session. They are
+/// separate because they fail for different reasons: a slow first
+/// token usually means the model was not resident, while a low rate
+/// means the machine cannot keep up at all.
+pub fn assess_measured(
+    tier: Tier,
+    ttft_seconds: f64,
+    measured_tokens_per_second: f64,
+) -> Availability {
+    if ttft_seconds > MAX_TTFT_SECONDS {
+        return Availability::TooSlow {
             measured: measured_tokens_per_second,
-        }
-    } else {
-        Availability::Ready {
-            tier,
-            tokens_per_second: measured_tokens_per_second,
-        }
+        };
+    }
+    if measured_tokens_per_second < MIN_TOKENS_PER_SECOND {
+        return Availability::TooSlow {
+            measured: measured_tokens_per_second,
+        };
+    }
+    Availability::Ready {
+        tier,
+        tokens_per_second: measured_tokens_per_second,
     }
 }
 
@@ -263,6 +293,8 @@ mod tests {
             physical_cores: cores,
             logical_cores: cores * 2,
             ram_bytes: 16 * 1024 * 1024 * 1024,
+            // Every chip with AVX2 has AVX; the fixture reflects that.
+            avx: avx2 || avx512,
             avx2,
             avx512,
             avx512_vnni: false,
@@ -455,7 +487,7 @@ mod tests {
         // message that carries the "never propose a fix" rule, and
         // leave only the per-request prompt enforcing it.
         assert_eq!(MODEL, "fossh-advisor:0.0.2.1");
-        assert_eq!(BASE_MODEL, "lfm2.5-thinking:1.2b");
+        assert_eq!(BASE_MODEL, "lfm2.5-thinking");
         assert_ne!(MODEL, BASE_MODEL);
     }
 

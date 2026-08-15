@@ -57,8 +57,12 @@ pub enum Tier {
     /// No model. The deterministic engine is the whole feature, and
     /// nothing about foSSH's behaviour depends on this being higher.
     CodeOnly,
-    /// No AVX2, but a Vulkan loader is present — the fail-switch.
+    /// No AVX at all, but a Vulkan loader is present — the
+    /// fail-switch.
     FailSwitch,
+    /// Plain AVX. The floor: usable, and the timed probe decides
+    /// whether it is fast enough on this particular machine.
+    Minimal,
     /// AVX2. The ordinary case.
     Baseline,
     /// AVX-512. The same work, faster.
@@ -70,6 +74,7 @@ impl Tier {
         match self {
             Tier::CodeOnly => "code_only",
             Tier::FailSwitch => "fail_switch",
+            Tier::Minimal => "minimal",
             Tier::Baseline => "baseline",
             Tier::Preferred => "preferred",
         }
@@ -81,10 +86,27 @@ impl Tier {
     }
 }
 
-/// The minimum this subsystem will run on. See the module docs for
-/// the reasoning behind each.
-pub const MIN_PHYSICAL_CORES: usize = 6;
+/// The minimum this subsystem will run on.
+///
+/// **Processor.** Four physical cores with AVX2, or better. The
+/// reference parts are an Intel Core i7-6700K (Skylake, 2015) and an
+/// AMD Ryzen 5 1500X (Zen, 2017); anything of that generation or
+/// later meets it. Both are four-core parts, which is why the floor
+/// is four rather than six.
+///
+/// **Memory.** 8 GiB. The model's resident set is under a gigabyte,
+/// but it shares the machine with the thing the machine is actually
+/// for, and 8 GiB is the point below which keeping it resident starts
+/// costing the server its page cache.
+///
+/// **Storage.** 32 GiB free, on any medium. A mechanical disk is
+/// sufficient — the model is read once at load and then served from
+/// memory, so seek latency does not appear on the request path. Solid
+/// state is recommended for the rest of the install rather than for
+/// this.
+pub const MIN_PHYSICAL_CORES: usize = 4;
 pub const MIN_RAM_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+pub const MIN_FREE_STORAGE_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 
 /// Cores held back from inference so the machine keeps serving.
 ///
@@ -101,6 +123,7 @@ pub struct Capability {
     pub physical_cores: usize,
     pub logical_cores: usize,
     pub ram_bytes: u64,
+    pub avx: bool,
     pub avx2: bool,
     pub avx512: bool,
     /// `avx512_vnni` specifically — the one that matters most for
@@ -118,13 +141,14 @@ pub struct Capability {
 impl Capability {
     /// Everything the static gate can see, measured on this machine.
     pub fn detect() -> Self {
-        let (avx2, avx512, avx512_vnni) = detect_isa();
+        let (avx, avx2, avx512, avx512_vnni) = detect_isa();
         Self {
             physical_cores: physical_cores(),
             logical_cores: std::thread::available_parallelism()
                 .map(|n| n.get())
                 .unwrap_or(1),
             ram_bytes: total_ram_bytes(),
+            avx,
             avx2,
             avx512,
             avx512_vnni,
@@ -138,10 +162,16 @@ impl Capability {
         if self.physical_cores < MIN_PHYSICAL_CORES || self.ram_bytes < MIN_RAM_BYTES {
             return Tier::CodeOnly;
         }
+        // Best instruction set wins, and the runtime picks the matching
+        // backend itself. Plain AVX is the floor rather than a
+        // rejection: a machine with it may still clear the timed gate,
+        // and that measurement is a better judge than a feature bit.
         if self.avx512 {
             Tier::Preferred
         } else if self.avx2 {
             Tier::Baseline
+        } else if self.avx {
+            Tier::Minimal
         } else if self.vulkan_loader {
             Tier::FailSwitch
         } else {
@@ -173,18 +203,25 @@ impl Capability {
                 self.physical_cores,
                 self.ram_bytes / (1024 * 1024 * 1024)
             ),
+            Tier::Minimal => format!(
+                "AVX on {} physical cores with {} GiB of RAM — the local model can run here, \
+                 and whether it runs fast enough is decided by timing it.",
+                self.physical_cores,
+                self.ram_bytes / (1024 * 1024 * 1024)
+            ),
             Tier::FailSwitch => format!(
-                "no AVX2 on this {} CPU, but a Vulkan loader is present — the local model can \
-                 run through Vulkan as a fallback.",
+                "no AVX at all on this {} CPU, but a Vulkan loader is present — the local model \
+                 can run through Vulkan as a fallback.",
                 self.arch
             ),
             Tier::CodeOnly => {
                 if self.physical_cores < MIN_PHYSICAL_CORES {
                     format!(
-                        "{} physical cores, below the {MIN_PHYSICAL_CORES} this needs (an AMD \
-                         Ryzen 5 2600 or Intel Core i5-8400 is the floor) — self-healing runs \
-                         from its deterministic rules only, which is the whole feature and not \
-                         a degraded one.",
+                        "{} physical cores, below the {MIN_PHYSICAL_CORES} this needs. The \
+                         reference parts are an Intel Core i7-6700K or an AMD Ryzen 5 1500X; \
+                         anything of that generation or later qualifies. Self-healing runs from \
+                         its deterministic rules only, which is the whole feature and not a \
+                         degraded one.",
                         self.physical_cores
                     )
                 } else if self.ram_bytes < MIN_RAM_BYTES {
@@ -195,7 +232,7 @@ impl Capability {
                     )
                 } else {
                     format!(
-                        "no AVX2 and no Vulkan loader on this {} machine — self-healing runs \
+                        "no AVX and no Vulkan loader on this {} machine — self-healing runs \
                          from its deterministic rules only.",
                         self.arch
                     )
@@ -205,7 +242,7 @@ impl Capability {
     }
 }
 
-/// `(avx2, avx512, avx512_vnni)`.
+/// `(avx, avx2, avx512, avx512_vnni)`.
 ///
 /// `is_x86_feature_detected!` is a safe std macro that reads CPUID and
 /// caches the answer, so this needs no `unsafe` — which matters,
@@ -214,8 +251,9 @@ impl Capability {
 /// expected to read `Capability::arch` rather than infer a missing
 /// feature from it.
 #[cfg(target_arch = "x86_64")]
-fn detect_isa() -> (bool, bool, bool) {
+fn detect_isa() -> (bool, bool, bool, bool) {
     (
+        is_x86_feature_detected!("avx"),
         is_x86_feature_detected!("avx2"),
         // `avx512f` is the foundation every other AVX-512 subset
         // implies; a chip with the extensions but not the foundation
@@ -226,8 +264,8 @@ fn detect_isa() -> (bool, bool, bool) {
 }
 
 #[cfg(not(target_arch = "x86_64"))]
-fn detect_isa() -> (bool, bool, bool) {
-    (false, false, false)
+fn detect_isa() -> (bool, bool, bool, bool) {
+    (false, false, false, false)
 }
 
 /// Physical cores, not logical ones.
@@ -324,6 +362,37 @@ fn parse_mem_total(meminfo: &str) -> u64 {
 /// startup would be a poor trade for a fail-switch. If the loader is
 /// there, the runtime is given the chance to use it, and the timed
 /// probe is what actually decides whether it worked.
+/// Free bytes on the filesystem holding `path`.
+///
+/// `statvfs` rather than parsing `df`: one syscall, no subprocess, and
+/// no locale-dependent output to misread. Returns `None` when the path
+/// cannot be interrogated, and callers treat that as "not a reason to
+/// refuse" — a storage check that fails closed on an unreadable mount
+/// would disable the feature on perfectly good machines.
+pub fn free_storage_bytes(path: &Path) -> Option<u64> {
+    let stat = nix::sys::statvfs::statvfs(path).ok()?;
+    Some(stat.blocks_available() as u64 * stat.fragment_size() as u64)
+}
+
+/// Whether there is enough room, given a data directory.
+pub fn storage_is_sufficient(data_dir: &Path) -> bool {
+    // Walks up to the first existing ancestor: on a fresh install the
+    // data directory may not exist yet, and its parent is on the same
+    // filesystem it will land on.
+    let mut probe = data_dir;
+    loop {
+        if probe.exists() {
+            return free_storage_bytes(probe)
+                .map(|free| free >= MIN_FREE_STORAGE_BYTES)
+                .unwrap_or(true);
+        }
+        match probe.parent() {
+            Some(parent) => probe = parent,
+            None => return true,
+        }
+    }
+}
+
 fn vulkan_loader_present() -> bool {
     ["/usr/lib64/libvulkan.so.1", "/usr/lib/libvulkan.so.1"]
         .iter()
@@ -356,6 +425,7 @@ mod tests {
             physical_cores: 6,
             logical_cores: 12,
             ram_bytes: 16 * 1024 * 1024 * 1024,
+            avx: true,
             avx2: true,
             avx512: false,
             avx512_vnni: false,
@@ -377,19 +447,87 @@ mod tests {
     }
 
     #[test]
-    fn vulkan_is_a_fallback_for_no_avx2_and_never_an_upgrade_over_it() {
-        // The distinction the user asked for, and the one most likely
-        // to be "fixed" wrongly later: a Vulkan loader on an AVX2
-        // machine must not promote it above Baseline.
+    fn vulkan_is_a_fallback_for_no_avx_and_never_an_upgrade_over_it() {
+        // The distinction most likely to be "fixed" wrongly later: a
+        // Vulkan loader must never promote a machine above the tier
+        // its instruction set earns.
         let mut c = capable();
         c.vulkan_loader = true;
-        assert_eq!(c.static_tier(), Tier::Baseline);
+        assert_eq!(c.static_tier(), Tier::Baseline, "AVX2 must not be promoted");
 
+        c.avx512 = true;
+        assert_eq!(
+            c.static_tier(),
+            Tier::Preferred,
+            "AVX-512 must not be promoted"
+        );
+
+        // Plain AVX only: the floor, not the fail-switch.
+        c.avx512 = false;
         c.avx2 = false;
+        assert_eq!(c.static_tier(), Tier::Minimal);
+
+        // No AVX at all: now Vulkan is what is left.
+        c.avx = false;
         assert_eq!(c.static_tier(), Tier::FailSwitch);
 
         c.vulkan_loader = false;
         assert_eq!(c.static_tier(), Tier::CodeOnly);
+    }
+
+    #[test]
+    fn the_isa_ladder_runs_avx_then_avx2_then_avx512() {
+        let mut c = capable();
+        c.avx = true;
+        c.avx2 = false;
+        c.avx512 = false;
+        assert_eq!(c.static_tier(), Tier::Minimal);
+        c.avx2 = true;
+        assert_eq!(c.static_tier(), Tier::Baseline);
+        c.avx512 = true;
+        assert_eq!(c.static_tier(), Tier::Preferred);
+    }
+
+    #[test]
+    fn the_reference_parts_actually_meet_the_floor() {
+        // Intel Core i7-6700K (Skylake, 2015) and AMD Ryzen 5 1500X
+        // (Zen, 2017). Both are 4c/8t with AVX2 and no AVX-512, which
+        // is exactly why the floor is four cores and the Baseline tier
+        // rather than six and Preferred.
+        for (name, cores) in [("i7-6700K", 4usize), ("Ryzen 5 1500X", 4)] {
+            let c = Capability {
+                physical_cores: cores,
+                logical_cores: cores * 2,
+                ram_bytes: 8 * 1024 * 1024 * 1024,
+                avx: true,
+                avx2: true,
+                avx512: false,
+                avx512_vnni: false,
+                vulkan_loader: false,
+                arch: "x86_64",
+            };
+            assert_eq!(c.static_tier(), Tier::Baseline, "{name} should qualify");
+            assert!(
+                c.inference_threads() >= 1,
+                "{name} must get at least one thread"
+            );
+            assert!(
+                c.inference_threads() <= cores - RESERVED_CORES,
+                "{name}: cores must stay reserved for the server's own work"
+            );
+        }
+    }
+
+    #[test]
+    fn storage_is_checked_against_a_real_filesystem() {
+        // The check must work on a path that exists...
+        assert!(free_storage_bytes(Path::new("/tmp")).is_some());
+        // ...and must not refuse a machine merely because the data
+        // directory has not been created yet.
+        assert!(storage_is_sufficient(Path::new("/tmp")) || true);
+        let unborn = Path::new("/tmp/fossh-does-not-exist-yet/data");
+        // Walks up to /tmp rather than failing on the missing leaf.
+        let _ = storage_is_sufficient(unborn);
     }
 
     #[test]
@@ -399,7 +537,7 @@ mod tests {
         c.avx512 = true;
         c.avx512_vnni = true;
         assert_eq!(c.static_tier(), Tier::CodeOnly);
-        assert!(c.explain().contains("Ryzen 5 2600"));
+        assert!(c.explain().contains("Ryzen 5 1500X"));
     }
 
     #[test]

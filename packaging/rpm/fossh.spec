@@ -319,12 +319,16 @@ remedy, or cause anything to be executed. Installing or removing it
 changes nothing about what foSSH diagnoses or repairs.
 
 It runs only where it can do so without competing with the work the
-machine is actually for: AVX2 is required and AVX-512 preferred, Vulkan
-is a fallback for machines without AVX2, and the floor is six physical
-cores with 8 GiB of RAM — an AMD Ryzen 5 2600 or Intel Core i5-8400 and
-upward. Hardware that passes is then timed against a real generation,
-and anything below the throughput floor switches the layer off for that
-session rather than slowing the server down.
+machine is actually for, and entirely on the CPU — no GPU is used even
+where one exists. AVX is the floor, AVX2 the ordinary case, AVX-512
+used where present.
+
+Minimum: 4 physical cores with AVX2 (Intel Core i7-6700K or AMD Ryzen
+5 1500X, or later), 8 GiB of RAM, and 32 GiB of free storage; a
+mechanical disk is sufficient. Hardware that passes is then timed
+against a real generation and must reach the first token within 1.7
+seconds at 38.5 tokens/second or better, or the layer switches off for
+that session rather than slowing the server down.
 
 Ollama itself is not packaged by Fedora and is not pulled in by this
 subpackage. Without it, the endpoint is simply unreachable and
