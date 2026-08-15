@@ -15,9 +15,9 @@ When you visit a page or trigger a tracked action, foSSH may record:
 
 ## What is not collected, ever
 
-- **Your IP address is never stored.** It's used for one calculation (below) in the instant a request is handled, and then discarded — not logged, not written to any file, not kept "just in case."
+- **Your IP address is never stored.** It's used for two things in the instant a request is handled — a coarse country lookup, and as one input to the rotating-salt hash described below — and then discarded. Not logged, not written to any file, not kept "just in case."
 - **No cookies.** Nothing is set in your browser, and nothing is read from it either — no `localStorage`, no cache-based tricks.
-- **No cross-site tracking.** foSSH has no central server that could correlate your visits across different websites. Each foSSH installation only ever knows about the site(s) it's configured for.
+- **No cross-site tracking by foSSH.** There is no central server that could correlate your visits across different websites, and each installation only knows about the site(s) it's configured for. If this site forwards data onward to some other company — see below — what that company does with it isn't foSSH's to promise, and this bullet is not a claim about them.
 - **No fingerprinting.** No canvas fingerprinting, no font-enumeration, no screen-resolution entropy stacking, no TLS fingerprinting.
 - **No free text.** You can't accidentally leak something you typed — foSSH only ever records event names and fields the site owner explicitly allowlisted in advance.
 - **No session recording.** No heatmaps, no keystroke logs, no mouse-movement tracking.
@@ -33,6 +33,8 @@ To count "how many different people visited," without storing who any of them ar
 ## Numbers, not individuals
 
 foSSH also refuses to report any number small enough to identify an individual. If a particular page, country, or browser combination had fewer than a handful of visitors in a given period, foSSH folds that result into a generic "other" bucket instead of showing the small number on its own. This is called k-anonymity, and it is applied inside the part of the software that answers every query, so no report or export can go around it.
+
+One limit worth stating, in the same spirit as the salt section above: this protects any *single* report from showing a number small enough to identify someone. It is not a guarantee that nobody could ever narrow a folded "other" bucket back down by comparing several different reports against each other — that is a known property of threshold-based suppression generally, and `THREAT_MODEL.md` covers it.
 
 The threshold itself — how many visitors count as "a handful" — is a setting, and the site owner can change it. The default is five. Lowering it makes smaller groups visible; setting it to zero disables the fold entirely. foSSH's own self-check reports that as a critical problem when it finds it, but it is the site owner's machine and the site owner's decision, so this page cannot promise you what value they chose. If that matters to you, ask them.
 

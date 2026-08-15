@@ -488,11 +488,7 @@ install -D -m0644 docs/man/fossh-console.1 \
     %{buildroot}%{_mandir}/man1/fossh-console.1
 
 install -D -m0644 gui/data/org.fossh.Console.desktop \
-    %{buildroot}%dir %{_datadir}/%{name}
-%dir %{_datadir}/%{name}/providers
-%{_datadir}/%{name}/providers/*.toml
-%dir %{_sysconfdir}/%{name}/providers.d
-%{_datadir}/applications/org.fossh.Console.desktop
+    %{buildroot}%{_datadir}/applications/org.fossh.Console.desktop
 install -D -m0644 gui/data/org.fossh.Console.metainfo.xml \
     %{buildroot}%{_metainfodir}/org.fossh.Console.metainfo.xml
 install -D -m0644 gui/data/icons/org.fossh.Console.svg \
@@ -505,11 +501,7 @@ install -D -m0644 gui/data/icons/org.fossh.Console-symbolic.svg \
 # or a metainfo file AppStream cannot parse installs perfectly happily
 # and then simply does not appear in anyone's software centre, which
 # is the kind of defect that is only ever found by a user.
-desktop-file-validate %{buildroot}%dir %{_datadir}/%{name}
-%dir %{_datadir}/%{name}/providers
-%{_datadir}/%{name}/providers/*.toml
-%dir %{_sysconfdir}/%{name}/providers.d
-%{_datadir}/applications/org.fossh.Console.desktop
+desktop-file-validate %{buildroot}%{_datadir}/applications/org.fossh.Console.desktop
 appstream-util validate-relax --nonet \
     %{buildroot}%{_metainfodir}/org.fossh.Console.metainfo.xml
 # appstreamcli is the stricter of the two and the one whose rules the

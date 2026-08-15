@@ -12,9 +12,9 @@ foSSH is software, not a service. It has no network egress from its ingest path.
 
 ## 2. No data reaches the author
 
-Nobody who runs foSSH sends the author anything. This is structural rather than merely asserted: the code capable of making an outbound request is not present in the dependency tree of any ingest component, which you can verify yourself without trusting this sentence — `cargo tree -p fossh-cgi` and `cargo tree -p fossh-fcgi` contain neither `fossh-agent` nor `fossh-selfheal`.
+Nobody who runs foSSH sends the author anything. This is structural rather than merely asserted: the code capable of making an outbound request is not present in the dependency tree of any ingest component, which you can verify yourself without trusting this sentence — `cargo tree -p fossh-cgi` and `cargo tree -p fossh-fcgi` — the two components that receive events — list neither `fossh-agent` (the helper the administration console speaks to, §19) nor `fossh-selfheal` (the optional local-model layer, §21). Those are the only two components in foSSH that can make an outbound request at all.
 
-This statement is about the author. It is **not** a statement about anywhere your own deployment sends data at your own instruction. See §18.
+This statement is about the author. It is **not** a statement about anywhere your own deployment sends data at your own instruction. See §19.
 
 ## 3. Acceptance
 
@@ -38,7 +38,7 @@ To the maximum extent permitted by applicable law, the author is not liable for 
 
 ## 8. Assumption of risk
 
-Use of foSSH is entirely at your own risk. You assume all risk of data loss, service interruption, incorrect measurement, misconfiguration, and legal or regulatory exposure arising from your deployment. By downloading, building, installing, linking, or running foSSH, you acknowledge this and waive, to the maximum extent permitted by applicable law, any claim against the author arising from such use.
+Use of foSSH is entirely at your own risk. You assume all risk of data loss, downtime, incorrect measurement, misconfiguration, and legal or regulatory exposure arising from your deployment. By downloading, building, installing, linking, or running foSSH, you acknowledge this and waive, to the maximum extent permitted by applicable law, any claim against the author arising from such use.
 
 ## 9. Open source: modify freely, at your own risk
 
@@ -58,27 +58,35 @@ No statement anywhere in this project — this document, the README, `PRIVACY.md
 
 The following is a statement of intent, not a license condition, not a field-of-use restriction, and not enforceable as a term of this document: foSSH is built to measure less, and is not intended for surveillance, deanonymization, or re-identification of individuals. This paragraph does not appear in, and does not modify, `LICENSE`.
 
-## 13. Third-party components
+## 13. However you obtained it
+
+These terms apply regardless of how you obtained foSSH: built from source, installed from an RPM, pulled from a package repository or Copr, unpacked from a release archive, or taken from a mirror or rebuild the author has no connection to. The author does not control, review, or vouch for the integrity of any distribution channel other than this project's own repository and release artifacts, and disclaims all liability for anything obtained elsewhere, including a package that has been modified, repackaged, or tampered with in transit.
+
+## 14. Third-party components
 
 foSSH bundles or depends on third-party software. See `NOTICE` for the complete list, each with its license, generated from the project's own dependency tooling.
 
-## 14. Cryptography and export
+## 15. Cryptography and export
 
 foSSH contains cryptographic functionality (BLAKE3 hashing, HMAC-style request authentication, ChaCha20-Poly1305 authenticated encryption, SHA-256, constant-time comparison). You are responsible for compliance with the import, export, and use regulations of your own jurisdiction.
 
-## 15. Name and trademark
+## 16. Name and trademark
 
-Neither the name "foSSH" nor the handle "$0aptile" is a claimed or registered trademark, and none is granted by this document or the license — the MIT License itself is silent on trademarks, so this document states the position directly rather than restating one. Neither name nor handle may be used to endorse or promote a derived work without permission.
+Neither the name "foSSH" nor the handle "$0aptile" is a claimed or registered trademark, and none is granted by this document or the license — the MIT License itself is silent on trademarks, so this document states the position directly rather than restating one. Neither is registered as a trademark, and the author is not asserting a registered-trademark claim. The author does nonetheless ask that neither be used to endorse or promote a derived work without permission — a request grounded in whatever unregistered rights arise from use in the relevant jurisdiction, which is a weaker basis than a registration and is described here as exactly that.
 
-## 16. Security reports
+## 17. Security reports
 
 Report vulnerabilities via GitHub private vulnerability reporting on this repository — see `SECURITY.md`. There is no bug bounty, no response-time SLA, and no guarantee of a fix.
 
-## 17. Governing law, venue, and the limits of what can be disclaimed
+## 18. Governing law, venue, and the limits of what can be disclaimed
 
 This document is a disclaimer and notice, not a contract for the provision of any service. No service is provided, no fee is charged, and no obligation is undertaken. The MIT License is the operative instrument; this document explains and supplements it without narrowing it.
 
-**Governing law.** To the extent any question arising from this document or from your use of foSSH is governed by a national law, it is governed by the substantive law of **Switzerland**, excluding its conflict-of-laws rules and excluding the United Nations Convention on Contracts for the International Sale of Goods. The place of jurisdiction is the ordinary courts of Switzerland.
+**Governing law, and an honest note on its limits.** Where the author is free to choose, the author's choice is the substantive law of **Switzerland**, excluding its conflict-of-laws rules and excluding the United Nations Convention on Contracts for the International Sale of Goods, with the ordinary courts of Switzerland as the place of jurisdiction.
+
+That freedom is not unlimited, and this document says so rather than asserting more than it can deliver. Because nothing here is a negotiated agreement, a court may decline to treat this section as a binding choice of forum or of law at all — and for non-contractual (tort-type) claims specifically, Art. 132 of the Swiss Private International Law Act permits the parties to choose the applicable law only by agreement reached **after** the damaging event, not in advance and not by unilateral notice. Turkish private international law is structured comparably. Where a choice made here is therefore ineffective, the applicable law and forum are whatever the ordinary conflict-of-laws rules of the deciding court produce, and nothing in this document pretends otherwise.
+
+Stating this costs nothing and is consistent with the rest of this section: the disclaimers below do not depend on the choice of law above. They are unilateral exclusions of liability, which Swiss and Turkish law each regulate on their own terms whether or not a contract exists.
 
 **Türkiye.** The author is subject to the law of the **Republic of Türkiye**, and nothing in the paragraph above displaces any mandatory provision of Turkish law that applies regardless of choice of law — including, without limitation, the Turkish Personal Data Protection Law No. 6698 (*Kişisel Verilerin Korunması Kanunu*, "KVKK") and any mandatory consumer-protection provision. Where Turkish law and the paragraph above cannot both be satisfied, the mandatory Turkish provision prevails to the minimum extent necessary and the remainder of this document is unaffected.
 
@@ -90,7 +98,7 @@ This document is a disclaimer and notice, not a contract for the provision of an
 
 **No waiver of class rights, no arbitration.** This document does not compel arbitration and does not waive any right you may have to bring or participate in a collective or class proceeding, where such a right exists under the law applicable to you.
 
-## 18. External services you configure
+## 19. External services you configure
 
 foSSH can send requests to endpoints you supply, authenticated with credentials you supply. Every such request is initiated by you and by your configuration. The author has no relationship with, control over, knowledge of, or responsibility for any third party you choose to send data to, and does not endorse, vet, monitor, or warrant any of them.
 
@@ -98,42 +106,52 @@ You are solely responsible for: what you send, whether you were permitted to sen
 
 Provider definitions distributed with foSSH describe how to reach certain services. They are conveniences, not endorsements, not certifications of accuracy, and not warranties that the named service exists, functions, or is appropriate for your use. Provider definitions you obtain from anywhere other than this project are entirely unvetted by the author.
 
-## 19. Credential storage
+## 20. Credential storage
 
 foSSH stores credentials you enter, encrypted at rest under a key held on the same machine. This is a defence against casual disclosure, not against an adversary with access to that machine. Anyone who can read that machine's storage as the relevant user can obtain those credentials, and no encryption applied by software running on that machine can prevent it. You are responsible for the security of the machine, for rotating any credential you believe exposed, and for the consequences of any exposure.
 
-## 20. The optional local model
+## 21. The optional local model
 
 foSSH can optionally run a language model on your own machine to add explanatory text to diagnostics. That text is **generated output, not advice**, and may be inaccurate, incomplete, misleading, or wrong in ways that read as confident and correct.
 
 Nothing generated by that model is a recommendation, an instruction, a professional opinion, or a statement of fact by the author. Do not act on it without independent verification. The author disclaims all liability for any action taken or not taken on the basis of model output, to the maximum extent permitted by applicable law. If you require reliable diagnostics, use the deterministic rules, which do not involve the model at all and which are the entire feature without it.
 
-## 21. Integration verification
+## 22. Integration verification
 
 foSSH can drive a browser to a web address you supply in order to test whether an integration works. Doing so makes real network requests to that address from your machine, executes whatever that page contains, and — when the integration is working — records a genuine visit in your own data, which is precisely the proof being sought and cannot be avoided while still performing the test.
 
 You are responsible for supplying an address you are authorised to request, and for any consequence of requesting it. Do not point it at anything you do not own or have permission to test.
 
-## 22. No support, no obligation to fix, no service level
+## 23. Indemnification
+
+If a third party brings a claim, demand, or proceeding against the author arising from your deployment of foSSH, your configuration of it, the data you chose to collect or forward, your use of the integration-verification feature against any address, or your breach of this document, you will indemnify and hold the author harmless against that claim and against the reasonable costs of defending it, to the maximum extent permitted by applicable law.
+
+This does not extend to any claim arising from the author's own unlawful intent or gross negligence/gross fault, which §18 already excludes from every limitation in this document and which is excluded here too.
+
+## 24. No support, no obligation to fix, no service level
 
 Nothing obliges the author to respond to any report, fix any defect, publish any release, maintain compatibility, preserve any feature, or continue the project at all. There is no service level, no response time, no maintenance window, and no end-of-life commitment. Any assistance ever given is a gift and creates no expectation of further assistance and no course of dealing.
 
-## 23. No security guarantee
+## 25. No security guarantee
 
 foSSH has not been audited by any third party. Testing, fuzzing, and review reduce the likelihood of defects; they do not eliminate them and are not represented as doing so. No representation is made that foSSH is free of vulnerabilities, that any particular attack is prevented, or that any security property holds under conditions the threat model does not contemplate. `THREAT_MODEL.md` states what is and is not defended against, and it is deliberately explicit about the second.
 
-## 24. Aggregate effect of this document
+## 26. Aggregate effect of this document
 
-Every disclaimer, limitation, exclusion, and waiver in this document applies to the maximum extent permitted by applicable law, applies cumulatively and independently, and survives any termination of your use of foSSH. Where any one of them is held unenforceable, the remainder are unaffected and the unenforceable one is limited only to the minimum extent required, per §25.
+Every disclaimer, limitation, exclusion, and waiver in this document applies to the maximum extent permitted by applicable law, applies cumulatively and independently, and survives any termination of your use of foSSH. Where any one of them is held unenforceable, the remainder are unaffected and the unenforceable one is limited only to the minimum extent required, per §28..
 
-## 25. Severability
+## 27. This document, the licence and NOTICE are the whole of it
+
+This document, `LICENSE`, and `NOTICE` are the complete statement of the author's position. No other statement anywhere — a repository comment, an issue reply, a message in a chat room, a conference remark, a post on any platform — adds a warranty, an obligation, a right, or a representation beyond what is written here, and none should be relied upon as doing so.
+
+## 28. Severability
 
 If any clause of this document is found unenforceable, that clause is severed and the rest of the document remains in effect.
 
-## 26. Changes
+## 29. Changes
 
 This document is versioned with releases. The version shipped with a given release governs that release; a later release may ship a different version, which then governs that later release, without retroactive effect on the one before it.
 
-## 27. Contact
+## 30. Contact
 
 GitHub issues and GitHub private vulnerability reporting only. There is no other contact address for this project.
