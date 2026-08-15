@@ -17,6 +17,7 @@ import time
 from gi.repository import Adw, GLib, Gtk
 
 from ..agent import AgentError
+from ..iconography import symbolic_name
 
 #: Every dimension the store can group by, with a label that says what
 #: it is rather than repeating the field name.
@@ -41,6 +42,7 @@ RANGES = [
 class TelemetryView(Gtk.Box):
     def __init__(self, agent) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self.add_css_class("content-canvas")
         self._agent = agent
         self._sites: list[str] = []
         self._k = 5
@@ -74,7 +76,7 @@ class TelemetryView(Gtk.Box):
         spacer = Gtk.Box(hexpand=True)
         toolbar.append(spacer)
 
-        refresh = Gtk.Button(icon_name="view-refresh-symbolic")
+        refresh = Gtk.Button(icon_name=symbolic_name("refresh"))
         refresh.set_tooltip_text("Refresh (Ctrl+R)")
         refresh.add_css_class("flat")
         refresh.connect("clicked", lambda *_: self.refresh())
@@ -118,7 +120,7 @@ class TelemetryView(Gtk.Box):
         sites = [s.get("slug", "?") for s in result.get("sites", [])]
         if not sites:
             self._show_message(
-                "view-list-symbolic",
+                symbolic_name("empty"),
                 "No sites yet",
                 "Create a site first — there is nothing to report on until then.",
             )
@@ -177,7 +179,7 @@ class TelemetryView(Gtk.Box):
 
         if not rows:
             self._show_message(
-                "edit-find-symbolic",
+                symbolic_name("no_results"),
                 "Nothing in this range",
                 "No events were recorded for this site over the period you picked. "
                 "Try a wider range.",
@@ -273,7 +275,7 @@ class TelemetryView(Gtk.Box):
 
     def _on_error(self, error: AgentError) -> None:
         self._show_message(
-            "dialog-warning-symbolic",
+            symbolic_name("warning"),
             "That query could not be run" if not error.is_unavailable else "Not available yet",
             error.message,
         )

@@ -21,6 +21,7 @@ from __future__ import annotations
 from gi.repository import Adw, GLib, Gtk
 
 from ..agent import AgentError
+from ..iconography import symbolic_name
 
 PLACEMENTS = [
     ("bearer", "Authorization: Bearer <key>"),
@@ -33,6 +34,7 @@ METHODS = [("GET", "GET"), ("POST", "POST")]
 class IntegrationsView(Gtk.Box):
     def __init__(self, agent, toaster: Adw.ToastOverlay) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self.add_css_class("content-canvas")
         self._agent = agent
         self._toaster = toaster
 
@@ -43,7 +45,7 @@ class IntegrationsView(Gtk.Box):
         header.set_margin_end(24)
         spacer = Gtk.Box(hexpand=True)
         add = Gtk.Button()
-        add.set_child(Adw.ButtonContent(icon_name="list-add-symbolic", label="Add service"))
+        add.set_child(Adw.ButtonContent(icon_name=symbolic_name("add"), label="Add service"))
         add.add_css_class("suggested-action")
         add.connect("clicked", lambda *_: self._open_add_dialog())
         header.append(spacer)
@@ -69,7 +71,7 @@ class IntegrationsView(Gtk.Box):
         self._stack.add_named(scroller, "list")
 
         self._empty = Adw.StatusPage(
-            icon_name="network-transmit-symbolic",
+            icon_name=symbolic_name("integrations"),
             title="No external services",
             description=(
                 "Add one to let this console send a request to an API you control, "
@@ -81,7 +83,7 @@ class IntegrationsView(Gtk.Box):
         )
         self._stack.add_named(self._empty, "empty")
 
-        self._error = Adw.StatusPage(icon_name="dialog-warning-symbolic")
+        self._error = Adw.StatusPage(icon_name=symbolic_name("warning"))
         self._stack.add_named(self._error, "error")
         self._stack.set_visible_child_name("loading")
 
@@ -147,7 +149,7 @@ class IntegrationsView(Gtk.Box):
         test.connect("clicked", lambda _b, n=name: self._test(n))
         buttons.append(test)
 
-        remove = Gtk.Button(icon_name="user-trash-symbolic")
+        remove = Gtk.Button(icon_name=symbolic_name("delete"))
         remove.add_css_class("flat")
         remove.set_tooltip_text(f"Remove {name}")
         remove.connect("clicked", lambda _b, n=name: self._confirm_remove(n))

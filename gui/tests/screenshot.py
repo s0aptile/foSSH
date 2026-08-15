@@ -20,7 +20,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, GLib, Graphene, Gtk  # noqa: E402
 
 from fossh_console.agent import Agent, AgentError  # noqa: E402
 from fossh_console.app import ConsoleApplication  # noqa: E402
@@ -30,7 +30,21 @@ OUT_DIR = Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/fossh-console-shots")
 
 
 def capture(window: Gtk.Window, path: Path) -> bool:
-    """Renders the realized window into `path`."""
+    """Renders the realized window into `path`.
+
+    The window background is painted first, deliberately. GTK header
+    bars are transparent and rely on the window's own background
+    showing through; a `WidgetPaintable` snapshot has no window behind
+    it, so those regions come out with alpha 0. Saved straight to PNG
+    they then composite against whatever an image viewer happens to
+    use -- usually white -- and the header appears pale with
+    near-invisible text.
+
+    That is not a cosmetic problem with the file. It made a reviewer
+    report a contrast defect in the header that does not exist in the
+    running application, which is exactly the failure mode a
+    screenshot used as a verification tool must not have.
+    """
     child = window.get_content()
     if child is None:
         return False
@@ -39,8 +53,15 @@ def capture(window: Gtk.Window, path: Path) -> bool:
     if width <= 0 or height <= 0:
         return False
 
-    paintable = Gtk.WidgetPaintable.new(child)
     snapshot = Gtk.Snapshot()
+
+    # The ground the real window paints on, under everything else.
+    from fossh_console.palette import scheme
+    background = Gdk.RGBA()
+    background.parse(scheme(Adw.StyleManager.get_default().get_dark())["brand_bg"])
+    snapshot.append_color(background, Graphene.Rect().init(0, 0, width, height))
+
+    paintable = Gtk.WidgetPaintable.new(child)
     paintable.snapshot(snapshot, width, height)
     node = snapshot.to_node()
     if node is None:
@@ -131,7 +152,7 @@ class Harness(ConsoleApplication):
             return False
 
         # A beat for the page's own crossfade and its agent round trip.
-        GLib.timeout_add(1200, shoot)
+        GLib.timeout_add(900, shoot)
         return False
 
 

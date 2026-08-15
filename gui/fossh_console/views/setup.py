@@ -23,11 +23,13 @@ from __future__ import annotations
 from gi.repository import Adw, Gdk, Gtk
 
 from ..agent import AgentError
+from ..iconography import symbolic_name
 
 
 class SetupView(Gtk.Box):
     def __init__(self, agent, toaster: Adw.ToastOverlay) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self.add_css_class("content-canvas")
         self._agent = agent
         self._toaster = toaster
         self._generated_public_key: str | None = None
@@ -44,7 +46,7 @@ class SetupView(Gtk.Box):
         self._stack.add_named(self._paste_page(), "paste")
         self._stack.add_named(self._generated_page(), "generated")
         self._stack.add_named(self._enrolled_page(), "enrolled")
-        self._problem_page = Adw.StatusPage(icon_name="dialog-warning-symbolic")
+        self._problem_page = Adw.StatusPage(icon_name=symbolic_name("warning"))
         self._stack.add_named(self._problem_page, "problem")
         self._stack.set_visible_child_name("loading")
 
@@ -57,7 +59,7 @@ class SetupView(Gtk.Box):
 
     def _no_token_page(self) -> Gtk.Widget:
         page = Adw.StatusPage(
-            icon_name="security-medium-symbolic",
+            icon_name=symbolic_name("pending"),
             title="No setup token on this install",
             description=(
                 "The watchdog writes a one-time setup token the first time it starts. "
@@ -67,6 +69,10 @@ class SetupView(Gtk.Box):
         )
         again = Gtk.Button(label="Look again")
         again.add_css_class("pill")
+        # A live retry, so it must not read as inert. Without this it
+        # renders as a flat outline that looks disabled -- an
+        # affordance contradicting its own function.
+        again.add_css_class("suggested-action")
         again.set_halign(Gtk.Align.CENTER)
         again.connect("clicked", lambda *_: self.reload())
         page.set_child(again)
@@ -74,7 +80,7 @@ class SetupView(Gtk.Box):
 
     def _choose_page(self) -> Gtk.Widget:
         page = Adw.StatusPage(
-            icon_name="dialog-password-symbolic",
+            icon_name=symbolic_name("key"),
             title="Enroll the operator key",
             description=(
                 "A setup token is waiting. Enroll the OpenPGP key you will use to "
@@ -179,7 +185,7 @@ class SetupView(Gtk.Box):
         actions.set_halign(Gtk.Align.END)
 
         copy = Gtk.Button()
-        copy.set_child(Adw.ButtonContent(icon_name="edit-copy-symbolic", label="Copy"))
+        copy.set_child(Adw.ButtonContent(icon_name=symbolic_name("copy"), label="Copy"))
         copy.connect("clicked", lambda *_: self._copy_private_key())
         actions.append(copy)
 
@@ -193,7 +199,7 @@ class SetupView(Gtk.Box):
 
     def _enrolled_page(self) -> Gtk.Widget:
         self._enrolled_status = Adw.StatusPage(
-            icon_name="security-high-symbolic",
+            icon_name=symbolic_name("verified"),
             title="Operator key enrolled",
             description="Setup is complete. The setup token has been used up and deleted.",
         )

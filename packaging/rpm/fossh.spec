@@ -664,7 +664,12 @@ fi
 
 %files console
 %license LICENSE
+# Read at runtime by the console's Legal page, not merely shipped as
+# documentation: an operator who installed from a software centre has
+# no source tree, and "see tos.md" is not an answer to them.
 %doc RETIREMENT.md
+%doc tos.md
+%doc PRIVACY.md
 %{_bindir}/fossh-console
 %{_mandir}/man1/fossh-console.1*
 %{python3_sitelib}/fossh_console/

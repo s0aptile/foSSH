@@ -16,6 +16,7 @@ from .agent import AgentError
 from .branding import Wordmark
 from .iconography import icon, icon_button, symbolic_name
 from .views.integrations import IntegrationsView
+from .views.legal import LegalView
 from .views.overview import OverviewView
 from .views.setup import SetupView
 from .views.telemetry import TelemetryView
@@ -34,6 +35,7 @@ PAGES = [
     ("telemetry", "Telemetry", "telemetry"),
     ("integrations", "Integrations", "integrations"),
     ("setup", "Setup", "setup"),
+    ("legal", "Legal", "legal"),
 ]
 
 
@@ -51,6 +53,9 @@ class ConsoleWindow(Adw.ApplicationWindow):
             "telemetry": TelemetryView(agent),
             "integrations": IntegrationsView(agent, self._toaster),
             "setup": SetupView(agent, self._toaster),
+            # Takes no agent: it renders files from disk and has
+            # nothing to ask the helper for.
+            "legal": LegalView(),
         }
 
         self._content_stack = Gtk.Stack()
@@ -234,7 +239,7 @@ class ConsoleWindow(Adw.ApplicationWindow):
     def _show_shortcuts(self) -> None:
         lines = [
             ("Ctrl+R  /  F5", "Refresh the current page"),
-            ("Ctrl+1 … Ctrl+4", "Jump to a page"),
+            ("Ctrl+1 … Ctrl+5", "Jump to a page"),
             ("Ctrl+?", "This list"),
             ("Ctrl+W", "Close the window"),
         ]

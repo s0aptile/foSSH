@@ -124,12 +124,28 @@ label {
 }
 
 .wordmark-tagline {
-  font-size: 11px;
+  /* 12px, matching every other small-text token. An 11px step is not
+   * a perceptible distinction from 12px, it is an off-grid value in a
+   * file whose whole premise is that off-grid values are what make an
+   * interface feel subtly wrong. */
+  font-size: 12px;
   letter-spacing: 0.08em;
   color: @brand_muted;
 }
 
 /* --- surfaces ---------------------------------------------------- */
+
+/* The content canvas. Explicitly the window colour, because the card
+ * colour is what libadwaita puts here by default and a card the same
+ * shade as the surface behind it is not a card -- it is a hairline
+ * rectangle. Sampled from a real render to confirm: canvas and card
+ * were both #252528, so every card on the Overview page was
+ * distinguished only by its 1px border. */
+.content-canvas,
+.content-canvas > scrolledwindow,
+.content-canvas viewport {
+  background-color: @brand_bg;
+}
 
 .card-surface,
 .stat-card {
@@ -141,6 +157,16 @@ label {
    * anything beside it and its own text clips at the edge — which is
    * exactly what the Health card did before this moved here. */
   padding: 16px;
+}
+
+/* Applied to the Health card only when a row is genuinely bad -- a
+ * tampered install, a stopped child. Deliberately restrained: a tinted
+ * ground and a coloured edge, not a red card, because this has to read
+ * as "look here" rather than as an error dialog that has lost its
+ * dialog. */
+.card-surface.alarmed {
+  background-color: alpha(@brand_error, 0.10);
+  border-color: @brand_error;
 }
 
 .hairline {

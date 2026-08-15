@@ -143,8 +143,14 @@ mod live {
 
     pub fn query() -> Result<WatchdogStatus, String> {
         Err(
-            "this build of fossh-agent was compiled without watchdog QUIC support (rebuild with \
-             `--features quic`)"
+            // Written for whoever is looking at the console, not for
+            // whoever builds it. A cargo feature flag is a true and
+            // completely useless thing to tell an operator, and it
+            // breaks the plain-language voice every other message in
+            // this product uses.
+            "This build of foSSH cannot talk to the watchdog. That is expected on RHEL, Rocky \
+             and Alma, where the watchdog is not available at all; on Fedora it usually means \
+             the fossh-watchdog package is not installed."
                 .to_string(),
         )
     }

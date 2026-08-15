@@ -41,7 +41,16 @@ from __future__ import annotations
 
 import functools
 
-from gi.repository import Gdk, Gtk, Pango, PangoCairo
+import gi
+
+# Declared before the import: PyGObject warns (and, on a machine with
+# GTK3 also installed, can load the wrong one) when a typelib is
+# imported without a version. `app.py` declares these too, but this
+# module is imported directly by tests that never go through it.
+gi.require_version("Gdk", "4.0")
+gi.require_version("Gtk", "4.0")
+
+from gi.repository import Gdk, Gtk, Pango, PangoCairo  # noqa: E402
 
 #: Preference order. Symbols first: it is the current set, so anyone
 #: who has deliberately installed one has probably installed that one.
@@ -67,6 +76,7 @@ ICONS = {
     "verified": ("verified_user", "verified_user", "security-high-symbolic"),
     "pending": ("hourglass_empty", "hourglass_empty", "security-medium-symbolic"),
     "test": ("bolt", "flash_on", "media-playback-start-symbolic"),
+    "legal": ("gavel", "gavel", "text-x-generic-symbolic"),
 }
 
 LAST_RESORT = "application-x-executable-symbolic"

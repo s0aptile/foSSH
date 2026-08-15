@@ -1,5 +1,89 @@
 # DURUM — status
 
+## 0.2.0 — current
+
+Last updated: 2026-08-15. The chapter below this section describes the
+0.1.x work and is kept as a record; where it and this section disagree,
+this section is right.
+
+### What changed
+
+| Area | State |
+|---|---|
+| `fossh-tui` → `fossh-agent` | Done. Terminal layer deleted; every protocol client kept byte-for-byte. JSON-lines over stdio. 88 tests. ADR-0061. |
+| `fossh-console` (GTK4/libadwaita) | Done. Four views, brand palette carried from `theme.rs`, WCAG 2.2 contrast asserted by test in both schemes. Rendered and inspected, not only compiled. |
+| Integrations (API keys) | Done. Sealed at rest, redacted everywhere, `curl --config -` so the credential never reaches argv or environ. Verified against a live `/proc` inspection. ADR-0062, ADR-0063. |
+| Providers | Done. Six bundled, declarative rather than loadable code. ADR-0066. |
+| Self-healing | Done. Deterministic engine plus a fenced, capability-gated local model. 58 tests. ADR-0065. |
+| RPM packaging | Done. Four packages build clean: `fossh`, `fossh-watchdog`, `fossh-console` (noarch), `fossh-selfheal` (noarch). |
+| 0.1.x retirement | Done. `RETIREMENT.md`, `docs/UPGRADING-0.1-to-0.2.md`, tag `v0.1.3_oa-retired`. |
+
+### Corrections to what this file previously claimed
+
+Three rows of the table below asserted that tests were passing which
+had, on the evidence, never passed. They are recorded here rather than
+edited away, because a status file that quietly fixes its own history
+is worth less than one that shows where it was wrong.
+
+1. **§3.3/§3.9 — "real cross-language interop test against the compiled
+   `fossh-watchdog`".** Both `fossh-agent` (then `fossh-tui`) interop
+   tests were failing. The watchdog dropped privileges unconditionally
+   via `setpriv`, which needs root; run as anyone else every spawn died
+   at exit 127, the storm guard tripped in about a second, and the
+   whole watchdog exited. Both tests sent its stderr to `/dev/null`, so
+   the explanation was discarded. Fixed, and the tests now surface that
+   stderr on failure. ADR-0064.
+
+2. **§2.4 — `bootstrap_interop.rs` "cross-language-verified".** Failing
+   separately, for never setting `LD_LIBRARY_PATH`: the binary died in
+   the dynamic linker before `main` ran. Fixed.
+
+3. **§3.10 — the reproducibility and hygiene claims.** These held, but
+   `dist/` was never cleaned between builds, so a subpackage that
+   changed architecture left its stale predecessor behind for
+   `build-release-zip.sh` to glob. Fixed in the script rather than by
+   remembering to `rm` first.
+
+### Verified for 0.2.0, by running it
+
+- Full Rust workspace: 0 failures.
+- OCaml watchdog suite: clean.
+- `cargo fmt` clean; `cargo clippy` clean across every crate touched
+  (three pre-existing warnings remain in `fossh-core`/`fossh-ingest`,
+  untouched here and out of this pass's scope).
+- `cargo audit`: no advisories. `cargo deny`: advisories, bans,
+  licences and sources all ok.
+- `scripts/check-identity-hygiene.sh`: all checks passed.
+- Ingest-path isolation: `cargo tree -p fossh-cgi`, `-p fossh-fcgi` and
+  `-p fossh-ffi` contain neither `fossh-agent` nor `fossh-selfheal`.
+- Agent protocol against 17 hostile inputs (malformed JSON, wrong
+  types, 200-deep nesting, NUL bytes, path traversal, `file://`, CRLF):
+  no panic, nothing accepted, every reply a single valid frame.
+- Credential containment: with a real request in flight, the key
+  appears in neither `/proc/<curl>/cmdline` nor `/proc/<curl>/environ`,
+  nor stdout, stderr, or the sealed file. No temp files left behind.
+- Four RPMs build and their contents were listed and checked.
+- The console was rendered to PNG on every page and looked at.
+
+### Open, and honest about it
+
+- **The local model has never been run.** Ollama is not packaged for
+  Fedora and is not installed here, so `advisor.rs`'s gating, prompt
+  construction and fence are unit-tested but the end-to-end path —
+  build the derived model, probe, generate, attach — has not executed
+  once. Marked "written, unverified" in the sense this file has always
+  used, and it is the largest unverified surface in 0.2.0.
+- **The Apache configuration has not been loaded by a real httpd.** The
+  `Require expr ... file()` comparison is reasoned about carefully (see
+  ADR-0065 on the two properties that make or break it) but not
+  observed working.
+- No third-party security audit.
+- `%post` group membership (`usermod -a -G apache fossh-svc`) has not
+  been exercised by a real install; it needs root.
+
+---
+
+
 Chapter-tracking file mandated by the "Fedora Native Deployment, Watchdog & Local Admin Hardening" chapter, created before any implementation work in that chapter, per its own instructions. Updated after every sub-chapter's QA gate, not just at the end. This file describes what is actually true right now; if something below turns out to be wrong, fix the code or fix this file, not the reader's expectations.
 
 Last updated: 2026-08-06, later still (final release-artifact rebuild + a genuine CI/tooling closeout pass, see DECISIONS.md's ADR-0060): the RPM/SRPM rebuilt fresh with `wizard.rs`'s rewiring baked in (previous `dist/` build predated it), the public `fossh_github/` zip rebuilt on top of that and re-verified (zero identity-hygiene hits across every shipped binary, RPM/SRPM inside the zip confirmed byte-identical to the freshly built ones — the exact "stale artifact bundled into a 'fixed' zip" bug class ADR-0058 Finding 1 already caught once). §3.7's own "not yet done: wiring a short run into CI" is now done — a `fuzz-smoke` job added to `.github/workflows/ci.yml` running all 5 targets for 15s each on every push/PR. Found and fixed while validating that addition, not by design: `.github/workflows/ci.yml` had a genuine, previously-undetected YAML syntax error (an unquoted `: ` inside a `name:` value, ambiguous with a nested mapping under the YAML spec) that predates this session entirely — confirmed against the last *committed* version of the file, not just the working copy — meaning this repository's CI has likely never once successfully parsed and run, on any push or PR, since it was added. Fixed by quoting the value; the whole file now parses clean. Also closed the identity-hygiene script's own documented structural gap (this file's previous entry, below, noted it only scanned `git ls-files`-tracked files and suggested `git add -A` as a stopgap before each run) — the actual fix applied instead: `check-identity-hygiene.sh` now enumerates `git ls-files --cached --others --exclude-standard` (tracked + untracked-but-not-gitignored), closing the gap at the scan itself rather than requiring a remembered manual staging step before every future run; re-verified both directions (`test-identity-hygiene-gate.sh` still fails its deliberately-bad fixture, and the real check now genuinely covers this session's ~68 untracked files too, not just the previously-scanned tracked ones — clean).

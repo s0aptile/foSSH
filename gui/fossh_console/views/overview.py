@@ -19,6 +19,7 @@ from ..widgets import StatTile, StatusRow, pad, section
 class OverviewView(Gtk.Box):
     def __init__(self, agent) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self.add_css_class("content-canvas")
         self._agent = agent
         self._loaded_once = False
 
@@ -110,6 +111,7 @@ class OverviewView(Gtk.Box):
         self._health_note.set_visible(False)
         card.append(self._health_note)
 
+        self._health_card = card
         health.append(card)
         outer.append(health)
 
@@ -230,12 +232,27 @@ class OverviewView(Gtk.Box):
         else:
             self._tamper_row.set_state("idle", "not checked")
         self._health_note.set_visible(False)
+        # A tampered install and "this build has no watchdog support"
+        # rendered identically before this: same position, same weight,
+        # same card. The layout has to escalate when something is
+        # genuinely wrong, or the one state that matters is the one
+        # nobody notices.
+        self._set_alarmed(tamper == "tampered" or child == "stopped")
+
+    def _set_alarmed(self, alarmed: bool) -> None:
+        if alarmed:
+            self._health_card.add_css_class("alarmed")
+        else:
+            self._health_card.remove_css_class("alarmed")
 
     def _on_watchdog_error(self, error: AgentError) -> None:
         # Not an error state on screen. On EPEL and RHEL the watchdog
         # subpackage does not exist at all, and on a fresh install it
         # simply has not been started yet — both are ordinary, and
         # showing them in red would be false alarm.
+        # Unreachable is a state, not an alarm -- on EPEL there is no
+        # watchdog to reach.
+        self._set_alarmed(False)
         self._watchdog_row.set_state("idle", "unreachable")
         self._tamper_row.set_state("idle", "unavailable")
         self._health_note.set_text(error.message)

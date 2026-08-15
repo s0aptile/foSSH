@@ -37,6 +37,25 @@ import functools
 
 from gi.repository import Gtk, Pango, PangoCairo
 
+#: The wordmark's own face, and only the wordmark's.
+#:
+#: Bitcount Grid Single is a dot-matrix display family (Google Fonts,
+#: OFL-1.1). It suits a logotype for infrastructure software and suits
+#: nothing else in this window — a paragraph of body text set in it
+#: would be unreadable — so it is deliberately kept off `UI_FAMILIES`
+#: and applied to the two runs of the mark and nowhere else.
+#:
+#: Not packaged by Fedora. Absent, the mark falls through to the UI
+#: face and still reads correctly: the construction that carries it is
+#: the weight contrast and the optical size difference between `fo`
+#: and `SSH`, not the face itself. That was the point of building the
+#: mark out of type rather than out of a picture.
+WORDMARK_FAMILIES = [
+    "Bitcount Grid Single",
+    "Bitcount Grid Double",
+    "Bitcount Prop Single",
+]
+
 #: Preference order. The last entry in each list is always something
 #: that exists on any desktop.
 UI_FAMILIES = ["Roboto", "Inter", "Cantarell", "Noto Sans", "Sans"]
@@ -71,6 +90,15 @@ def mono_family() -> str:
     return resolve_family(MONO_FAMILIES)
 
 
+def wordmark_family() -> str | None:
+    """The display face for the mark, or `None` to use the UI face."""
+    installed = _installed_families()
+    for name in WORDMARK_FAMILIES:
+        if name.lower() in installed:
+            return name
+    return None
+
+
 def icon_family() -> str | None:
     installed = _installed_families()
     for name in ICON_FAMILIES:
@@ -95,6 +123,9 @@ def wordmark_markup(size_pt: float, *, accent_hex: str | None = None) -> str:
     CSS-ish string because the two runs need *different* sizes, and
     the ratio between them is the whole point of the mark.
     """
+    face = wordmark_family()
+    family_attr = f' face="{face}"' if face else ""
+
     lower_size = int(size_pt * Pango.SCALE)
     # 0.86: what makes cap height read as level with the lowercase
     # ascender for a humanist sans. Capitals set at the same nominal
@@ -106,8 +137,9 @@ def wordmark_markup(size_pt: float, *, accent_hex: str | None = None) -> str:
 
     colour = f' foreground="{accent_hex}"' if accent_hex else ""
     return (
-        f'<span size="{lower_size}" weight="300">fo</span>'
-        f'<span size="{caps_size}" weight="800" letter_spacing="-512"{colour}>SSH</span>'
+        f'<span{family_attr} size="{lower_size}" weight="300">fo</span>'
+        f'<span{family_attr} size="{caps_size}" weight="800" '
+        f'letter_spacing="-512"{colour}>SSH</span>'
     )
 
 
