@@ -1339,3 +1339,70 @@ doubtful memory is to forget.
 and enum names ("seen 4 times in the last 30 days; an automatic fix
 failed twice"). Facts about the world, never the model's own words.
 That is what keeps the loop open.
+
+---
+
+## ADR-0071 — the watchdog pins 160 bits, not 64
+
+**Status:** accepted, 0.0.2.1. Found by a section review, not by a
+failure.
+
+**The gap.** `Gpg_status.parse` reported the signing key from
+GOODSIG, whose second field is the 64-bit long key id.
+`key_id_matches_fingerprint` then suffix-matched a caller's pinned
+40-hex fingerprint against it. Both the tamper gate
+(`manifest.ml`) and the operator challenge-response (`auth.ml`) used
+that, so both were pinning against **64 bits** while appearing to pin
+against 160.
+
+Sixty-four bits is short enough to manufacture a colliding key against
+— the published "Evil32" work did exactly that for the whole strong
+set of the PGP web of trust.
+
+**The fix.** GnuPG already emits what is needed. `VALIDSIG`'s first
+field is the full 40-hex fingerprint, and DETAILS says it accompanies
+every good signature. `parse` now prefers it, and the existing
+comparison becomes exact by construction: a suffix match between two
+strings of equal length is equality.
+
+**GOODSIG is still required.** A `VALIDSIG` with no `GOODSIG` is not a
+good signature, and is now tested for — otherwise a stray line could
+stand in for verification itself.
+
+**The short path remains as a fallback**, for a gpg that does not emit
+VALIDSIG, and is documented as the weaker path rather than the
+intended one.
+
+**Exploitability was not established** and is not claimed: it would
+additionally require getting a colliding key into the watchdog's own
+keyring, which the enrollment flow may or may not permit. The fix is
+worth making regardless — the cost is one extra parse, and the
+alternative is relying on a precondition nobody has verified.
+
+---
+
+## ADR-0072 — entropy is guarded once, at the source
+
+**Status:** accepted, 0.0.2.1.
+
+**Context.** `Nonce.read_random_bytes` let `Sys_error` and
+`End_of_file` escape uncaught. This codebase's own comments record
+that exact bug class being found and fixed **five separate times**, at
+five separate call sites, by wrapping each caller.
+
+**Decision.** Guard it once, where the exception originates, as
+`Entropy_unavailable`. "Wrap every caller" is not a strategy; with
+seven call sites and a convention that has already failed five times,
+it is a defect that has not happened yet.
+
+**A second defect, not previously noticed.** `close_in` came *after*
+`really_input`, so any failure mid-read skipped it and leaked the file
+descriptor. In a process supervising a service for months, a repeated
+transient failure would exhaust the fd table — and the first symptom
+would be something entirely unrelated failing to open a file.
+`Fun.protect` now closes it on every path, with a regression test that
+performs 200 reads and checks the process's own fd count.
+
+**The wider point.** A convention that requires every future caller to
+remember something is a convention that will be broken. Where the
+guarantee can live in one place, it should.

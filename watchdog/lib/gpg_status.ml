@@ -25,6 +25,36 @@ let has_line_starting_with (lines : string list) (prefix : string) : bool =
       && String.sub l 0 (String.length prefix) = prefix)
     lines
 
+(* VALIDSIG's first field is the signing key's FULL 40-hex fingerprint,
+   which GOODSIG never carries -- GOODSIG reports only the 64-bit long
+   key id. Per GnuPG's own DETAILS, VALIDSIG is emitted for every good
+   signature, so preferring it costs nothing and closes a real gap:
+   a 64-bit key id is short enough that a colliding key can be
+   manufactured (the published "Evil32" work), and pinning against one
+   is pinning against 64 bits rather than 160. *)
+let validsig_fingerprint (lines : string list) : string option =
+  let prefix = "[GNUPG:] VALIDSIG " in
+  List.find_map
+    (fun l ->
+      if
+        String.length l > String.length prefix
+        && String.sub l 0 (String.length prefix) = prefix
+      then
+        let rest =
+          String.sub l (String.length prefix) (String.length l - String.length prefix)
+        in
+        let field = match String.index_opt rest ' ' with
+          | Some i -> String.sub rest 0 i
+          | None -> rest
+        in
+        (* Only a full-length fingerprint is worth preferring; anything
+           else means a gpg that does not emit what DETAILS says, and
+           falling back to GOODSIG is safer than trusting a short
+           value from an unexpected position. *)
+        if String.length field = 40 then Some field else None
+      else None)
+    lines
+
 let goodsig_key_id (lines : string list) : string option =
   let prefix = "[GNUPG:] GOODSIG " in
   List.find_map
@@ -64,16 +94,33 @@ let parse (status_text : string) : verdict =
   if has_line_starting_with lines "[GNUPG:] REVKEYSIG" then Revoked_key
   else if has_line_starting_with lines "[GNUPG:] EXPKEYSIG" then Expired_key
   else
+    (* A good signature must be reported by BOTH lines. GOODSIG says
+       "this verified"; VALIDSIG says which key did it, at full
+       length. Requiring GOODSIG first means a stray VALIDSIG cannot
+       stand in for verification, and preferring VALIDSIG's value
+       means the caller pins 160 bits rather than 64. *)
     match goodsig_key_id lines with
-    | Some key_id -> Good_signature_by key_id
     | None -> No_good_signature
+    | Some key_id -> (
+        match validsig_fingerprint lines with
+        | Some fingerprint -> Good_signature_by fingerprint
+        | None -> Good_signature_by key_id)
 
-(* A v4 OpenPGP long key ID is the low-order 64 bits (16 hex chars) of
-   the full 40-hex-char fingerprint — checking suffix match lets
-   callers pin a full fingerprint (what they actually store/compare
-   for "the enrolled key") against what GOODSIG reports (always the
-   shorter form), without this module needing to know or care which
-   length the caller happened to keep on hand. *)
+(* Compares what [parse] reported against the fingerprint a caller has
+   pinned.
+
+   When [parse] found a VALIDSIG line -- which it does for every good
+   signature from any gpg that follows its own DETAILS -- the reported
+   value is the full 40-hex fingerprint and this is an exact,
+   full-length comparison: the suffix rule below degenerates to
+   equality when both strings are the same length.
+
+   The suffix rule remains only for the degraded case where VALIDSIG
+   was absent and all that is available is GOODSIG's 64-bit long key
+   id. That comparison is weaker than it looks -- 64 bits is short
+   enough to manufacture a collision against -- so it is a fallback,
+   not the intended path, and [parse] takes the strong one whenever
+   gpg gives it the chance. *)
 let key_id_matches_fingerprint ~(key_id : string) ~(fingerprint : string) :
     bool =
   let key_id = String.uppercase_ascii key_id in

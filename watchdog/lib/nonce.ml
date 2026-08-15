@@ -7,12 +7,39 @@
    [/dev/random], is deliberate: on any Linux kernel this project
    targets, it is backed by the same CSPRNG and never blocks. *)
 
+(* Raised instead of letting [Sys_error] or [End_of_file] escape.
+
+   Two things were wrong with the previous version, and the second was
+   invisible. First, an exception from [open_in_bin] or [really_input]
+   escaped uncaught -- the exact bug class this codebase's own comments
+   record having found and fixed five separate times at five separate
+   CALL SITES, by wrapping each one. Guarding every caller by hand
+   forever is not a strategy; it is a defect that has not happened yet.
+   So it is guarded here, once, at the source.
+
+   Second, and not previously noticed: [close_in] came AFTER
+   [really_input], so any failure mid-read skipped it and leaked the
+   file descriptor. In a process supervising a service for months, a
+   repeated transient read failure would exhaust the fd table -- and
+   the first symptom would be something else entirely failing to open
+   a file. [Fun.protect] closes it on every path. *)
+exception Entropy_unavailable of string
+
 let read_random_bytes (n : int) : string =
-  let ic = open_in_bin "/dev/urandom" in
-  let buf = Bytes.create n in
-  really_input ic buf 0 n;
-  close_in ic;
-  Bytes.unsafe_to_string buf
+  match open_in_bin "/dev/urandom" with
+  | exception Sys_error msg ->
+      raise (Entropy_unavailable ("opening /dev/urandom: " ^ msg))
+  | ic ->
+      Fun.protect
+        ~finally:(fun () -> try close_in ic with Sys_error _ -> ())
+        (fun () ->
+          let buf = Bytes.create n in
+          (try really_input ic buf 0 n with
+          | End_of_file ->
+              raise (Entropy_unavailable "/dev/urandom returned short read")
+          | Sys_error msg ->
+              raise (Entropy_unavailable ("reading /dev/urandom: " ^ msg)));
+          Bytes.unsafe_to_string buf)
 
 let hex_of_bytes (s : string) : string =
   let hex_digit c =
