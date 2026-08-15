@@ -6,7 +6,13 @@ Comment=Administer a foSSH install: sites, telemetry, integrations and setup
 Exec=fossh-console
 Icon=org.fossh.Console
 Terminal=false
-Categories=System;Monitor;Network;
+# One main category, one additional. "System" is the main one;
+# "Monitor" is an additional category that refines it. Adding
+# "Network" as well would be a SECOND main category, and the
+# freedesktop menu spec's answer to that is to list the application
+# under both -- so it appears twice in the menu, which reads as a
+# packaging bug to everyone who sees it.
+Categories=System;Monitor;
 # Not a document handler and not a URL handler: this application opens
 # nothing it was not started with, so offering it as one would put it
 # in "Open With" menus where it can do nothing useful.

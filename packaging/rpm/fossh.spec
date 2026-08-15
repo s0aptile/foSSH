@@ -260,6 +260,7 @@ Recommends:     material-icons-fonts
 BuildRequires:  python3-devel
 BuildRequires:  desktop-file-utils
 BuildRequires:  libappstream-glib
+BuildRequires:  appstream
 
 %description console
 foSSH Console is the local administration interface for a foSSH
@@ -505,6 +506,12 @@ desktop-file-validate %{buildroot}%dir %{_datadir}/%{name}
 %dir %{_sysconfdir}/%{name}/providers.d
 %{_datadir}/applications/org.fossh.Console.desktop
 appstream-util validate-relax --nonet \
+    %{buildroot}%{_metainfodir}/org.fossh.Console.metainfo.xml
+# appstreamcli is the stricter of the two and the one whose rules the
+# software centres themselves follow. Both are run because they
+# disagree about what matters: appstream-util caught nothing here that
+# appstreamcli did not, but the reverse has not been true historically.
+appstreamcli validate --no-net \
     %{buildroot}%{_metainfodir}/org.fossh.Console.metainfo.xml
 
 # --- fossh-selfheal (optional local-model advisory layer) ---

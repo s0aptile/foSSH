@@ -102,7 +102,7 @@ Same as the Fedora-native path documented elsewhere in this project
 `fossh-fcgiwrap.socket` and `fossh-watchdog.service` are enabled but
 not started by the package install (`%post`'s `%systemd_post`, deferred
 start by design — see `fossh.spec`'s own comment on why nothing
-auto-starts until the setup wizard runs). Run `fossh-tui` to walk
+auto-starts until the setup wizard runs). Run `fossh-console` to walk
 through first-run setup and enroll an operator key, or start the
 relevant unit(s) manually per your deployment shape.
 

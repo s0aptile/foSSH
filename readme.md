@@ -55,7 +55,7 @@ Measured against this release's own build, glibc `x86_64-unknown-linux-gnu` (the
 
 - `fossh-cgi` (stripped release binary): 539 KB
 - `fossh` (CLI, stripped release binary): 1.8 MB
-- `fossh-tui` (stripped release binary): 3.0 MB — larger than earlier releases now that it links the §3.4 QUIC/mTLS client for live watchdog status (`fossh-fcgi`'s own binary carries the same cost for the same reason)
+- `fossh-agent` (stripped release binary): 3.0 MB — larger than earlier releases now that it links the §3.4 QUIC/mTLS client for live watchdog status (`fossh-fcgi`'s own binary carries the same cost for the same reason)
 - `libfossh.so` (stripped release cdylib): 1.8 MB
 - `fossh-cgi`'s direct third-party dependencies: 2 (`blake3`, `nix`) — plus this project's own internal crates, which aren't external surface
 - `GET /healthz` round trip, cold: ~1 ms

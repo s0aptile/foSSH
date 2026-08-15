@@ -861,3 +861,290 @@ Not treated as a new attack surface worth designing around: reaching gpg-agent's
 **Finding 3 (real structural gap, closed properly rather than worked around) — `scripts/check-identity-hygiene.sh` only ever scanned `git ls-files`-tracked files, silently blind to any untracked file until it was staged.** This file's own previous entry (same chapter, a day earlier) had already caught and documented this — this session's own ~68 untracked files were a real, live instance of exactly the blind spot, verified clean only by a manual hand-check at the time, not by the automated gate. The previous entry's own suggested next step ("`git add -A` before the next real hygiene run") would have worked but only as a remembered manual ritual before every future run, not a fix at the tool itself. Applied the more durable fix instead: a new `fossh_ls_files()` helper using `git ls-files -z --cached --others --exclude-standard` (tracked files plus untracked-but-not-gitignored ones, so real build output/`target`/`dist` stay excluded exactly as before, with nothing needing to be staged first), threaded through all four of the script's existing scan sites, including the `$0aptile`-quoting sweep's differently-shaped `git ls-files 'pattern'...` invocation (rewritten to filter the same null-delimited list by extension/basename instead, so it gets the same tracked+untracked coverage as the other three checks rather than being quietly left on the old narrower one). Re-verified both directions after the change: `scripts/test-identity-hygiene-gate.sh` still correctly fails its deliberately-bad fixture and passes once cleaned (both real regression coverage, not just "the script still runs"), and a real run of `check-identity-hygiene.sh` against this actual working tree — now genuinely covering the untracked files it was blind to before — came back clean.
 
 **Scope note:** no code behavior changed in this pass — RPM/zip rebuild, a CI-workflow-only YAML fix and one new CI job, and one release-tooling shell script. No new adversarial-review subagent was dispatched for this pass; the changes are build/CI/tooling plumbing, not new application logic, and each fix was verified directly (YAML re-parse, gate self-test round-trip, byte-identical artifact diff) rather than by review.
+
+---
+
+## ADR-0061 — the TUI becomes a headless bridge, and the console becomes a desktop application
+
+**Status:** accepted, 0.2.0.
+
+**Context.** `fossh-tui` held two very different things in one binary:
+a ratatui presentation layer, and roughly 2,500 lines of hardened
+protocol clients — `operator_auth_client.rs`'s challenge-response and
+SETUP flows, `watchdog_status.rs`'s QUIC/mTLS status query, the
+k-anonymised store reads. The decision to build a proper GUI put the
+presentation layer up for replacement. It did not put the protocol
+clients up for replacement, and conflating the two would have been the
+expensive mistake available here.
+
+**Decision.** Split them. `fossh-tui` becomes `fossh-agent`: the same
+protocol clients, byte-for-byte, with the terminal layer deleted and a
+JSON-lines-over-stdio protocol added. `fossh-console` (GTK4/libadwaita,
+Python) is pure presentation and spawns the agent as a child process
+over a pipe.
+
+**Why not reimplement the protocols in Python.** This project has
+already paid twice for a second implementation of a working wire
+format, both times in ADR-0050: the session hello sent on QUIC stream 0
+(a stream-ID rule enforced by quiche itself, not by convention), and a
+`str::trim()`-versus-`String.trim` divergence between two "identical"
+parsers. Both were interop-only bugs that neither side's own
+same-language test suite could have caught. A third implementation, in
+a third language, with no cross-language test to catch the drift, would
+have been strictly worse than the two that already cost real debugging
+time.
+
+**Why a pipe and not a socket.** The console spawns the agent and owns
+both of its pipes for its lifetime. That is the entire access-control
+story — there is nothing to authenticate to, because there is no way
+for a second process to reach it. A socket would have needed an
+authentication scheme that exists only because the socket exists.
+
+**The setup token never crosses to Python.** `setup.state` reports
+whether a usable token exists, never its value. The plaintext stays in
+the agent in a `Zeroizing<String>`. Handing it to an interpreter that
+cannot zeroize a `str`, may copy it during garbage collection, and can
+serialise it into a traceback would have bought nothing — the console
+has no use for the value but to hand it straight back.
+
+**Found while doing this**, and not by design: three cross-language
+interop tests had been failing while `dev/DURUM.md` recorded them as
+passing. See ADR-0064.
+
+---
+
+## ADR-0062 — integrations: storage in `fossh-admin`, the network in `fossh-agent`
+
+**Status:** accepted, 0.2.0.
+
+**Context.** Operators need to send things to external services they
+control, authenticated with an API key. foSSH's most load-bearing claim
+is that the ingest path makes no outbound network connections, and
+`fossh-cgi`/`fossh-fcgi` both depend on `fossh-admin` for `data_key` —
+so anything added to `fossh-admin` is, by construction, in the ingest
+path's dependency tree.
+
+**Decision.** Split by what each half needs. `fossh-admin::integrations`
+holds storage, validation and redaction, and contains no network code
+whatsoever. `fossh-agent::integrations_net` makes the actual request
+and is not reachable from any ingest binary.
+
+The property is therefore structural rather than a promise, and
+checkable in one command:
+
+```
+cargo tree -p fossh-cgi | grep fossh-agent    # nothing
+cargo tree -p fossh-fcgi | grep fossh-selfheal # nothing
+```
+
+**On the privacy claim.** The README said "no third-party egress". That
+was true of the whole product and is now true of the ingest path
+specifically. The honest amendment, made in the documentation rather
+than quietly left: an operator-configured integration is
+operator-initiated, never on the ingest path, and carries no visitor
+data. The guarantee that mattered is unchanged; the sentence describing
+it was too broad to keep as written.
+
+---
+
+## ADR-0063 — the one outbound request shells out to `curl`
+
+**Status:** accepted, 0.2.0.
+
+**Decision.** `integrations_net` invokes the system `curl` rather than
+linking an HTTP client.
+
+**Why.** `ureq` with `rustls` would add roughly eighty crates to the
+§3.10 supply-chain gate — `cargo audit`, `cargo deny`, a licence
+review, and a dependency graph to re-examine on every update — to make
+one operator-triggered request. This codebase already shells out to
+`gpg`, `openssl` and `sha256sum` for the same reasoning, and `curl` is
+present on every RHEL-family system by default.
+
+**The part that is load-bearing.** On Linux `/proc/<pid>/cmdline` is
+world-readable, so a credential passed as an argument is readable by
+every local user for the process's lifetime. `/proc/<pid>/environ` is
+owner-only but still visible to anything running as the same user and
+inherited by every child. Neither is used: the key reaches `curl` only
+through a configuration file fed on **stdin** (`--config -`), which
+lives in a pipe and is never named in the filesystem.
+
+Three flags are security decisions rather than tuning. `-q` must be
+first, and is what stops `curl` reading `~/.curlrc` where a forgotten
+`--location` or `--proxy` would silently redirect the credential.
+Redirects are never followed — a `302` to an attacker's host is the
+standard way to turn a webhook into a credential-exfiltration
+primitive, and `curl` re-sends the `Authorization` header across one.
+`--proto`/`--proto-redir` pin the accepted schemes so nothing
+downstream can turn the request into a `file://` read.
+
+**Verified empirically, not argued:** with a real request in flight
+against a stalling loopback listener, the credential appears in neither
+`/proc/<curl-pid>/cmdline` nor `/proc/<curl-pid>/environ`, nor in the
+agent's stdout or stderr, nor in the file on disk.
+
+**A parser differential was specifically tested for.** `validate_endpoint`
+hand-parses the URL to decide whether `http://` is allowed, and a
+disagreement with `curl`'s real parser is how a key ends up in
+cleartext on someone else's server. Every alternate loopback spelling
+`curl` accepts — `0177.0.0.1`, `2130706433`, `127.1`,
+`[::ffff:127.0.0.1]` — is **rejected** here. Stricter is the safe
+direction of that disagreement; the dangerous direction was looked for
+and not found, and the cases are now regression tests.
+
+---
+
+## ADR-0064 — three interop tests that had never passed, and a watchdog that could not start
+
+**Status:** accepted, 0.2.0. Recorded as a defect log, not a design.
+
+**What was wrong.** `watchdog/bin/main.ml` handed the supervised child
+off to the `fossh-svc` account unconditionally, via `setpriv`.
+`setresuid(2)` requires `CAP_SETUID`, so run as anything but root every
+spawn died instantly with exit 127. The supervisor treated each death
+as a crash, restarted, tripped the 5-restarts-in-60s storm guard after
+about a second, and exited the **whole watchdog process** — taking the
+operator-auth server and the QUIC command server with it. Every client
+mid-handshake saw `Broken pipe`.
+
+That is four layers between the symptom and the cause, and it had
+consumed both of `fossh-tui`'s cross-language interop tests for the
+entire 0.1.x line. Both sent the watchdog's stderr to `/dev/null`, so
+the message that would have explained it (`setpriv: setresuid failed`)
+was discarded. A third test, `fossh-admin`'s `bootstrap_interop`, was
+failing separately for never setting `LD_LIBRARY_PATH`, so the binary
+died in the dynamic linker before `main` ran.
+
+`dev/DURUM.md` recorded all three as passing.
+
+**Decision.** Gate the privilege drop on the effective uid. If not
+root, refuse to start with an explicit message and a new exit code 9,
+unless `FOSSH_WATCHDOG_ALLOW_NO_PRIVDROP=1` is set — a development
+mode that logs a warning every time it is used.
+
+**Why refuse rather than skip the drop.** A watchdog that appears to
+work while running core with the invoking user's full privileges is a
+§2.3 violation, and a quiet one. Failing loudly at startup costs a
+developer one environment variable; failing silently costs an operator
+their privilege separation without telling them.
+
+**The wider lesson, recorded because it recurs.** Two of these tests
+discarded the child's stderr. A test that spawns a process and asserts
+on a socket appearing must capture and surface that process's own
+diagnostics on failure, or every startup failure it ever sees will
+present as whatever the client happens to hit next.
+
+---
+
+## ADR-0065 — self-healing: deterministic rules, with a fenced local model
+
+**Status:** accepted, 0.2.0.
+
+**Decision.** Two layers. `engine.rs` holds deterministic rules that
+produce every finding and every remedy, always runs, and is the entire
+feature. `advisor.rs` is an optional local model
+(`fossh-advisor:0.2.0`, derived from `lfm2.5-thinking:1.2b`) whose only
+permitted effect is writing one `advice` string onto a finding the
+engine already produced.
+
+**Why the fence is this tight.** An operator installs foSSH for a set
+of privacy invariants. A component able to author remedies could argue
+them out of one, and "your k-anonymity threshold looks high, try
+lowering it" is a fluent, confident, completely wrong sentence that a
+1.2B model produces readily. Keeping the model on the explaining side
+of that line bounds its worst failure at unhelpful prose.
+
+Enforced by construction rather than by prompting: `attach_advice`
+matches replies to findings by an id that must already exist and copies
+exactly one string. Tests assert that a reply naming an invented
+finding is dropped, and that severity and remedy are unchanged by any
+advice at all.
+
+**Automatic remedies are narrow deliberately** — permission tightening
+only. Anything that deletes, rewrites or relaxes a setting is printed
+for the operator with the exact command, even where running it would
+have been trivial. `apply_automatic` has a test asserting it cannot be
+talked into running an operator remedy.
+
+**The capability gate.** AVX2 required, AVX-512 preferred, Vulkan as a
+*fail-switch* for machines without AVX2 and never an upgrade over it —
+taking a GPU away from a server doing real work is a larger imposition
+than this feature is worth. Floor of six physical cores and 8 GiB;
+AMD Ryzen 5 2600 (Zen+, 2018) and Intel Core i5-8400 (Coffee Lake,
+2017) as the named exemplars. Cores are counted physically, not
+logically: hyperthreads share the vector units this workload is bound
+by. Two cores are always reserved, threads capped at four.
+
+Intel's AVX-512 support is not monotonic with age — Alder Lake and
+later ship it fused off — so a newer Intel part can legitimately land a
+tier below an older one. The tier therefore comes from probing
+features, never from a model name.
+
+**Static capability is not sufficient**, which is why passing it only
+earns the right to be timed. A hypervisor can advertise AVX-512 via
+CPUID and emulate it slowly, and no static detection sees that. A real
+generation is run and held to a tokens-per-second floor.
+
+**The model is derived, not used as-is.** `packaging/model/Modelfile`
+bakes the prohibition into a `SYSTEM` message, because a rule that is a
+security property must survive a caller that forgets to send it. It
+also carries an explicit ban on ever recommending that `k_anonymity` or
+any other privacy setting be lowered, a worked example of the answer
+shape, sampling tuned for restating a known fact, a thread count
+matching the reservation above, and a `</think>` stop sequence so the
+model's reasoning trace never reaches an operator's screen. A test
+reads the shipped Modelfile and asserts it builds the tag the code
+invokes — the two live in different files and would otherwise drift
+apart silently.
+
+**Endpoint access.** Ollama binds loopback, which keeps the network out
+but not other local accounts, so Apache fronts it with a per-install
+256-bit secret. Two properties of that file are load-bearing and were
+both got wrong first: it must be readable by **two** accounts (Apache
+runs as `apache`, the agent as `fossh-svc`, and a file readable by one
+leaves the endpoint either unreachable or unguarded), and it must have
+**no trailing newline**, because Apache's `file()` returns bytes
+verbatim and a secret written by `echo` would compare as `"abc\n"`
+against a header of `"abc"` and deny every request forever while the
+configuration read as correct.
+
+---
+
+## ADR-0066 — developer extensibility as declarative providers, not a plugin API
+
+**Status:** accepted, 0.2.0.
+
+**Context.** Making it easy to reach common services (Datadog, AWS,
+Honeycomb) without every operator looking up a URL and a header name.
+
+**Decision.** A provider is a TOML file describing an endpoint
+template, a method, where the credential goes, and the fields the
+operator must supply. Six ship with the package; more can be dropped
+into `/etc/fossh/providers.d` or `~/.config/fossh/providers.d`.
+
+**Why not loadable code.** The obvious design is a plugin API. This
+process holds every API key on the install, the setup token, and a
+private key at the moment it is generated — code loaded into it gets
+all of that. A plugin ecosystem is also a supply chain: one popular
+provider plugin with one bad release is a credential-exfiltration
+incident across every install that had it, and foSSH has no mechanism
+for revoking one.
+
+A declarative provider cannot read a credential, execute anything, or
+reach the network. The worst a malicious one can do is name an endpoint
+pointing at its author's server — which an operator typing that URL by
+hand could already do, is visible in the console before anything is
+sent, and is refused unless it is HTTPS.
+
+**Templates are validated after substitution, never before.** A field
+value carrying `/`, `?`, `#`, `@`, `:` or a backslash would otherwise
+change which host the finished URL addresses — the same trap
+`host_of` exists for, one layer up. Those characters are refused rather
+than escaped: escaping would silently produce a URL the operator did
+not mean.
+
+**AWS is included only in the shape that is honest.** API Gateway's
+static `x-api-key` header fits this model exactly. AWS service APIs
+proper sign every request with SigV4 and cannot be reached this way at
+all, and the provider says so rather than shipping something that looks
+right and fails on first use.

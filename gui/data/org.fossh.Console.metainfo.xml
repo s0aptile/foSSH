@@ -1,39 +1,104 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  What a software centre shows.
+
+  This file is the app's shop window: COSMIC Store, GNOME Software and
+  KDE Discover all render it, and for most people it is the first and
+  possibly only thing they read about foSSH. Every element below earns
+  its place accordingly.
+
+  Two that are easy to leave out and shouldn't be:
+
+  * <branding> — modern software centres tint the app's page with
+    these. Without them the page is rendered in a colour guessed from
+    the icon, which for a mostly-graphite icon comes out muddy. With
+    them it is foSSH's own amber against its own graphite, matching
+    the application the person is about to install.
+  * <screenshots> — an app page with no screenshot reads as
+    abandoned regardless of what the text says. These are real renders
+    of the real application, not mockups.
+
+  Screenshot URLs are remote by AppStream's design, and resolve once
+  this repository is public. The files themselves are committed at
+  gui/data/screenshots/ so the URL and the artifact cannot drift.
+-->
 <component type="desktop-application">
   <id>org.fossh.Console</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
 
   <name>foSSH Console</name>
-  <summary>Administer a self-hosted, privacy-preserving analytics install</summary>
+  <summary>Run website analytics that cannot identify your visitors</summary>
+
+  <branding>
+    <!-- theme.rs AMBER, the accent this application actually draws in. -->
+    <color type="primary" scheme_preference="light">#E0AF68</color>
+    <!-- theme.rs GRAPHITE, its window background. -->
+    <color type="primary" scheme_preference="dark">#1C1C1E</color>
+  </branding>
 
   <description>
+    <!--
+      The first paragraph is what appears in list and search results,
+      often truncated. It has to say what this is and why it is
+      different in one breath, without a subordinate clause.
+    -->
     <p>
-      foSSH Console is the local administration interface for a foSSH install.
-      It shows what your sites recorded today, runs real queries against the
-      rollup store, manages external services you have added, and drives
-      first-run operator enrollment.
+      foSSH Console administers a foSSH install: self-hosted website
+      analytics that records what pages were visited without recording
+      who visited them. Your data stays on your own server, and there
+      is no company in the middle — including this project's author.
     </p>
     <p>
-      foSSH itself is self-hosted site analytics that does not trade your
-      visitors' privacy for your dashboard. There is no cross-site identity,
-      no cookies, no device fingerprinting, no raw IP addresses at rest, and
-      no third-party egress from the ingest path. Reported groups are
-      k-anonymised before they reach any read path, so a breakdown cannot
-      single out an individual visitor.
+      Most analytics ask you to trade your visitors' privacy for your
+      dashboard. foSSH does not make that trade, and it is not a
+      setting you have to find:
+    </p>
+    <ul>
+      <li>No cross-site identity, no cookies, and no device fingerprinting.</li>
+      <li>No raw IP addresses or user-agent strings kept at rest — ever, not even briefly.</li>
+      <li>Reported groups are k-anonymised before any part of the program can read them, so a breakdown cannot single out one person.</li>
+      <li>The component that receives events cannot make an outbound network connection at all. That is enforced by how the software is built, not by a checkbox.</li>
+    </ul>
+    <p>
+      From this window you can see what each of your sites recorded
+      today, run real queries against the stored aggregates, add
+      external services with an API key, and complete first-run
+      operator setup. It talks to a local helper process over a pipe
+      and never listens on a network socket of its own.
     </p>
     <p>
-      The console talks to a local helper process over a pipe. It never
-      listens on a socket, and it holds no credential longer than the call
-      that carries it.
+      Installing this gives you the administration interface. The
+      analytics server itself is the fossh package, which this depends
+      on.
     </p>
   </description>
 
   <launchable type="desktop-id">org.fossh.Console.desktop</launchable>
 
-  <url type="homepage">https://github.com/s0aptile/foSSH</url>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/s0aptile/foSSH/main/gui/data/screenshots/overview.png</image>
+      <caption>Today's figures and the health of the install at a glance</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/s0aptile/foSSH/main/gui/data/screenshots/telemetry.png</image>
+      <caption>Queries against the stored aggregates, k-anonymised before they are read</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/s0aptile/foSSH/main/gui/data/screenshots/integrations.png</image>
+      <caption>External services you add, with their keys sealed on disk and never shown again</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/s0aptile/foSSH/main/gui/data/screenshots/setup.png</image>
+      <caption>First-run operator enrollment</caption>
+    </screenshot>
+  </screenshots>
+
+  <url type="homepage">https://fossh.org</url>
   <url type="bugtracker">https://github.com/s0aptile/foSSH/issues</url>
   <url type="vcs-browser">https://github.com/s0aptile/foSSH</url>
+  <url type="help">https://github.com/s0aptile/foSSH/blob/main/README.md</url>
 
   <developer id="org.fossh">
     <name>$0aptile</name>
@@ -50,6 +115,10 @@
     <keyword>analytics</keyword>
     <keyword>telemetry</keyword>
     <keyword>privacy</keyword>
+    <keyword>statistics</keyword>
+    <keyword>self-hosted</keyword>
+    <keyword>GDPR</keyword>
+    <keyword>web</keyword>
   </keywords>
 
   <supports>
@@ -59,9 +128,10 @@
   </supports>
 
   <requires>
-    <!-- The sidebar collapses below this; the window is usable at
-         phone width, so this is the honest floor rather than a
-         desktop-only claim. -->
+    <!-- The sidebar collapses below this, so the window is genuinely
+         usable at phone width. Stated as the honest floor rather than
+         a desktop-only claim that would hide it from mobile listings
+         it actually works on. -->
     <display_length compare="ge">360</display_length>
   </requires>
 
@@ -69,9 +139,11 @@
     <release version="0.2.0~alpha.1" date="2026-08-15">
       <description>
         <p>
-          First release of the console. Replaces the terminal interface
-          shipped through 0.1.3, which is retired along with the rest of
-          that line.
+          The first release of the console, replacing the terminal
+          interface shipped up to 0.1.3. Adds external services
+          authenticated with an API key, and self-healing checks that
+          report problems with the install alongside how to fix each
+          one.
         </p>
       </description>
     </release>

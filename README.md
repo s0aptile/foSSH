@@ -2,7 +2,9 @@
 
 Privacy-preserving, embeddable telemetry. Self-hosted site analytics without sending your visitors' data to a third party.
 
-**Status: open alpha (`0.1.3_oa`).** Working, tested, not yet exhaustively hardened everywhere — see `dev/DURUM.md` for exactly what's done versus in progress in the current development chapter, and `DECISIONS.md` for the reasoning behind every non-obvious choice made along the way.
+**Status: open alpha (`0.2.0_oa`).** Every release before this one is retired — see `RETIREMENT.md` for what was actually wrong with the 0.1.x line, and `docs/UPGRADING-0.1-to-0.2.md` if you are running one.
+
+**Previously:** Working, tested, not yet exhaustively hardened everywhere — see `dev/DURUM.md` for exactly what's done versus in progress in the current development chapter, and `DECISIONS.md` for the reasoning behind every non-obvious choice made along the way.
 
 ## Why this exists
 
@@ -17,9 +19,10 @@ The usual way to get basic site analytics is a hosted service that sees every vi
 - No user-agent strings at rest (parsed to coarse buckets, then discarded).
 - No free-text fields from end users. Event names are allowlisted by the embedder.
 - No session recording, no heatmaps, no keystrokes, no mouse paths.
-- No third-party egress. foSSH never phones home to anyone, including its own authors.
+- foSSH never phones home to anyone, including its own authors. There is no telemetry about your telemetry.
 - No JavaScript SDK in v1. The pixel/beacon endpoint exists, but the primary integration is server-side.
-- No dashboard in v1. A read API and a `fossh query` CLI ship; UI is a separate project.
+- No hosted dashboard, and no web dashboard at all. Administration is `fossh-console`, a desktop application that runs on your own machine and talks to a local helper over a pipe — see "Administration" below. A read API and a `fossh query` CLI ship alongside it.
+- No third-party egress **from the ingest path**. This is now stated precisely rather than broadly: `fossh-cgi`, `fossh-fcgi` and `libfossh` cannot make an outbound connection, enforced by which crates are in their dependency tree rather than by configuration (`cargo tree -p fossh-cgi | grep fossh-agent` finds nothing). An integration you configure yourself is operator-initiated, never on the ingest path, and carries no visitor data.
 
 `THREAT_MODEL.md` covers the full reasoning behind each of these, including what's explicitly *not* defended against.
 
@@ -29,8 +32,8 @@ The usual way to get basic site analytics is a hosted service that sees every vi
 - **FastCGI** — `fossh-fcgi`, a persistent process speaking FastCGI directly over a Unix socket, for higher-throughput deployments than a fresh process per request. Writes straight to SQLite in batches instead of spooling, and runs its own retention/vacuum maintenance instead of relying on cron. See `packaging/systemd/fossh-fcgi.service`.
 - **Embedded (FFI)** — `libfossh`, a C ABI (`cdylib`/`staticlib`) linked directly into Go, PHP, Ruby, or anything else that can call a C function. No process, no socket, no open port. See `bindings/`.
 - **Shared hosting** — no shell, no compiled extensions available? The PHP binding's HTTP-remote transport talks to a foSSH instance running elsewhere over plain HTTPS. See `docs/INTEGRATION-php.md`.
-- **Fedora-native** — `sudo dnf install fossh` (in progress — see `dev/DURUM.md`'s current chapter): the portable core (`fossh-cgi`/`fossh-fcgi`/`fossh` CLI/`fossh-tui`), hardened systemd units, and an SELinux policy module confining `fossh-cgi`/`fossh-fcgi`, plus an optional `fossh-watchdog` subpackage — the OCaml watchdog, tamper detection, and the operator-auth enrollment gate `fossh-tui`'s setup wizard drives.
-- **RHEL family (RHEL, Rocky, Alma) via EPEL** — as of `packaging/rpm/fossh.spec`'s subpackage split, the same portable core (`fossh-cgi`/`fossh-fcgi`/`fossh` CLI/`fossh-tui`/SELinux module) is a *separate*, everywhere-buildable package from `fossh-watchdog` — `dnf copr enable s0aptile/fossh epel-9-x86_64` (or `epel-10-x86_64`) once a build actually succeeds there. No `fossh-watchdog` on EPEL/RHEL, ever, as things stand: it needs `ocaml-ctypes-devel`, not packaged for EPEL. That means no supervised restart-on-crash, no tamper detection, and no operator-auth gate — `fossh-fcgi` runs as a plain, unsupervised systemd service, and `fossh-tui`'s Dashboard/Wizard/OperatorAuth screens report an honest "watchdog unreachable" rather than doing anything (its Telemetry screen, reading straight from the SQLite store, is unaffected). Not yet installable at all, on *any* chroot including Fedora's own: two separate, newly-discovered build regressions (unrelated to the EPEL split itself) currently block every chroot — see `docs/PACKAGING-copr.md`'s "EPEL/RHEL-family build status" for exactly what's confirmed fixed, what's still blocking, and why.
+- **Fedora-native** — `sudo dnf install fossh` (in progress — see `dev/DURUM.md`'s current chapter): the portable core (`fossh-cgi`/`fossh-fcgi`/`fossh` CLI/`fossh-agent`), hardened systemd units, and an SELinux policy module confining `fossh-cgi`/`fossh-fcgi`, plus an optional `fossh-watchdog` subpackage — the OCaml watchdog, tamper detection, and the operator-auth enrollment gate the console's setup flow drives.
+- **RHEL family (RHEL, Rocky, Alma) via EPEL** — as of `packaging/rpm/fossh.spec`'s subpackage split, the same portable core (`fossh-cgi`/`fossh-fcgi`/`fossh` CLI/`fossh-agent`/SELinux module) is a *separate*, everywhere-buildable package from `fossh-watchdog` — `dnf copr enable s0aptile/fossh epel-9-x86_64` (or `epel-10-x86_64`) once a build actually succeeds there. No `fossh-watchdog` on EPEL/RHEL, ever, as things stand: it needs `ocaml-ctypes-devel`, not packaged for EPEL. That means no supervised restart-on-crash, no tamper detection, and no operator-auth gate — `fossh-fcgi` runs as a plain, unsupervised systemd service, and the console's Overview and Setup pages report an honest "watchdog unreachable" rather than doing anything (its Telemetry page, reading straight from the SQLite store, is unaffected). Not yet installable at all, on *any* chroot including Fedora's own: two separate, newly-discovered build regressions (unrelated to the EPEL split itself) currently block every chroot — see `docs/PACKAGING-copr.md`'s "EPEL/RHEL-family build status" for exactly what's confirmed fixed, what's still blocking, and why.
 - **Fedora Atomic (Silverblue, Kinoite, CoreOS)** — `rpm-ostree install fossh` plus a reboot, once the Copr repo is added the ostree-appropriate way. See `docs/DEPLOY-atomic.md`.
 
 ## Quick start — pick your path
@@ -46,6 +49,58 @@ cargo build --release --workspace
 ```
 
 `--dir` is required here unless you're running as root: the default (`/var/lib/fossh`) is a system path a normal user can't write to, and `site create` afterward picks up `./data` automatically from the `./fossh.toml` that `init` just wrote. That last command prints a write key once — it's the credential every binding/transport uses to authenticate, including any shared-hosting sites (above) that point at this install as their endpoint. Reachable from the public internet with zero inbound ports opened (Cloudflare Tunnel) is the documented way to expose it: `docs/preview/DEPLOY-nginx-cloudflare-tunnel.md`. See `docs/` for the integration guide matching how you're actually deploying (`INTEGRATION-php.md`, `DEPLOY-apache.md`, and more as they land).
+
+## Administration
+
+`fossh-console` is a GTK4/libadwaita desktop application: today's
+figures across every site, real k-anonymised queries against the rollup
+store, management of external services you have added, and the
+first-run operator enrollment flow.
+
+```
+sudo dnf install fossh-console
+fossh-console
+```
+
+It never listens on a socket. Everything it shows comes from
+`fossh-agent`, a helper it spawns over a pipe, and no credential
+outlives the call that carries it — an API key you add is sealed on
+disk immediately and is never sent back to the window, which shows at
+most its last four characters.
+
+This replaces `fossh-tui`, the terminal console shipped up to 0.1.3.
+The protocol clients that lived inside it were kept exactly as they
+were; only the terminal layer was removed. See `DECISIONS.md`'s
+ADR-0061.
+
+## External services
+
+An integration is an endpoint you control plus an API key you supply.
+Keys are sealed at rest under this install's own data key, never
+written to a log, and never returned to the console. Plain `http://` is
+refused for anything but a loopback address.
+
+Six provider templates ship for common services (a generic webhook,
+AWS API Gateway, Datadog, Honeycomb, Axiom, Better Stack) and more can
+be added as TOML files in `/etc/fossh/providers.d` — declaratively,
+not as loadable code. `DECISIONS.md`'s ADR-0066 explains why that
+distinction is deliberate in a process that holds every credential on
+the install.
+
+## Self-healing
+
+`fossh doctor` runs deterministic rules over the install's real state —
+file permissions, the k-anonymity setting, a leftover setup token, a
+missing GeoIP database, an unreachable watchdog — and reports each with
+a remedy. Automatic remedies are restricted to permission tightening;
+anything that deletes, rewrites or relaxes a setting is printed for you
+to run.
+
+Optionally, `fossh-selfheal` adds a small local language model that can
+attach a plain-language explanation to a finding — and only that. It
+cannot create a finding, change a severity, alter a remedy, or cause
+anything to run. It is off unless the hardware clears a real capability
+gate and then a timed performance probe. See `docs/SELF-HEALING.md`.
 
 ## Privacy and security
 
@@ -78,6 +133,8 @@ This is a lot of root-level files — most of them sit here because the project'
 | `AUTHORS`, `LICENSE` | Exactly what they say. |
 | `RULES.md` | Naming, tone, the public/private boundary, platform support, positioning. |
 | `DECISIONS.md` | The ADR log — every non-obvious choice, and why. |
+| `RETIREMENT.md` | Which releases are retired, and what was actually wrong with them. |
+| `docs/SELF-HEALING.md` | The deterministic rules, and the fence around the optional model. |
 | `dev/` | How this project is actually being built, right now — chapter status (`dev/DURUM.md`), retrospectives. Not end-user documentation; read `docs/` for that. |
 | `docs/` | Per-language and per-webserver integration guides. |
 | `docs/preview/` | Deployment tiers documented ahead of the adversarial-review pass the rest of this project's deployment surfaces go through — the intended shape, not a reviewed, supported path yet. |
