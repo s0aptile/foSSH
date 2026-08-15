@@ -109,7 +109,7 @@ foSSH's own:
 
 ```
 ollama pull lfm2.5-thinking:1.2b
-ollama create fossh-advisor:0.2.0 -f /usr/share/fossh/model/Modelfile
+ollama create fossh-advisor:0.0.2.1 -f /usr/share/fossh/model/Modelfile
 ```
 
 Without Ollama, the endpoint is simply unreachable and foSSH reports
@@ -132,7 +132,7 @@ sequence that drops the model's own reasoning trace before it can reach
 an operator's screen.
 
 It is versioned alongside foSSH for the same reason: an install running
-0.2.0 against a tag built from an older Modelfile would differ in
+0.0.2.1 against a tag built from an older Modelfile would differ in
 behaviour with nothing to point at.
 
 ## How the endpoint is kept closed

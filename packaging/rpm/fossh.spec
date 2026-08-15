@@ -5,12 +5,12 @@
 # Fedora Rust packaging guideline flow, just less automated.
 #
 # Version note: `%%{srcversion}` (hyphenated, matches Cargo's own
-# `0.2.0-alpha.1`) names the source tarball/directory; `%%{version}`
+# `0.0.2.1`) names the source tarball/directory; `%%{version}`
 # (tilde form, RPM's own prerelease convention — sorts *before*
 # `0.1.3` with no suffix, which is the ordering an alpha needs) is what
 # actually appears in the built package's metadata. Kept separate so
 # neither has to deal with the other's separator character.
-%global srcversion 0.2.0-alpha.1
+%global srcversion 0.0.2.1
 # Cargo's own release profile (strip = true) already strips every
 # binary before %%install even runs; there's no meaningful debug info
 # left for rpm's own automatic debuginfo/debugsource extraction to
@@ -24,8 +24,19 @@
 %global debug_package %{nil}
 
 Name:           fossh
-Version:        0.2.0~alpha.1
-Release:        2%{?dist}
+# Epoch 1, set once and never to be removed.
+#
+# 0.2.0 was renumbered to the 0.0.2.x line, and 0.0.2.1 is numerically
+# LOWER than the retired 0.1.3 -- rpm sees a downgrade and dnf will not
+# offer the upgrade at all. Verified:
+#   rpmdev-vercmp 0.1.3~alpha.1-2 0.0.2.1-1      -> 0.1.3 greater
+#   rpmdev-vercmp 0:0.1.3~alpha.1-2 1:0.0.2.1-1  -> 0.0.2.1 greater
+#
+# Deleting this line would silently strand every existing install on
+# the retired line with no upgrade path and no error to explain it.
+Epoch:          1
+Version:        0.0.2.1
+Release:        1%{?dist}
 Summary:        Privacy-preserving, embeddable telemetry (self-hosted analytics)
 
 License:        MIT
@@ -721,6 +732,21 @@ fi
 
 
 %changelog
+* Sat Aug 15 2026 s0aptile <noreply@example.invalid> - 1:0.0.2.1-1
+- Renumber to the 0.0.2.x line, where x is a revision counter that goes
+  up by one per complete revision. scripts/set-revision.sh is the only
+  way this number should be changed; it updates all nine places at once
+  (four Cargo.toml files, this spec, the tarball prefix, the Ruby
+  binding, the derived model tag, the verification user-agent, and the
+  AppStream release entry).
+- Epoch 1, set once. 0.0.2.x is numerically lower than the retired
+  0.1.3, so without an epoch dnf sees a downgrade and offers no upgrade
+  path at all. Removing it would strand every 0.1.x install silently.
+- Cargo carries 0.0.2+rev.x rather than 0.0.2.x: SemVer permits exactly
+  three numeric components and cargo rejects a fourth outright. Build
+  metadata rather than a pre-release, since a pre-release would sort
+  below a 0.0.2 that is never going to exist.
+
 * Sat Aug 15 2026 s0aptile <noreply@example.invalid> - 0.2.0~alpha.1-2
 - Retire the whole 0.1.x line. See RETIREMENT.md for what was actually
   broken in it, rather than a general "superseded" note.

@@ -8,7 +8,7 @@ exclude = ["vendor-build"]
 
 [package]
 name = "fossh-quiche-ffi"
-version = "0.2.0-alpha.1"
+version = "0.0.2+rev.1"
 edition = "2024"
 license = "MIT"
 authors = ["$0aptile <https://github.com/s0aptile>"]

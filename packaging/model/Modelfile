@@ -16,7 +16,7 @@
 #      verified, and named in the signed configuration manifest.
 #
 # Build it with:
-#     ollama create fossh-advisor:0.2.0 -f packaging/model/Modelfile
+#     ollama create fossh-advisor:0.0.2.1 -f packaging/model/Modelfile
 #
 # The base has to be pulled first:
 #     ollama pull lfm2.5-thinking:1.2b

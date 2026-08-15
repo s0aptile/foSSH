@@ -1,6 +1,6 @@
 # DURUM — status
 
-## 0.2.0 — current
+## 0.0.2.1 — current
 
 Last updated: 2026-08-15. The chapter below this section describes the
 0.1.x work and is kept as a record; where it and this section disagree,
@@ -16,7 +16,7 @@ this section is right.
 | Providers | Done. Six bundled, declarative rather than loadable code. ADR-0066. |
 | Self-healing | Done. Deterministic engine plus a fenced, capability-gated local model. 58 tests. ADR-0065. |
 | RPM packaging | Done. Four packages build clean: `fossh`, `fossh-watchdog`, `fossh-console` (noarch), `fossh-selfheal` (noarch). |
-| 0.1.x retirement | Done. `RETIREMENT.md`, `docs/UPGRADING-0.1-to-0.2.md`, tag `v0.1.3_oa-retired`. |
+| 0.1.x retirement | Done. `RETIREMENT.md`, `docs/UPGRADING-from-0.1.md`, tag `v0.1.3_oa-retired`. |
 
 ### Corrections to what this file previously claimed
 
@@ -44,7 +44,7 @@ is worth less than one that shows where it was wrong.
    `build-release-zip.sh` to glob. Fixed in the script rather than by
    remembering to `rm` first.
 
-### Verified for 0.2.0, by running it
+### Verified for 0.0.2.1, by running it
 
 - Full Rust workspace: 0 failures.
 - OCaml watchdog suite: clean.
@@ -72,7 +72,7 @@ is worth less than one that shows where it was wrong.
   construction and fence are unit-tested but the end-to-end path —
   build the derived model, probe, generate, attach — has not executed
   once. Marked "written, unverified" in the sense this file has always
-  used, and it is the largest unverified surface in 0.2.0.
+  used, and it is the largest unverified surface in 0.0.2.1.
 - `keylock::verify` **is** now verified end to end against a real gpg,
   including the forged-status attack described in ADR-0067 — this was
   listed here as unverified and no longer is.

@@ -37,7 +37,7 @@ configuration contained a syntax error meaning it had, on the evidence,
 never once run.
 
 None of that was found by a user. It was found by testing the tree
-before 0.2.0, which is why the whole line was retired instead of
+before 0.0.2.1, which is why the whole line was retired instead of
 quietly superseded.
 
 ## Recovering a retired release

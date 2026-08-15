@@ -140,7 +140,7 @@
   </requires>
 
   <releases>
-    <release version="0.2.0~alpha.1" date="2026-08-15">
+    <release version="0.0.2.1" date="2026-08-15">
       <description>
         <p>
           The first release of the console, replacing the terminal

@@ -1,6 +1,6 @@
 # Retired releases
 
-Every release before `0.2.0_oa` is retired. Do not install one, do not
+Every release before `0.0.2.1` is retired. Do not install one, do not
 build from one, and do not use one as a reference for how foSSH is
 meant to work.
 
@@ -15,7 +15,7 @@ yourself.
 | `0.1.1_oa` | **Retired — do not use** | As above. |
 | `0.1.2_oa` | **Retired — do not use** | As above. |
 | `0.1.3_oa` | **Retired — do not use** | The last of the line, and the one carrying the defects in "What was actually broken" below. |
-| `0.2.0_oa` | Current | This one. |
+| `0.0.2.1` | Current | This one. |
 
 The final state of the retired line is preserved two ways, so the
 history is auditable: the git tag `v0.1.3_oa-retired`, and a source
@@ -35,7 +35,7 @@ died instantly with exit 127, the restart-storm guard tripped after
 about a second, and the **entire watchdog process exited** — taking the
 operator-auth gate and the QUIC command server down with it. Anything
 mid-handshake at that moment saw `Broken pipe`, which describes a
-symptom four layers removed from the cause. Fixed in 0.2.0 by gating
+symptom four layers removed from the cause. Fixed in 0.0.2.1 by gating
 the privilege drop on the effective uid, refusing to start with an
 explicit message when it cannot be done, and adding exit code 9 for
 that case.
@@ -59,7 +59,7 @@ made in 0.1.x documentation should be read as unchecked.
 **Shipped packages carried the build machine's identity.** The RPM and
 SRPM had the real build host's username and hostname baked into package
 metadata by `rpmbuild`'s own `%_topdir`/`%_buildhost` defaults. Fixed
-late in 0.1.3 and automated in 0.2.0, but earlier artifacts still carry
+late in 0.1.3 and automated in 0.0.2.1, but earlier artifacts still carry
 it.
 
 **The setup wizard was not connected to the thing it claimed to
@@ -69,7 +69,7 @@ watchdog's real `SETUP` protocol. A wizard that appears to complete
 enrollment without the watchdog having enrolled anything is worse than
 one that is absent.
 
-## What changed in 0.2.0, structurally
+## What changed in 0.0.2.1, structurally
 
 Not a bug list — the shape of the product is different.
 
@@ -91,6 +91,6 @@ Not a bug list — the shape of the product is different.
 
 There is no in-place upgrade path and there is deliberately no
 migration tool, because 0.1.x was an open alpha and its on-disk state
-was never promised to be stable. Read `docs/UPGRADING-0.1-to-0.2.md`
+was never promised to be stable. Read `docs/UPGRADING-from-0.1.md`
 before doing anything; the short version is that your event data
 carries over and your admin surface does not.

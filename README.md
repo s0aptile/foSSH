@@ -2,7 +2,7 @@
 
 Privacy-preserving, embeddable telemetry. Self-hosted site analytics without sending your visitors' data to a third party.
 
-**Status: open alpha (`0.2.0_oa`).** Every release before this one is retired — see `RETIREMENT.md` for what was actually wrong with the 0.1.x line, and `docs/UPGRADING-0.1-to-0.2.md` if you are running one.
+**Status: open alpha (`0.0.2.1`).** Every release before this one is retired — see `RETIREMENT.md` for what was actually wrong with the 0.1.x line, and `docs/UPGRADING-from-0.1.md` if you are running one.
 
 **Previously:** Working, tested, not yet exhaustively hardened everywhere — see `dev/DURUM.md` for exactly what's done versus in progress in the current development chapter, and `DECISIONS.md` for the reasoning behind every non-obvious choice made along the way.
 

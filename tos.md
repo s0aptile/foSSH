@@ -2,7 +2,7 @@
 
 **foSSH — Open Alpha**
 
-Version 0.2.0_oa. Dated 2026-08-15. This document applies to this release only. It has no retroactive effect on any prior release, and a future release may ship a different version of this document that governs that release instead.
+Version 0.0.2.1. Dated 2026-08-15. This document applies to this release only. It has no retroactive effect on any prior release, and a future release may ship a different version of this document that governs that release instead.
 
 ---
 

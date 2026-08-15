@@ -23,15 +23,44 @@ copr-cli create fossh \
 
 Add more `--chroot` flags for additional Fedora releases/architectures as they become real support targets — this project's own glibc-floor design (`§2.5`) means a broader chroot list is a packaging decision, not a code one.
 
+## Version scheme and the epoch — read before pushing a build
+
+Packages are `0.0.2.x`, where `x` is a revision counter bumped by
+`scripts/set-revision.sh`. Never edit a version by hand; that script
+updates all nine places at once, and the two that are easy to forget
+(the tarball prefix `%global srcversion`, and the derived model tag
+that `advisor.rs` asserts against the Modelfile) will fail the build
+rather than drift.
+
+**The epoch matters here more than anywhere else.** `0.0.2.x` is
+numerically *lower* than the retired `0.1.3`, so `Epoch: 1` in the spec
+is what makes `dnf` see an upgrade instead of a downgrade. A Copr repo
+is exactly where that shows up: anyone who enabled this repo during the
+0.1.x line and runs `dnf upgrade` gets nothing at all without it, with
+no error to explain why. Do not remove the epoch, and do not lower it.
+
+**Four packages come out of one SRPM now**, not two:
+
+| Package | Arch | Chroots |
+|---|---|---|
+| `fossh` | x86_64 | all |
+| `fossh-console` | noarch | all |
+| `fossh-selfheal` | noarch | all |
+| `fossh-watchdog` | x86_64 | Fedora only (needs `ocaml-ctypes-devel`, absent from EPEL) |
+
+`fossh-console` and `fossh-selfheal` are `noarch` and build everywhere,
+including the EPEL chroots, so the EPEL story is no longer "core only"
+— it is "everything except the watchdog".
+
 **EPEL/RHEL-family scope: revisited 2026-08-06, real answer below — this is no longer an open question, it's a documented, partial, currently-blocked state.** The original spec (`§3.11`) always scoped this RPM at "Fedora/RHEL family"; only Debian/`apt` packaging was ever deferred (`§6`). `epel-9-x86_64` and `epel-10-x86_64` chroots have been added to the live `s0aptile/fossh` project (`copr-cli modify s0aptile/fossh --chroot fedora-44-x86_64 --chroot fedora-rawhide-x86_64 --chroot epel-9-x86_64 --chroot epel-10-x86_64` — `copr-cli modify --chroot` replaces the *entire* chroot list per invocation, not additive, so always pass every chroot you want to keep, not just the new ones). Real builds have been attempted against both. Neither has produced an installable package yet — see "EPEL/RHEL-family build status" below before telling anyone to `dnf copr enable` these.
 
 RHEL itself isn't directly buildable-against without a subscription; Copr's `epel-9-x86_64`/`epel-10-x86_64` chroots build against CentOS Stream 9/10 + EPEL as a real stand-in (confirmed from a real build's own `Config(centos-stream+epel-10-x86_64)` log line) — the resulting package is what actually installs on real RHEL 9/10 and RHEL-compatible rebuilds (Rocky, Alma) via `dnf copr enable s0aptile/fossh epel-9-x86_64` once a build actually succeeds, same as any other EPEL-hosted Copr package. `rhel-9-x86_64`/`rhel-10-x86_64` chroots also exist in Copr's own `list-chroots` output but need a Red Hat/CentOS build-system entitlement this project doesn't have — `epel-9-x86_64`/`epel-10-x86_64` are the right chroots for an unprivileged Copr account, not a gap.
 
-**One SRPM, multiple chroots — confirmed, not assumed.** `dist/fossh-0.1.3~alpha.1-1.fc44.src.rpm`'s filename says `fc44` because that's this dev machine's own local `%dist` at the moment `scripts/build-release-rpm.sh` ran `rpmbuild -bs` — but the *spec bundled inside that SRPM* still has `Release: 1%{?dist}` with `%{?dist}` unexpanded (confirmed by extracting it with `rpm2cpio ... | cpio -idm` and reading the spec directly), not baked to a literal `.fc44` string. That means the exact same SRPM can be submitted to any chroot via `copr-cli build s0aptile/fossh --chroot <chroot> <srpm>` and Copr's build backend re-evaluates `%dist` inside that chroot correctly — real build logs back this: the same source SRPM came back tagged `fossh-0.1.3~alpha.1-1.el9.src.rpm` on `epel-9-x86_64` and `...-1.el10.src.rpm` on `epel-10-x86_64`. `scripts/build-release-rpm.sh` does not need a per-distro variant; the `fc44` in the filename is cosmetic, not a real constraint.
+**One SRPM, multiple chroots — confirmed, not assumed.** `dist/fossh-0.0.2.1-1.fc44.src.rpm`'s filename says `fc44` because that's this dev machine's own local `%dist` at the moment `scripts/build-release-rpm.sh` ran `rpmbuild -bs` — but the *spec bundled inside that SRPM* still has `Release: 1%{?dist}` with `%{?dist}` unexpanded (confirmed by extracting it with `rpm2cpio ... | cpio -idm` and reading the spec directly), not baked to a literal `.fc44` string. That means the exact same SRPM can be submitted to any chroot via `copr-cli build s0aptile/fossh --chroot <chroot> <srpm>` and Copr's build backend re-evaluates `%dist` inside that chroot correctly — real build logs back this: the same source SRPM came back tagged `fossh-0.1.3~alpha.1-1.el9.src.rpm` on `epel-9-x86_64` and `...-1.el10.src.rpm` on `epel-10-x86_64`. `scripts/build-release-rpm.sh` does not need a per-distro variant; the `fc44` in the filename is cosmetic, not a real constraint.
 
 ### EPEL/RHEL-family build status (as of 2026-08-07)
 
-**The `ocaml-ctypes-devel` blocker below (item 2) is fixed as of `packaging/rpm/fossh.spec` Release 2** — the spec now builds two RPMs from one SRPM: a base `fossh` package (pure Rust — `fossh`, `fossh-cgi`, `fossh-fcgi`, `fossh-tui`, the SELinux module — buildable everywhere) and a `fossh-watchdog` subpackage (the OCaml watchdog, `ocaml-ctypes-devel` and all) gated behind `%if 0%{?fedora}` in every section that touches it (`%package`, `BuildRequires`, `%build`, `%install`, `%files`, scriptlets). On EPEL/CentOS Stream chroots `%fedora` is unset, so the entire watchdog subpackage — declaration, dependencies, and build steps — is skipped, not merely excluded from the file list. **Confirmed for real, not by inspection**: three fresh Copr builds submitted against the same SRPM (`fossh-0.1.3~alpha.1-2.fc44.src.rpm`) — `epel-9-x86_64` (build [10835124](https://copr.fedorainfracloud.org/coprs/build/10835124)), `epel-10-x86_64` (build [10835127](https://copr.fedorainfracloud.org/coprs/build/10835127)), `fedora-44-x86_64` (build [10835128](https://copr.fedorainfracloud.org/coprs/build/10835128)). Both EPEL builds' own `root.log`/`builder-live.log` show `ocaml-srpm-macros` installed (a generic macro package, unrelated) and **zero** occurrences of `ocaml`, `ocaml-dune`, `ocaml-ctypes-devel`, `ocaml-findlib`, or `jq` anywhere in the dependency-resolution or install log — the exact packages that used to be requested and fail to resolve are now never even asked for. `%files` for base+watchdog together, cross-checked against the last known-good full single-package build's own `rpm -qlp` output (`dist/fossh-0.1.3~alpha.1-1.fc44.x86_64.rpm`, built before this split), accounts for every one of that build's 19 paths with none missing and none duplicated.
+**The `ocaml-ctypes-devel` blocker below (item 2) is fixed as of `packaging/rpm/fossh.spec` Release 2** — the spec now builds two RPMs from one SRPM: a base `fossh` package (pure Rust — `fossh`, `fossh-cgi`, `fossh-fcgi`, `fossh-tui`, the SELinux module — buildable everywhere) and a `fossh-watchdog` subpackage (the OCaml watchdog, `ocaml-ctypes-devel` and all) gated behind `%if 0%{?fedora}` in every section that touches it (`%package`, `BuildRequires`, `%build`, `%install`, `%files`, scriptlets). On EPEL/CentOS Stream chroots `%fedora` is unset, so the entire watchdog subpackage — declaration, dependencies, and build steps — is skipped, not merely excluded from the file list. **Confirmed for real, not by inspection**: three fresh Copr builds submitted against the same SRPM (`fossh-0.0.2.1-1.fc44.src.rpm`) — `epel-9-x86_64` (build [10835124](https://copr.fedorainfracloud.org/coprs/build/10835124)), `epel-10-x86_64` (build [10835127](https://copr.fedorainfracloud.org/coprs/build/10835127)), `fedora-44-x86_64` (build [10835128](https://copr.fedorainfracloud.org/coprs/build/10835128)). Both EPEL builds' own `root.log`/`builder-live.log` show `ocaml-srpm-macros` installed (a generic macro package, unrelated) and **zero** occurrences of `ocaml`, `ocaml-dune`, `ocaml-ctypes-devel`, `ocaml-findlib`, or `jq` anywhere in the dependency-resolution or install log — the exact packages that used to be requested and fail to resolve are now never even asked for. `%files` for base+watchdog together, cross-checked against the last known-good full single-package build's own `rpm -qlp` output (`dist/fossh-0.1.3~alpha.1-1.fc44.x86_64.rpm`, built before this split), accounts for every one of that build's 19 paths with none missing and none duplicated.
 
 Two *new*, separate, real blockers surfaced by these same three builds — both discovered here for the first time, neither caused by the subpackage split (the split doesn't touch `%build`'s call to `./scripts/build-release.sh`, and both reproduce identically whether or not the watchdog subpackage is even attempted), and **neither yet fixed**:
 
@@ -68,7 +97,7 @@ This produces both a binary RPM and an SRPM under `dist/` (via a real `rpmbuild 
 ## Submitting a build
 
 ```
-copr-cli build s0aptile/fossh dist/fossh-0.1.3-alpha.1-1.fc44.src.rpm
+copr-cli build s0aptile/fossh dist/fossh-0.0.2.1-1.fc44.src.rpm
 ```
 
 `copr-cli build` accepts a local SRPM path or a URL to one — a local path is simpler here since the SRPM is already sitting in `dist/` from the step above. Watch the build at `copr-cli watch-build <build-id>`, or check `https://copr.fedorainfracloud.org/coprs/s0aptile/fossh/builds/`.

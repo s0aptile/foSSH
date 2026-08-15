@@ -688,7 +688,7 @@ One real bug surfaced building the test itself, worth recording since it is a ge
 3. Matches the explicitly agreed release roadmap: this session is release 1 (`0.1.0_oa`, "open-alpha," "the base for development," not itself expected to be feature-complete in every dimension), with further features landing in later, separate releases rather than crammed into this one.
 4. Token budget: the user flagged usage tightening twice today already; a new feature of this shape deserves its own dedicated, unhurried pass, not a rushed one at the tail of an already very long session.
 
-**How to apply going forward:** this is a real, tracked gap, not a silently-accepted one — a candidate for release 2 (`0.2.0-patch_oa`) or a later chapter, to be designed properly (enrollment UX, transport choice, wire protocol, adversarial review) rather than retrofitted quickly. `main.ml`'s own header comment already states this accurately and should keep doing so until it's actually built. §3.3's own "QA-gate passed" status stands as an accurate record of what that specific pass scoped and reviewed (deliberately logic-only, per prrr.md §4's own "don't batch sub-chapters" instruction — see §3.3's original retrospective) — it is the *chapter-level* "all sub-chapters done" claim that this gap keeps from being fully true yet, and the closing retrospective (see `dev/DURUM.md`) says so plainly rather than rounding up to "done."
+**How to apply going forward:** this is a real, tracked gap, not a silently-accepted one — a candidate for release 2 (`0.0.2.1-patch_oa`) or a later chapter, to be designed properly (enrollment UX, transport choice, wire protocol, adversarial review) rather than retrofitted quickly. `main.ml`'s own header comment already states this accurately and should keep doing so until it's actually built. §3.3's own "QA-gate passed" status stands as an accurate record of what that specific pass scoped and reviewed (deliberately logic-only, per prrr.md §4's own "don't batch sub-chapters" instruction — see §3.3's original retrospective) — it is the *chapter-level* "all sub-chapters done" claim that this gap keeps from being fully true yet, and the closing retrospective (see `dev/DURUM.md`) says so plainly rather than rounding up to "done."
 
 ---
 
@@ -866,7 +866,7 @@ Not treated as a new attack surface worth designing around: reaching gpg-agent's
 
 ## ADR-0061 — the TUI becomes a headless bridge, and the console becomes a desktop application
 
-**Status:** accepted, 0.2.0.
+**Status:** accepted, 0.0.2.1.
 
 **Context.** `fossh-tui` held two very different things in one binary:
 a ratatui presentation layer, and roughly 2,500 lines of hardened
@@ -915,7 +915,7 @@ passing. See ADR-0064.
 
 ## ADR-0062 — integrations: storage in `fossh-admin`, the network in `fossh-agent`
 
-**Status:** accepted, 0.2.0.
+**Status:** accepted, 0.0.2.1.
 
 **Context.** Operators need to send things to external services they
 control, authenticated with an API key. foSSH's most load-bearing claim
@@ -949,7 +949,7 @@ it was too broad to keep as written.
 
 ## ADR-0063 — the one outbound request shells out to `curl`
 
-**Status:** accepted, 0.2.0.
+**Status:** accepted, 0.0.2.1.
 
 **Decision.** `integrations_net` invokes the system `curl` rather than
 linking an HTTP client.
@@ -996,7 +996,7 @@ and not found, and the cases are now regression tests.
 
 ## ADR-0064 — three interop tests that had never passed, and a watchdog that could not start
 
-**Status:** accepted, 0.2.0. Recorded as a defect log, not a design.
+**Status:** accepted, 0.0.2.1. Recorded as a defect log, not a design.
 
 **What was wrong.** `watchdog/bin/main.ml` handed the supervised child
 off to the `fossh-svc` account unconditionally, via `setpriv`.
@@ -1038,12 +1038,12 @@ present as whatever the client happens to hit next.
 
 ## ADR-0065 — self-healing: deterministic rules, with a fenced local model
 
-**Status:** accepted, 0.2.0.
+**Status:** accepted, 0.0.2.1.
 
 **Decision.** Two layers. `engine.rs` holds deterministic rules that
 produce every finding and every remedy, always runs, and is the entire
 feature. `advisor.rs` is an optional local model
-(`fossh-advisor:0.2.0`, derived from `lfm2.5-thinking:1.2b`) whose only
+(`fossh-advisor:0.0.2.1`, derived from `lfm2.5-thinking:1.2b`) whose only
 permitted effect is writing one `advice` string onto a finding the
 engine already produced.
 
@@ -1112,7 +1112,7 @@ configuration read as correct.
 
 ## ADR-0066 — developer extensibility as declarative providers, not a plugin API
 
-**Status:** accepted, 0.2.0.
+**Status:** accepted, 0.0.2.1.
 
 **Context.** Making it easy to reach common services (Datadog, AWS,
 Honeycomb) without every operator looking up a URL and a header name.
@@ -1153,7 +1153,7 @@ right and fails on first use.
 
 ## ADR-0067 — gpg status is read from its own stream, because a document can forge it
 
-**Status:** accepted, 0.2.0. Found by debugging, not by review.
+**Status:** accepted, 0.0.2.1. Found by debugging, not by review.
 
 **The bug.** `keylock::verify` ran `gpg --status-fd 1 --decrypt`, which
 interleaves gpg's machine-readable status protocol with **the signed

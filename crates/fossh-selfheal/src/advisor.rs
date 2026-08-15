@@ -62,10 +62,10 @@ pub const BASE_MODEL: &str = "lfm2.5-thinking:1.2b";
 /// chat, and getting them from the model means every caller gets them.
 ///
 /// Versioned with the release so a mismatch is visible rather than
-/// silent: an install running 0.2.0 against a tag built from an older
+/// silent: an install running 0.0.2.1 against a tag built from an older
 /// Modelfile would otherwise differ in behaviour with nothing to
 /// point at.
-pub const MODEL: &str = "fossh-advisor:0.2.0";
+pub const MODEL: &str = "fossh-advisor:0.0.2.1";
 
 /// Where Apache publishes it. Loopback by construction — a non-local
 /// address here would be a bug, and `validate_endpoint` refuses one.
@@ -454,7 +454,7 @@ mod tests {
         // Calling the base directly would silently drop the SYSTEM
         // message that carries the "never propose a fix" rule, and
         // leave only the per-request prompt enforcing it.
-        assert_eq!(MODEL, "fossh-advisor:0.2.0");
+        assert_eq!(MODEL, "fossh-advisor:0.0.2.1");
         assert_eq!(BASE_MODEL, "lfm2.5-thinking:1.2b");
         assert_ne!(MODEL, BASE_MODEL);
     }
