@@ -1,6 +1,74 @@
 # DURUM — status
 
-## 0.0.2.1 — current
+## 0.0.2.2 — current
+
+Last updated: 2026-08-16.
+
+### Section review pass — what it found
+
+Chiefs reviewed ingest, watchdog, surface, and the public-facing text.
+Nine defects, every one of them silent: nothing about the running
+system looked wrong in any of these cases.
+
+| Severity | Defect | State |
+|---|---|---|
+| Privacy | Hidden groups recoverable by subtracting published groups from the ungrouped total — one subtraction returned a single visitor's exact hits and uniques | Fixed, complementary suppression. Residual now 0, measured. |
+| Privacy | `X-Forwarded-For` read leftmost — the entry the client writes. Fabricated addresses inflate uniques past `k` and publish suppressed rows | Fixed, hop count from the right. 6 fake uniques → 2 real, measured. |
+| Privacy | `k_anonymity = 0` or `1` disabled the fold entirely, valid from file or env | Fixed, floor of 2, refused at load. Second guard in `fossh-agent` said `>= 1` and is now shared. |
+| Credential | PHP binding sent the write key as a Bearer token over `http://`, and neither transport disabled redirects | Fixed. Verified against a two-hop server: old code leaks, new does not. |
+| Data loss | PHP binding's `FOSSH_KEY` never reached the FFI context — the documented configuration recorded nothing, permanently, silently | Fixed. |
+| Availability | `fossh_record_env` dereferenced null envp entries, segfaulting the **host** process where `catch_unwind` cannot reach | Fixed. Test SIGSEGVs the runner without the guard. |
+| Availability | Client-supplied `i64::MIN` timestamp overflowed pre-auth; panics under `overflow-checks`, and `panic="abort"` makes that fatal for every site on an fcgi process | Fixed, saturating. |
+| Availability | PHP CGI fallback waited on a subprocess with no ceiling; killing it killed only the intervening shell | Fixed, 2s bound, no shell. |
+| Usability | `fossh site disable` had no inverse — the only way back was editing SQLite | Fixed, `fossh site enable`. |
+
+Two more are **mitigated, not fixed**, and are recorded as such rather
+than counted above:
+
+- **Watchdog check-then-exec.** The window between verifying a binary's
+  hash and running it is down from the whole verification to two
+  syscalls. Closing it needs `setpriv` to stop exec'ing by path. ADR-0075.
+- **Differencing across many queries.** Subtraction against the total is
+  closed; a caller solving many overlapping queries as a system is not.
+  Structural to k-anonymity. Now in THREAT_MODEL.md's not-defended list.
+
+### Corrections to this file's own kind of claim
+
+`THREAT_MODEL.md` asserted that a narrow query "can't isolate an
+individual by intersecting small groups." It could, and the
+demonstration is three commands. The document now says what was wrong
+and when, rather than being quietly edited.
+
+`README.md` told a stranger to run `sudo dnf install fossh-console` for
+a package in no repository, with no caveat. `docs/PACKAGING-copr.md`
+recorded a link failure blocking every chroot that had already been
+fixed and never retested — it is retested now, and all four packages
+build.
+
+### Verification
+
+| | |
+|---|---|
+| Rust workspace | 641 tests |
+| `fossh-ffi` (own workspace) | 33 tests |
+| OCaml watchdog | 250 checks |
+| PHP binding | 24 assertions (new suite, plain PHP, no PHPUnit) |
+| RPM | `fossh`, `fossh-watchdog`, `fossh-console`, `fossh-selfheal` + SRPM, all at `1:0.0.2.2` |
+| clippy / rustfmt | clean |
+
+Every privacy and credential fix above was reproduced against compiled
+binaries before and after, not argued from the source.
+
+### Not done
+
+- No Copr build attempted since the link fix. Fedora passing is an
+  expectation, not a result.
+- EPEL 9 still blocked by Copr's stale Rust (MSRV), untouched by this pass.
+- `python3-pytest` absent, so the console's own suites cannot run here.
+- `php-ffi` absent, so the PHP binding's FFI mode is reviewed, not run.
+- `ocamlformat` absent, so `dune build @fmt` cannot run.
+
+## 0.0.2.1
 
 Last updated: 2026-08-15. The chapter below this section describes the
 0.1.x work and is kept as a record; where it and this section disagree,
