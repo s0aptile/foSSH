@@ -45,6 +45,7 @@ content, form values, and response bodies are never read.
 from __future__ import annotations
 
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -143,22 +144,40 @@ def validate_target(url: str) -> str | None:
     return None
 
 
+class Cancelled(Exception):
+    """Raised internally when `cancel` is set. Never escapes `verify`."""
+
+
 def verify(
     url: str,
     *,
     endpoint_hint: str = "",
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
     on_progress: Callable[[str], None] | None = None,
+    cancel: threading.Event | None = None,
 ) -> Result:
     """Loads `url` once and reports whether foSSH saw it.
 
     Blocking, and expected to be called from a worker thread — never
     from the GTK main loop, which it would freeze for the full timeout.
+
+    `cancel` is checked at every phase boundary and throughout the
+    settle wait. Without it, closing the dialog stopped updating the
+    interface but did not stop the work: a real browser kept loading
+    the operator's page for up to twenty-three more seconds, and — since
+    a successful check is *by design* a real visit — the pageview it
+    generated still landed in their data, with no window left open to
+    say so. A Close button that does not stop the thing it appears to
+    stop is worse than a slow feature.
     """
 
     def progress(message: str) -> None:
         if on_progress:
             on_progress(message)
+
+    def check_cancelled() -> None:
+        if cancel is not None and cancel.is_set():
+            raise Cancelled
 
     try:
         from playwright.sync_api import Error as PlaywrightError
@@ -181,6 +200,7 @@ def verify(
 
     try:
         with sync_playwright() as p:
+            check_cancelled()
             progress("Starting a browser…")
             browser = p.chromium.launch(
                 headless=True,
@@ -245,9 +265,11 @@ def verify(
 
                 page.on("response", on_response)
 
+                check_cancelled()
                 progress(f"Loading {url}…")
                 response = page.goto(url, wait_until="load")
                 page_status = response.status if response else None
+                check_cancelled()
 
                 progress("Watching for the beacon…")
                 # Beacons commonly fire after `load`, from a deferred
@@ -258,11 +280,28 @@ def verify(
                     page.wait_for_load_state("networkidle", timeout=SETTLE_MS)
                 except PlaywrightError:
                     pass
-                page.wait_for_timeout(SETTLE_MS)
+                # Sliced rather than one long wait, so a cancellation
+                # is noticed within a fifth of a second instead of
+                # after the whole settle period.
+                waited = 0
+                while waited < SETTLE_MS:
+                    check_cancelled()
+                    slice_ms = min(200, SETTLE_MS - waited)
+                    page.wait_for_timeout(slice_ms)
+                    waited += slice_ms
 
                 context.close()
             finally:
                 browser.close()
+    except Cancelled:
+        # `browser.close()` already ran in the `finally` above, so the
+        # browser is gone by the time this is reached.
+        return Result(
+            ok=False,
+            summary="Cancelled",
+            detail="The check was stopped before it finished.",
+            total_ms=elapsed_ms(),
+        )
     except ImportError:
         return Result(ok=False, summary="Verification is not available", detail=_install_hint(), unavailable=True)
     except Exception as exc:  # noqa: BLE001 -- playwright raises broadly

@@ -275,6 +275,13 @@ class SetupView(Gtk.Box):
     def _copy_private_key(self) -> None:
         start, end = self._private_buffer.get_bounds()
         text = self._private_buffer.get_text(start, end, False)
+        if not text.strip():
+            # Reachable only if the agent replied without a private
+            # key. Saying "copied. Paste it somewhere safe" over an
+            # empty clipboard would be a false success at the one
+            # moment where losing the key is unrecoverable.
+            self._toast("There is nothing to copy.")
+            return
         display = Gdk.Display.get_default()
         if display is not None:
             display.get_clipboard().set(text)

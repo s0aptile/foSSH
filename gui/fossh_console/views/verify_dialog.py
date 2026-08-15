@@ -14,10 +14,11 @@ import threading
 from gi.repository import Adw, GLib, Gtk
 
 from .. import verify
+from ..asyncdialog import AsyncDialog
 from ..iconography import symbolic_name
 
 
-class VerifyDialog(Adw.Dialog):
+class VerifyDialog(AsyncDialog):
     def __init__(self, *, site_hint: str = "") -> None:
         super().__init__()
         self.set_title("Verify integration")
@@ -27,7 +28,7 @@ class VerifyDialog(Adw.Dialog):
         toolbar = Adw.ToolbarView()
         header = Adw.HeaderBar()
         self._close = Gtk.Button(label="Close")
-        self._close.connect("clicked", lambda *_: self.close())
+        self._close.connect("clicked", lambda *_: self.close_once())
         header.pack_start(self._close)
         self._run = Gtk.Button(label="Run check")
         self._run.add_css_class("suggested-action")
@@ -115,15 +116,27 @@ class VerifyDialog(Adw.Dialog):
         self._progress.set_text("Starting…")
 
         def report(message: str) -> None:
-            GLib.idle_add(self._progress.set_text, message)
+            # Guarded: the dialog may be gone by the time this lands.
+            if not self.is_closed:
+                GLib.idle_add(self._progress.set_text, message)
 
         def work() -> None:
-            result = verify.verify(url, endpoint_hint=hint, on_progress=report)
+            # `self.cancelled` is set by AsyncDialog when the dialog
+            # closes, so closing now genuinely stops the browser rather
+            # than merely hiding the window it was reporting to.
+            result = verify.verify(
+                url, endpoint_hint=hint, on_progress=report, cancel=self.cancelled
+            )
             GLib.idle_add(self._finish, result)
 
         threading.Thread(target=work, name="fossh-verify", daemon=True).start()
 
     def _finish(self, result: verify.Result) -> None:
+        # The dialog may have been closed while the worker ran. Its
+        # widgets are still valid GObjects, so touching them would not
+        # crash — it would just be work nobody sees.
+        if self.is_closed:
+            return False
         self._running = False
         self._spinner_row.set_visible(False)
         self._run.set_sensitive(True)

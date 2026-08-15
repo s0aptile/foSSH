@@ -21,6 +21,7 @@ from __future__ import annotations
 from gi.repository import Adw, GLib, Gtk
 
 from ..agent import AgentError
+from ..asyncdialog import AsyncDialog
 from ..iconography import symbolic_name
 
 PLACEMENTS = [
@@ -222,7 +223,7 @@ class IntegrationsView(Gtk.Box):
         self._stack.set_visible_child_name("error")
 
 
-class AddIntegrationDialog(Adw.Dialog):
+class AddIntegrationDialog(AsyncDialog):
     """Collects one service. Validates locally for immediate feedback,
     then lets the agent be the authority — the rules that matter for
     safety (no cleartext HTTP to a remote host, no control characters
@@ -243,7 +244,7 @@ class AddIntegrationDialog(Adw.Dialog):
         self._save.set_sensitive(False)
         self._save.connect("clicked", lambda *_: self._submit())
         cancel = Gtk.Button(label="Cancel")
-        cancel.connect("clicked", lambda *_: self.close())
+        cancel.connect("clicked", lambda *_: self.close_once())
         header.pack_start(cancel)
         header.pack_end(self._save)
         toolbar.add_top_bar(header)
@@ -368,7 +369,13 @@ class AddIntegrationDialog(Adw.Dialog):
             # credential is not sitting in a widget that outlives the
             # interaction in some reference cycle.
             self._key.set_text("")
-            self.close()
+            # `close_once`, not `close`: if the operator already
+            # pressed Cancel while this call was in flight, a second
+            # close produces an Adwaita-CRITICAL, which aborts outright
+            # under G_DEBUG=fatal-criticals. Reproduced every time.
+            self.close_once()
+            # The integration really was added, so the list still needs
+            # refreshing even though the dialog is gone.
             self._on_added(name)
 
         def err(error: AgentError) -> None:
@@ -376,4 +383,8 @@ class AddIntegrationDialog(Adw.Dialog):
             self._problem.set_visible(True)
             self._save.set_sensitive(True)
 
-        self._agent.call("integrations.add", params, on_ok=ok, on_err=err)
+        # `err` is guarded because it only touches this dialog's own
+        # widgets; `ok` is not, because its last act is refreshing the
+        # list behind it, which must happen whether or not the operator
+        # is still looking at the dialog.
+        self._agent.call("integrations.add", params, on_ok=ok, on_err=self.guard(err))
