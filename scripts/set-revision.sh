@@ -43,6 +43,10 @@ sed -i -E "s|fossh-advisor:[0-9][^\"]*|fossh-advisor:$display|" crates/fossh-sel
 sed -i -E "s|fossh-advisor:[0-9][0-9.]*|fossh-advisor:$display|" packaging/model/Modelfile
 sed -i -E "s|fossh-advisor:[0-9][0-9.]*|fossh-advisor:$display|g" docs/SELF-HEALING.md
 
+sed -i -E "s|fossh-witness:[0-9][0-9.]*|fossh-witness:$display|" packaging/model/Modelfile.witness
+
+sed -i -E "s|^REVISION = \"[0-9][0-9.]*\"|REVISION = \"$display\"|" gui/fossh_console/advisor_client.py
+
 sed -i -E "s|foSSH-Verify/[0-9][0-9.]*|foSSH-Verify/$display|" gui/fossh_console/verify.py
 
 awk -v v="$display" '
@@ -58,7 +62,7 @@ cargo update --workspace --offline >/dev/null 2>&1 || cargo update --workspace >
 echo "revision set to $display" >&2
 echo "  cargo:   $cargo_version" >&2
 echo "  rpm:     1:$display  (epoch 1 — see this script's header)" >&2
-echo "  model:   fossh-advisor:$display" >&2
+echo "  models:  fossh-advisor:$display, fossh-witness:$display" >&2
 echo >&2
 echo "Remaining by hand, deliberately: a %changelog entry in" >&2
 echo "packaging/rpm/fossh.spec saying what this revision changed." >&2
