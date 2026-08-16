@@ -12,9 +12,9 @@ was never made.
 ## What carries over
 
 **Your event data.** The SQLite database (`fossh.db`) and its schema
-are unchanged between 0.1.3 and 0.0.2.1. The rollup tables, the site
+are unchanged between 0.1.3 and 0.0.2.2. The rollup tables, the site
 records, the write keys and the k-anonymity fold all behave exactly as
-before. Copy the data directory and 0.0.2.1 will read it.
+before. Copy the data directory and 0.0.2.2 will read it.
 
 **Your configuration.** `fossh.toml` is unchanged. Every key it
 accepted in 0.1.3 it still accepts, with the same meanings.
@@ -26,7 +26,7 @@ change.
 
 ## What does not carry over
 
-**`fossh-tui` is gone.** There is no terminal console in 0.0.2.1. If you
+**`fossh-tui` is gone.** There is no terminal console in 0.0.2.2. If you
 had it in a script, a systemd unit, or a habit, the replacements are
 `fossh-console` (a desktop application) and the `fossh` CLI, which is
 unchanged.

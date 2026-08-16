@@ -15,7 +15,8 @@ yourself.
 | `0.1.1_oa` | **Retired — do not use** | As above. |
 | `0.1.2_oa` | **Retired — do not use** | As above. |
 | `0.1.3_oa` | **Retired — do not use** | The last of the line, and the one carrying the defects in "What was actually broken" below. |
-| `0.0.2.1` | Current | This one. |
+| `0.0.2.1` | Superseded, not retired | Same invariants, same line; see `0.0.2.2` below for the current patch. |
+| `0.0.2.2` | Current | This one. |
 
 The final state of the retired line is preserved two ways, so the
 history is auditable: the git tag `v0.1.3_oa-retired`, and a source

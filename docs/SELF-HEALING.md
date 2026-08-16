@@ -120,11 +120,17 @@ The subpackage:
 sudo dnf install fossh-selfheal
 ```
 
-The subpackage's `%pre` creates a `fossh-selfheal` group, and the
-scheduled tick (running as `fossh-svc`) reaches its runtime directory
-as that directory's owner already — but a human running the console is
-neither, and needs to join the group to hold the same exclusivity lock
-the scheduled tick does:
+The subpackage's `%pre` creates a `fossh-selfheal` group.
+`/run/fossh-selfheal` is created `0770`, owned `fossh-svc:fossh-selfheal`
+— the `fossh-svc` side of that is reserved for a headless, scheduled
+tick that is designed but not built yet (no systemd unit ships for one,
+and `fossh-agent` itself has no internal timer). Today the console is
+the only thing that ever takes this lock: `advisor_bridge.py` runs
+`advisor_client.py` in-process, warming the model once at startup and
+re-checking every 900 seconds while the console stays open
+(`SELFHEAL_TICK_SECONDS`, `gui/fossh_console/app.py`) — as whichever
+account launched the console, not as `fossh-svc`. That account needs to
+join the group to hold the lock at all:
 
 ```
 sudo usermod -a -G fossh-selfheal $USER
@@ -133,8 +139,8 @@ sudo usermod -a -G fossh-selfheal $USER
 Log out and back in for the new group membership to take effect —
 `usermod` does not change a session already in progress. Skipping this
 step does not break anything visibly: the console silently falls back
-to a lock that excludes nothing the scheduled tick's own lock does,
-and Hellen's Eye never actually runs.
+to a per-user lock that excludes nothing a second session sharing the
+real one does, and Hellen's Eye never actually runs.
 
 Hellen's Eye is a second, separate model — `qwen3.5:4b`, run with
 reasoning disabled per request, invoked only when you explicitly
@@ -182,7 +188,7 @@ call. Ollama's chat API separates `message.thinking` from
 console only ever reads the latter.
 
 It is versioned alongside foSSH for the same reason: an install running
-0.0.2.1 against a tag built from an older Modelfile would differ in
+0.0.2.2 against a tag built from an older Modelfile would differ in
 behaviour with nothing to point at.
 
 ## How the endpoint is kept closed

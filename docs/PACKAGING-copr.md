@@ -56,7 +56,7 @@ including the EPEL chroots, so the EPEL story is no longer "core only"
 
 RHEL itself isn't directly buildable-against without a subscription; Copr's `epel-9-x86_64`/`epel-10-x86_64` chroots build against CentOS Stream 9/10 + EPEL as a real stand-in (confirmed from a real build's own `Config(centos-stream+epel-10-x86_64)` log line) — the resulting package is what actually installs on real RHEL 9/10 and RHEL-compatible rebuilds (Rocky, Alma) via `dnf copr enable s0aptile/fossh epel-9-x86_64` once a build actually succeeds, same as any other EPEL-hosted Copr package. `rhel-9-x86_64`/`rhel-10-x86_64` chroots also exist in Copr's own `list-chroots` output but need a Red Hat/CentOS build-system entitlement this project doesn't have — `epel-9-x86_64`/`epel-10-x86_64` are the right chroots for an unprivileged Copr account, not a gap.
 
-**One SRPM, multiple chroots — confirmed, not assumed.** `dist/fossh-0.0.2.1-1.fc44.src.rpm`'s filename says `fc44` because that's this dev machine's own local `%dist` at the moment `scripts/build-release-rpm.sh` ran `rpmbuild -bs` — but the *spec bundled inside that SRPM* still has `Release: 1%{?dist}` with `%{?dist}` unexpanded (confirmed by extracting it with `rpm2cpio ... | cpio -idm` and reading the spec directly), not baked to a literal `.fc44` string. That means the exact same SRPM can be submitted to any chroot via `copr-cli build s0aptile/fossh --chroot <chroot> <srpm>` and Copr's build backend re-evaluates `%dist` inside that chroot correctly — real build logs back this: the same source SRPM came back tagged `fossh-0.1.3~alpha.1-1.el9.src.rpm` on `epel-9-x86_64` and `...-1.el10.src.rpm` on `epel-10-x86_64`. `scripts/build-release-rpm.sh` does not need a per-distro variant; the `fc44` in the filename is cosmetic, not a real constraint.
+**One SRPM, multiple chroots — confirmed, not assumed.** `dist/fossh-0.0.2.2-1.fc44.src.rpm`'s filename says `fc44` because that's this dev machine's own local `%dist` at the moment `scripts/build-release-rpm.sh` ran `rpmbuild -bs` — but the *spec bundled inside that SRPM* still has `Release: 1%{?dist}` with `%{?dist}` unexpanded (confirmed by extracting it with `rpm2cpio ... | cpio -idm` and reading the spec directly), not baked to a literal `.fc44` string. That means the exact same SRPM can be submitted to any chroot via `copr-cli build s0aptile/fossh --chroot <chroot> <srpm>` and Copr's build backend re-evaluates `%dist` inside that chroot correctly — real build logs back this: the same source SRPM came back tagged `fossh-0.1.3~alpha.1-1.el9.src.rpm` on `epel-9-x86_64` and `...-1.el10.src.rpm` on `epel-10-x86_64`. `scripts/build-release-rpm.sh` does not need a per-distro variant; the `fc44` in the filename is cosmetic, not a real constraint.
 
 ### Item 3 (the EVP_MAC link failure) is fixed — 2026-08-15
 
@@ -143,7 +143,7 @@ This produces both a binary RPM and an SRPM under `dist/` (via a real `rpmbuild 
 ## Submitting a build
 
 ```
-copr-cli build s0aptile/fossh dist/fossh-0.0.2.1-1.fc44.src.rpm
+copr-cli build s0aptile/fossh dist/fossh-0.0.2.2-1.fc44.src.rpm
 ```
 
 `copr-cli build` accepts a local SRPM path or a URL to one — a local path is simpler here since the SRPM is already sitting in `dist/` from the step above. Watch the build at `copr-cli watch-build <build-id>`, or check `https://copr.fedorainfracloud.org/coprs/s0aptile/fossh/builds/`.

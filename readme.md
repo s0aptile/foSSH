@@ -2,7 +2,7 @@
 
 A modular platform for self-hosted, privacy-preserving measurement. Light. Small. Compact.
 
-**OPEN ALPHA (0.0.2.1).** Alpha means the *interfaces* are unstable. It does not mean the *invariants* are. Every release before this one is retired — see `RETIREMENT.md`.
+**OPEN ALPHA (0.0.2.2).** Alpha means the *interfaces* are unstable. It does not mean the *invariants* are. Every release before the 0.0.2.x line is retired — see `RETIREMENT.md`.
 
 ## What it is
 
@@ -29,7 +29,7 @@ The rest — the store, the supervising watchdog, the desktop console, self-heal
 
 ```
 sha256sum -c SHA256SUMS            # verify the checksum first (the file shipped alongside this zip on the download page)
-unzip 'fossh-0.0.2.1(this).zip'
+unzip 'fossh-0.0.2.2(this).zip'
 cd fossh/dist
 ./fossh-x86_64-unknown-linux-gnu init --dir ./data     # target-triple-suffixed names in dist/, not a plain "fossh" — and
                                                         # --dir is required unless you're root: the default (/var/lib/fossh)
