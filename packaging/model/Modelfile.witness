@@ -3,8 +3,16 @@ FROM qwen3-vl:2b
 PARAMETER temperature 0.15
 PARAMETER top_p 0.8
 PARAMETER top_k 20
-PARAMETER num_ctx 4096
-PARAMETER num_predict 1100
+# 4096 was sized for the image (~1106 tokens at 1280x720) and reply
+# alone. Measured directly: an adversarial image prompt's reasoning
+# trace varies run to run and can exceed the old 1100-token predict
+# budget on its own, producing empty output with nothing left over for
+# the reply -- the same failure class fixed in the advisor Modelfile,
+# found later here because the earlier fix only removed this file's
+# stop "</think>" line without re-measuring its budget. Raised with
+# real headroom for image + system + examples + reasoning + reply.
+PARAMETER num_ctx 8192
+PARAMETER num_predict 3000
 PARAMETER num_thread 4
 PARAMETER stop "Diagnostic:"
 PARAMETER stop "Severity:"
