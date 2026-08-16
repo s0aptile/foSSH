@@ -15,19 +15,31 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, Gdk, Gio, Gtk
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
+from .advisor_bridge import AdvisorBridge
 from .agent import Agent, AgentError
 from .palette import define_colors_css
 from .window import ConsoleWindow
 
 APP_ID = "org.fossh.Console"
 
+# Periodic self-heal tick: a re-check is cheap (the rules are the whole
+# feature and always run) and this is also what keeps the advisory
+# model warm during a session that's actually being used. Ollama's own
+# `keep_alive` (advisor_client.KEEP_ALIVE, 30m) is what lets it go idle
+# again on its own once ticks stop reaching it -- this timer does not
+# reimplement that decision, it just needs to fire often enough for
+# 30m keep_alive to mean something during a session someone is using.
+SELFHEAL_TICK_SECONDS = 900
+
 class ConsoleApplication(Adw.Application):
     def __init__(self) -> None:
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
         self._agent: Agent | None = None
         self._window: ConsoleWindow | None = None
+        self._advisor = AdvisorBridge()
+        self._tick_source: int | None = None
 
     def do_startup(self) -> None:
         Adw.Application.do_startup(self)
@@ -42,14 +54,27 @@ class ConsoleApplication(Adw.Application):
     def do_activate(self) -> None:
         if self._window is None:
             self._agent = Agent()
-            self._window = ConsoleWindow(self, self._agent)
+            self._window = ConsoleWindow(self, self._agent, self._advisor)
             self._start_agent()
+            self._advisor.warm_async()
+            self._tick_source = GLib.timeout_add_seconds(
+                SELFHEAL_TICK_SECONDS, self._on_selfheal_tick
+            )
         self._window.present()
 
     def do_shutdown(self) -> None:
+        if self._tick_source is not None:
+            GLib.source_remove(self._tick_source)
+            self._tick_source = None
+        self._advisor.stop()
         if self._agent is not None:
             self._agent.stop()
         Adw.Application.do_shutdown(self)
+
+    def _on_selfheal_tick(self) -> bool:
+        if self._window is not None:
+            self._window.refresh_all()
+        return GLib.SOURCE_CONTINUE
 
     def _start_agent(self) -> None:
         assert self._agent is not None and self._window is not None
@@ -73,7 +98,7 @@ class ConsoleApplication(Adw.Application):
         if self._window is not None:
 
             self._window.close()
-            self._window = ConsoleWindow(self, self._agent)
+            self._window = ConsoleWindow(self, self._agent, self._advisor)
             self._start_agent()
             self._window.present()
 

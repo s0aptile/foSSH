@@ -477,6 +477,7 @@ dependencies = [
  "fossh-admin",
  "fossh-core",
  "fossh-ipc",
+ "fossh-selfheal",
  "fossh-store",
  "nix",
  "serde",

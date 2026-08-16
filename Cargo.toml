@@ -37,6 +37,7 @@ fossh-core = { path = "crates/fossh-core" }
 fossh-store = { path = "crates/fossh-store" }
 fossh-ingest = { path = "crates/fossh-ingest" }
 fossh-admin = { path = "crates/fossh-admin" }
+fossh-selfheal = { path = "crates/fossh-selfheal" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 blake3 = "1.5"
 subtle = "2.6"

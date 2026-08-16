@@ -203,6 +203,7 @@ impl Agent {
             "telemetry.summary" => self.telemetry_summary(),
             "telemetry.query" => self.telemetry_query(p),
             "watchdog.status" => self.watchdog_status(),
+            "selfheal.check" => self.selfheal_check(),
             "setup.state" => Ok(self.setup_state()),
             "setup.reload" => {
                 self.setup.reload();
@@ -387,6 +388,55 @@ impl Agent {
 
             Err(e) => Err(MethodError::unavailable(e)),
         }
+    }
+
+    fn selfheal_check(&self) -> MethodResult {
+        use fossh_selfheal::engine;
+
+        let watchdog_reachable = watchdog_status::query().ok().map(|status| {
+            matches!(
+                status.child,
+                fossh_admin::command_client::ChildState::Running
+            )
+        });
+
+        let ctx = engine::Context {
+            data_dir: self.data_dir.clone(),
+            config_path: self.data_dir.join("fossh.toml"),
+            setup_token_path: self.setup.token_path.clone(),
+            k_anonymity: self.k_anonymity,
+            watchdog_reachable,
+
+            country_db: None,
+        };
+
+        let findings: Vec<Value> = engine::check(&ctx)
+            .into_iter()
+            .map(|finding| {
+                let (kind, description, command) = match &finding.remedy {
+                    engine::Remedy::None => ("none", None, None),
+                    engine::Remedy::Automatic { description } => {
+                        ("automatic", Some(description.clone()), None)
+                    }
+                    engine::Remedy::Operator { description, command } => {
+                        ("operator", Some(description.clone()), Some(command.clone()))
+                    }
+                };
+                json!({
+                    "id": finding.id,
+                    "severity": finding.severity.as_str(),
+                    "title": finding.title,
+                    "detail": finding.detail,
+                    "remedy": {
+                        "kind": kind,
+                        "description": description,
+                        "command": command,
+                    },
+                })
+            })
+            .collect();
+
+        Ok(json!({ "findings": findings }))
     }
 
     fn setup_state(&self) -> Value {

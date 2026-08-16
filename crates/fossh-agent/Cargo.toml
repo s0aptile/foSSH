@@ -29,6 +29,7 @@ quic = ["dep:fossh-ipc"]
 fossh-core.workspace = true
 fossh-store.workspace = true
 fossh-admin.workspace = true
+fossh-selfheal.workspace = true
 fossh-ipc = { path = "../fossh-ipc", optional = true }
 zeroize.workspace = true
 serde.workspace = true

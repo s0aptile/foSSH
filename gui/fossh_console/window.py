@@ -32,7 +32,7 @@ PAGES = [
 ]
 
 class ConsoleWindow(Adw.ApplicationWindow):
-    def __init__(self, application: Adw.Application, agent) -> None:
+    def __init__(self, application: Adw.Application, agent, advisor) -> None:
         super().__init__(application=application)
         self._agent = agent
         self.set_title("foSSH Console")
@@ -41,7 +41,7 @@ class ConsoleWindow(Adw.ApplicationWindow):
         self._toaster = Adw.ToastOverlay()
 
         self._views = {
-            "overview": OverviewView(agent),
+            "overview": OverviewView(agent, advisor),
             "telemetry": TelemetryView(agent),
             "integrations": IntegrationsView(agent, self._toaster),
             "setup": SetupView(agent, self._toaster),
