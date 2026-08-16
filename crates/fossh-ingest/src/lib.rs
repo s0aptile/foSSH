@@ -1,17 +1,4 @@
 #![forbid(unsafe_code)]
-//! foSSH request → `Event` pipeline (M3): salt lifecycle (P2), HMAC/bearer
-//! auth (§8), per-site rate limiting (S10), and the spool writer +
-//! compactor (§7.1).
-//!
-//! §8 and S10 describe the nonce-replay cache and rate-limit bucket as
-//! living in an mmap'd file. This crate uses plain positioned file I/O
-//! instead — see `DECISIONS.md`. S1 forbids `unsafe` in every crate
-//! except `fossh-ffi`, and every `mmap` API is `unsafe fn` by construction
-//! (the kernel can change the mapped bytes out from under Rust's aliasing
-//! model at any time); a hard security invariant beats an implementation
-//! suggestion. The spec's own tolerance for slop ("no lock, tolerate ±1
-//! slop") is exactly what a read-then-write-back on a plain file gives
-//! under concurrent CGI processes, without needing `unsafe` anywhere here.
 
 pub mod auth;
 pub mod compact;
@@ -35,13 +22,11 @@ pub enum IngestError {
     Store(fossh_store::StoreError),
     Validation(fossh_core::validate::ValidationError),
     Json(serde_json::Error),
-    /// A spool frame's CRC didn't match its payload — corrupt or
-    /// truncated (e.g. a torn write from a crash mid-append).
+
     CorruptFrame,
-    /// A stored sketch/state blob wasn't the size this crate wrote.
+
     CorruptState,
-    /// A site slug wasn't safe to use as a filesystem path component (see
-    /// `site_cache::is_safe_slug`) — refused before ever touching disk.
+
     InvalidSlug,
 }
 

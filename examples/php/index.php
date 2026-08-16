@@ -1,11 +1,5 @@
 <?php
 
-// Runnable example for the PHP binding (bindings/php). Serve with:
-//   php -S localhost:8080 index.php
-// Set FOSSH_ENDPOINT + FOSSH_KEY for the shared-hosting HTTP-remote
-// transport (see docs/INTEGRATION-php.md), or FOSSH_LIB_PATH if
-// ext-ffi and libfossh.so are both available locally.
-
 declare(strict_types=1);
 
 require_once __DIR__ . '/../../bindings/php/src/Client.php';

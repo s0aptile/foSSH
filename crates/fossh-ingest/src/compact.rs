@@ -1,14 +1,3 @@
-//! Draining spool files into the store — shared by `fossh-cli maintain`
-//! and (M7) `fossh-fcgi`'s background compactor thread. `rename()` alone
-//! is not sufficient for safety against a concurrent writer holding an
-//! already-open fd across the rename: a write through that stale fd,
-//! landing after this module's own read-to-EOF but before (or during)
-//! its `remove_file`, would be silently lost once the fd closes. The
-//! rotate-read-drain sequence below therefore holds `spool::lock_path`'s
-//! `spool.lock` exclusively for exactly that sequence; `append_frame`
-//! holds the same lock file shared for its own open-and-write. See
-//! DECISIONS.md for the incident this closed.
-
 use std::fs;
 use std::path::Path;
 
@@ -24,14 +13,6 @@ pub struct CompactStats {
     pub files_processed: u64,
 }
 
-/// Drains every spool file in `spool_dir` (the live `current.bin`,
-/// staged aside first, plus any already-rotated `spool-*.bin` files from
-/// `spool::append_frame`'s own 8 MiB rotation) into `store`.
-///
-/// `key` (§3.8) must be the same per-install data-encryption key the
-/// spool was written under (`fossh_admin::data_key`) — see
-/// `spool::read_frames` for what happens to a frame written under a
-/// different key.
 pub fn drain_site_spool(
     store: &mut Store,
     spool_dir: &Path,
@@ -86,10 +67,7 @@ fn drain_file(
     for frame in frames {
         match frame {
             DrainedFrame::Event(event) => {
-                // S2, fail closed: a store-level rejection (e.g. the spool
-                // held a frame that predates a since-tightened allowlist)
-                // is dropped exactly like a corrupt frame, not retried
-                // forever or allowed to halt the rest of the drain.
+
                 if store.record_event(&event).is_ok() {
                     stats.events_recorded += 1;
                 } else {
@@ -167,7 +145,7 @@ mod tests {
         let mut store = Store::open_in_memory().unwrap();
         drain_site_spool(&mut store, &dir, &TEST_KEY).unwrap();
         assert!(!dir.join("current.bin").exists());
-        // And no leftover "draining-*.bin" files either.
+
         let leftovers: Vec<_> = fs::read_dir(&dir)
             .unwrap()
             .flatten()
@@ -182,7 +160,7 @@ mod tests {
     fn drains_rotated_spool_files_too() {
         let dir = scratch_dir("rotated");
         fs::create_dir_all(&dir).unwrap();
-        // Simulate a file already rotated by `append_frame`'s 8 MiB logic.
+
         let mut frame = Vec::new();
         let payload = crate::crypto::seal(
             &TEST_KEY,
@@ -210,7 +188,7 @@ mod tests {
         let flip_at = bytes.len() - 2;
         bytes[flip_at] ^= 0xFF;
         fs::write(&path, &bytes).unwrap();
-        spool::append_frame(&dir, &sample_event(1_700_000_100), &TEST_KEY).unwrap(); // a good frame after
+        spool::append_frame(&dir, &sample_event(1_700_000_100), &TEST_KEY).unwrap();
 
         let mut store = Store::open_in_memory().unwrap();
         let stats = drain_site_spool(&mut store, &dir, &TEST_KEY).unwrap();
@@ -221,9 +199,7 @@ mod tests {
 
     #[test]
     fn rename_does_not_disturb_a_still_open_writer() {
-        // The safety property `drain_site_spool` relies on: renaming a
-        // file out from under an open, already-appending file descriptor
-        // does not redirect its writes or truncate what's already there.
+
         let dir = scratch_dir("rename-safety");
         fs::create_dir_all(&dir).unwrap();
         let current = dir.join("current.bin");
@@ -251,7 +227,7 @@ mod tests {
         frame_b.extend_from_slice(&(payload_b.len() as u32).to_le_bytes());
         frame_b.extend_from_slice(&spool::crc32(&payload_b).to_le_bytes());
         frame_b.extend_from_slice(&payload_b);
-        open_writer.write_all(&frame_b).unwrap(); // written via the pre-rename fd
+        open_writer.write_all(&frame_b).unwrap();
 
         let frames = spool::read_frames(&staged, &TEST_KEY).unwrap();
         assert_eq!(

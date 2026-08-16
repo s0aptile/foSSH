@@ -15,22 +15,19 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, Gdk, Gio, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, Gtk
 
-from .agent import Agent, AgentError  # noqa: E402
-from .palette import define_colors_css  # noqa: E402
-from .window import ConsoleWindow  # noqa: E402
+from .agent import Agent, AgentError
+from .palette import define_colors_css
+from .window import ConsoleWindow
 
 APP_ID = "org.fossh.Console"
-
 
 class ConsoleApplication(Adw.Application):
     def __init__(self) -> None:
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
         self._agent: Agent | None = None
         self._window: ConsoleWindow | None = None
-
-    # -- lifecycle ---------------------------------------------------
 
     def do_startup(self) -> None:
         Adw.Application.do_startup(self)
@@ -54,8 +51,6 @@ class ConsoleApplication(Adw.Application):
             self._agent.stop()
         Adw.Application.do_shutdown(self)
 
-    # -- the agent ---------------------------------------------------
-
     def _start_agent(self) -> None:
         assert self._agent is not None and self._window is not None
         try:
@@ -76,16 +71,11 @@ class ConsoleApplication(Adw.Application):
             self._agent.stop()
         self._agent = Agent()
         if self._window is not None:
-            # A fresh window rather than surgery on the failed one:
-            # rebuilding is cheap, and reattaching every view to a new
-            # agent by hand is the kind of thing that quietly leaves
-            # one view pointing at the dead one.
+
             self._window.close()
             self._window = ConsoleWindow(self, self._agent)
             self._start_agent()
             self._window.present()
-
-    # -- presentation ------------------------------------------------
 
     def _load_styles(self) -> None:
         """Two providers, in a deliberate order.
@@ -115,9 +105,7 @@ class ConsoleApplication(Adw.Application):
             Gtk.StyleContext.add_provider_for_display(
                 display,
                 structure,
-                # Above the theme, below a user's own overrides — an
-                # app stylesheet that outranks a user stylesheet is an
-                # app that cannot be corrected.
+
                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
             )
         else:
@@ -133,7 +121,6 @@ class ConsoleApplication(Adw.Application):
             return
         dark = Adw.StyleManager.get_default().get_dark()
         provider.load_from_string(define_colors_css(dark))
-
 
 def main(argv: list[str] | None = None) -> int:
     return ConsoleApplication().run(argv if argv is not None else sys.argv)

@@ -1,15 +1,3 @@
-//! §3.7: fuzzes `resolve_client_ip`, the one function that decides
-//! whether a request's logged IP comes from the socket peer or from a
-//! client-supplied `X-Forwarded-For` header.
-//!
-//! Pure string handling, so this is less about finding a crash than
-//! about holding the two properties the rest of the system leans on:
-//! with no trusted hops the header can never influence the answer, and
-//! whatever comes back is always either `remote_addr` verbatim or a
-//! syntactically valid IP address. That second one is what keeps
-//! arbitrary client-supplied bytes out of the visitor hash, the
-//! rate-limit key, and the country lookup.
-
 #![no_main]
 
 use arbitrary::Arbitrary;
@@ -38,9 +26,6 @@ fuzz_target!(|input: Input| {
         );
     }
 
-    // Either we fell back, or we returned something that parses. There
-    // is no third outcome, and if there were, the unparseable value
-    // would go on to be hashed and stored.
     if result != input.remote_addr {
         assert!(
             result.parse::<IpAddr>().is_ok(),

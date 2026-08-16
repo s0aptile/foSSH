@@ -1,10 +1,3 @@
-//! P4 — coarse client bucketing. Hand-rolled (no dependency): classifies a
-//! User-Agent string into `{browser_family, os_family, device_class}` and
-//! nothing finer — no version is extracted at all, which trivially
-//! satisfies "no versions finer than major" with the strictest possible
-//! reading. The caller is expected to drop the raw string immediately after
-//! calling `bucket_user_agent` (P4, P10, §11).
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum BrowserFamily {
@@ -19,13 +12,7 @@ pub enum BrowserFamily {
 }
 
 impl BrowserFamily {
-    /// Stable wire/storage code — shared by `fossh-store` (DB columns) and
-    /// `fossh-ingest` (spool frames), so it's defined once, here,
-    /// alongside the enum. The match is exhaustive *within this crate*
-    /// even though the enum is `#[non_exhaustive]` to downstream crates —
-    /// which is the point: adding a variant without extending this match
-    /// is a compile error right here, not a silent "degrades to Other"
-    /// somewhere else.
+
     pub fn as_u8(self) -> u8 {
         match self {
             BrowserFamily::Chrome => 0,
@@ -39,9 +26,6 @@ impl BrowserFamily {
         }
     }
 
-    /// Inverse of `as_u8`. An unrecognized code (e.g. written by a newer
-    /// version of foSSH with more variants) decodes to `Other` rather than
-    /// failing — reading old data with a new binary must not crash.
     pub fn from_u8(v: u8) -> Self {
         match v {
             0 => BrowserFamily::Chrome,
@@ -154,8 +138,6 @@ const BOT_TOKENS: &[&str] = &[
     "monitoring",
 ];
 
-/// Hand-rolled ASCII case-insensitive substring search — avoids a
-/// dependency for something this small. UA tokens are all ASCII.
 fn contains_ci(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return true;
@@ -173,8 +155,7 @@ fn is_bot(ua: &str) -> bool {
 }
 
 fn browser_family(ua: &str) -> BrowserFamily {
-    // Order matters: Edge/Opera/Samsung UAs also contain "Chrome/" and
-    // "Safari/"; Chrome UAs also contain "Safari/". Most-specific first.
+
     if contains_ci(ua, "edg/") || contains_ci(ua, "edga/") || contains_ci(ua, "edgios/") {
         BrowserFamily::Edge
     } else if contains_ci(ua, "samsungbrowser/") {
@@ -209,7 +190,7 @@ fn os_family(ua: &str) -> OsFamily {
 }
 
 fn device_class(ua: &str) -> DeviceClass {
-    // Android tablets conventionally omit the "Mobile" token; phones include it.
+
     if contains_ci(ua, "ipad")
         || contains_ci(ua, "tablet")
         || (contains_ci(ua, "android") && !contains_ci(ua, "mobile"))
@@ -229,8 +210,6 @@ fn device_class(ua: &str) -> DeviceClass {
     }
 }
 
-/// Classifies a raw User-Agent string into coarse buckets. Never derives
-/// anything from the string finer than these three enums.
 pub fn bucket_user_agent(ua: &str) -> UaBuckets {
     if ua.trim().is_empty() {
         return UaBuckets {

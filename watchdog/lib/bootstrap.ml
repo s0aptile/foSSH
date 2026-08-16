@@ -1,25 +1,3 @@
-(* §2.4: the watchdog's half of the one-time bootstrap handoff —
-   connects to core's Unix domain socket and sends its own public
-   key/cert fingerprint, exactly once. Core (`fossh-svc`) is the
-   listener; see `fossh-admin::watchdog_pin` (the Rust crate) for its
-   side and the SO_PEERCRED-based peer verification that actually
-   enforces "this really is the watchdog process", not just
-   "something connected to the right socket path".
-
-   **Extended beyond the original OpenPGP-fingerprint-only exchange**
-   (see ADR-0048/ADR-0050): §3.4's QUIC mTLS needs each side to hold
-   the other's actual X.509 certificate content, not just an OpenPGP
-   fingerprint — quiche/BoringSSL loads a real PEM certificate as a
-   trust anchor, not a hash of one. The wire exchange is now: this
-   side sends its OpenPGP fingerprint (one line, newline-terminated,
-   exactly as before), then its X.509 certificate (a PEM block
-   terminated by its own "-----END CERTIFICATE-----" line — PEM's own
-   delimiter used as-is, not a new framing convention invented here);
-   core verifies the peer via SO_PEERCRED, persists both, and writes
-   *its own* X.509 certificate back over the same connection before it
-   closes — which this module reads and returns to its caller. Still
-   one Unix-domain-socket round trip, not a new transport. *)
-
 let max_cert_pem_len = 8192
 let cert_pem_end_marker = "-----END CERTIFICATE-----"
 
@@ -42,26 +20,6 @@ let describe_error = function
 let ensure_trailing_newline (s : string) : string =
   if String.length s > 0 && s.[String.length s - 1] = '\n' then s else s ^ "\n"
 
-(* Mirrors `fossh_admin::watchdog_pin::read_pem_block` exactly: read
-   lines until one equals the end marker, bounded by `max_cert_pem_len`
-   checked after every line (not only at the end), so a peer that never
-   sends the marker is `Peer_cert_unterminated`, not an unbounded read
-   or a silent hang. `input_line` already strips the trailing newline
-   itself, so no separate trim is needed before the equality check.
-
-   Two distinct ways a read can fail short of a full block, both
-   caught here rather than left to escape as an uncaught exception (a
-   real, reproduced crash during development: a peer that closes with
-   this side's already-sent bytes still unread in its receive buffer
-   makes the kernel treat the close as abortive, and the next read
-   here raises `Sys_error "Connection reset by peer"`, not
-   `End_of_file` — the same "uncaught exception takes down the whole
-   process" failure class ADR-0041 already found and fixed elsewhere
-   in this codebase, recurring here in new code): a clean EOF
-   (`End_of_file`) and a lower-level I/O failure like a reset
-   connection (`Sys_error`) are reported as the distinct
-   `Peer_cert_unterminated` / `Recv_failed` cases respectively, both
-   typed results, never a bare exception escaping to the caller. *)
 let read_pem_block (ic : in_channel) : (string, error) result =
   let buf = Buffer.create 512 in
   let rec go () =
@@ -77,29 +35,6 @@ let read_pem_block (ic : in_channel) : (string, error) result =
   in
   go ()
 
-(* Sends this side's fingerprint and certificate, then reads and
-   returns core's own certificate PEM from its reply. Both writes
-   happen before any read: core's own reader is line/marker-bounded,
-   not EOF-bounded (see the Rust side's `read_line`/`read_pem_block`),
-   so no half-close or shutdown is needed between writing and
-   reading.
-
-   Fresh sweep (SIGPIPE check): this writes to a Unix-domain STREAM
-   socket — a real SIGPIPE risk (unlike quic.ml's own sockets, which are
-   SOCK_DGRAM/UDP and structurally cannot raise SIGPIPE on send, since
-   there is no "broken pipe" for a connectionless protocol). main.ml's
-   own top-level entry point already ignores SIGPIPE process-wide before
-   dispatching to the `bootstrap-send` subcommand that calls this, so a
-   real `fossh-watchdog bootstrap-send` run is not exposed today — but
-   `Operator_auth_server.run` already set the exact same precedent
-   ("safe on its own for any caller -- test or future embedder -- that
-   doesn't happen to go through main.ml") for the identical reason this
-   module didn't yet follow: this file's own test (test_bootstrap.ml)
-   calls `send_handoff` directly, never through main.ml, and was running
-   exposed to a real process-killing SIGPIPE the whole time it happened
-   not to lose the write-before-close race — not a hypothetical, see
-   that test's own new regression case. Idempotent, harmless to set
-   twice, matching the same idiom. *)
 let send_handoff ~(socket_path : string) ~(fingerprint : string) ~(cert_pem : string) :
     (string, error) result =
   Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
@@ -125,13 +60,6 @@ let send_handoff ~(socket_path : string) ~(fingerprint : string) ~(cert_pem : st
                   let ic = Unix.in_channel_of_descr sock in
                   read_pem_block ic))
 
-(* Core and the watchdog are two independently-started processes with
-   no guaranteed ordering — whichever starts first will find nobody
-   listening yet on the very first attempt. A short, bounded retry
-   loop is a genuine operational necessity here, not a test-only
-   convenience; a one-time bootstrap step failing outright just
-   because it happened to run half a second before core finished its
-   own startup would be a real, avoidable reliability gap. *)
 let send_handoff_with_retry ~(socket_path : string) ?(max_attempts = 50) ?(delay_seconds = 0.1)
     ~(fingerprint : string) (cert_pem : string) : (string, error) result =
   let rec go attempt last_error =

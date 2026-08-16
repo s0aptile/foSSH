@@ -36,7 +36,6 @@ from gi.repository import Adw
 
 T = TypeVar("T")
 
-
 class AsyncDialog(Adw.Dialog):
     """An `Adw.Dialog` that knows whether it is still open.
 
@@ -47,13 +46,9 @@ class AsyncDialog(Adw.Dialog):
     def __init__(self) -> None:
         super().__init__()
         self._is_closed = False
-        # `closed` fires however the dialog went away — the close
-        # button, Escape, or a programmatic close — which is why it is
-        # the signal to hang this on rather than any one of them.
+
         self.connect("closed", self._on_closed)
-        #: Set when the dialog goes away, for a worker thread to notice
-        #: and stop. A dialog with no cancellable work simply never
-        #: reads it.
+
         self.cancelled = threading.Event()
 
     def _on_closed(self, *_args) -> None:

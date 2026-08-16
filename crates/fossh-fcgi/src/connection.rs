@@ -1,11 +1,3 @@
-//! Reads one complete FastCGI request off a stream (`BEGIN_REQUEST`,
-//! `PARAMS*`, `STDIN*`, in the canonical order every real FastCGI
-//! client — nginx included — actually sends them) and converts it into
-//! `fossh_ingest::ingest::IngestEnv` plus a body buffer. Assumes no
-//! request multiplexing (`FCGI_MPXS_CONNS` is never advertised as
-//! supported): a second `BEGIN_REQUEST` before the first one finishes
-//! is refused, not queued.
-
 use std::io::{Read, Write};
 
 use fossh_core::validate::BODY_MAX;
@@ -24,8 +16,7 @@ pub struct IngestRequest {
 #[derive(Debug)]
 pub enum RequestOutcome {
     Ingest(Box<IngestRequest>),
-    /// The peer closed the connection cleanly before sending anything
-    /// — the ordinary way a FastCGI connection ends, not an error.
+
     ConnectionClosed,
 }
 
@@ -33,15 +24,12 @@ pub enum RequestOutcome {
 pub enum ReadError {
     Io(std::io::Error),
     Protocol(protocol::ProtocolError),
-    /// A role other than `RESPONDER`, or a second concurrent
-    /// `BEGIN_REQUEST` — refused with the given `request_id` and the
-    /// status the caller should report back before closing.
+
     Unsupported {
         request_id: u16,
         status: ProtocolStatus,
     },
-    /// Accumulated `STDIN` exceeded S4's body cap before the stream
-    /// signaled its own end.
+
     BodyTooLarge {
         request_id: u16,
     },
@@ -59,11 +47,6 @@ impl From<protocol::ProtocolError> for ReadError {
     }
 }
 
-/// Reads exactly one byte first via a plain `read` (not `read_exact`)
-/// so a clean `Ok(0)` — the peer closing the connection between
-/// requests, the normal end of a `keep_conn` session — is
-/// distinguishable from a connection that dies mid-header, which is a
-/// real I/O error, not a graceful close.
 fn read_header_or_eof<R: Read>(r: &mut R) -> std::io::Result<Option<protocol::Header>> {
     let mut first = [0u8; 1];
     let n = r.read(&mut first)?;
@@ -142,10 +125,7 @@ pub fn read_request<R: Read>(r: &mut R, trusted_hops: u8) -> Result<RequestOutco
     loop {
         let header = protocol::read_header(r)?;
         if header.request_id != request_id {
-            // No multiplexing support: a second request's records
-            // interleaved with the first's is exactly the case
-            // FCGI_MPXS_CONNS=0 (never advertised otherwise) tells a
-            // well-behaved client not to do.
+
             return Err(ReadError::Unsupported {
                 request_id: header.request_id,
                 status: ProtocolStatus::CantMpxConn,
@@ -159,14 +139,9 @@ pub fn read_request<R: Read>(r: &mut R, trusted_hops: u8) -> Result<RequestOutco
         }
         let body = protocol::read_record_body(r, &header)?;
         if body.is_empty() {
-            break; // end-of-stream marker
+            break;
         }
-        // Checked *before* appending, not after (adversarial-review
-        // finding — this loop originally checked post-append, the
-        // STDIN loop below already checked pre-append; bounded either
-        // way by one record's own 65535-byte cap, but worth being
-        // consistent with the documented "bounded before it's ever
-        // retained" intent).
+
         if params_bytes.len() + body.len() > protocol::MAX_PARAMS_BYTES {
             return Err(ReadError::Protocol(protocol::ProtocolError::ParamsTooLarge));
         }
@@ -191,7 +166,7 @@ pub fn read_request<R: Read>(r: &mut R, trusted_hops: u8) -> Result<RequestOutco
         }
         let chunk = protocol::read_record_body(r, &header)?;
         if chunk.is_empty() {
-            break; // end-of-stream marker
+            break;
         }
         if body.len() + chunk.len() > BODY_MAX {
             return Err(ReadError::BodyTooLarge { request_id });
@@ -207,11 +182,6 @@ pub fn read_request<R: Read>(r: &mut R, trusted_hops: u8) -> Result<RequestOutco
     })))
 }
 
-/// Writes the CGI-style status header block this application's
-/// response always is (§7.1: never a body, ever) as one `FCGI_STDOUT`
-/// record plus its terminator and `FCGI_END_REQUEST` — the same fixed
-/// shape `fossh-cgi::main`'s `write_response` produces, just framed for
-/// FastCGI instead of a real process stdout.
 pub fn write_ingest_response<W: Write>(
     w: &mut W,
     request_id: u16,
@@ -279,7 +249,7 @@ mod tests {
         let mut buf = Vec::new();
         let begin_body = {
             let mut b = [0u8; 8];
-            b[0..2].copy_from_slice(&1u16.to_be_bytes()); // Responder
+            b[0..2].copy_from_slice(&1u16.to_be_bytes());
             b[2] = if keep_conn { 1 } else { 0 };
             b
         };
@@ -288,11 +258,11 @@ mod tests {
         if !encoded.is_empty() {
             write_record(&mut buf, RecordType::Params, 1, &encoded);
         }
-        write_record(&mut buf, RecordType::Params, 1, &[]); // end of PARAMS
+        write_record(&mut buf, RecordType::Params, 1, &[]);
         if !body.is_empty() {
             write_record(&mut buf, RecordType::Stdin, 1, body);
         }
-        write_record(&mut buf, RecordType::Stdin, 1, &[]); // end of STDIN
+        write_record(&mut buf, RecordType::Stdin, 1, &[]);
         buf
     }
 
@@ -332,10 +302,6 @@ mod tests {
         assert!(req.keep_conn);
     }
 
-    /// Same resolution as `fossh-cgi`, including the part that matters:
-    /// with one trusted hop the entry that hop appended wins, so the
-    /// `198.51.100.1` a client put at the head of the header does not
-    /// become the stored address. See `fossh_ingest::forwarded`.
     #[test]
     fn remote_addr_honors_trusted_hops_exactly_like_cgi_does() {
         let params = &[
@@ -366,7 +332,7 @@ mod tests {
     fn non_responder_role_is_refused() {
         let mut buf = Vec::new();
         let mut begin_body = [0u8; 8];
-        begin_body[0..2].copy_from_slice(&2u16.to_be_bytes()); // Authorizer
+        begin_body[0..2].copy_from_slice(&2u16.to_be_bytes());
         write_record(&mut buf, RecordType::BeginRequest, 1, &begin_body);
         let mut cursor = Cursor::new(buf);
         let err = read_request(&mut cursor, 0).unwrap_err();
@@ -385,8 +351,7 @@ mod tests {
         let mut begin_body = [0u8; 8];
         begin_body[0..2].copy_from_slice(&1u16.to_be_bytes());
         write_record(&mut buf, RecordType::BeginRequest, 1, &begin_body);
-        // A PARAMS record under a *different* request_id shows up
-        // before request 1's PARAMS stream even finishes.
+
         write_record(
             &mut buf,
             RecordType::Params,
@@ -415,26 +380,14 @@ mod tests {
 
     #[test]
     fn params_over_the_bound_is_rejected_before_being_retained() {
-        // Adversarial-review finding (F2): this loop originally checked
-        // its size bound *after* appending each record's content to the
-        // accumulator, unlike the STDIN loop just above, which already
-        // checked before. Bounded either way by a single record's own
-        // 65535-byte wire cap, so this needs *two* records' worth of raw
-        // filler to cross MAX_PARAMS_BYTES at all (content doesn't need
-        // to be well-formed name/value pairs — the bound check runs
-        // before `decode_name_value_pairs` is ever called). The first
-        // record is exactly 65535 bytes — a single FastCGI record's
-        // content length is a wire `u16`, so anything larger would
-        // silently wrap (65536usize as u16 == 0), turning an intended
-        // "huge record" into an empty end-of-stream marker instead; an
-        // earlier draft of this exact test hit precisely that bug.
+
         let mut buf = Vec::new();
         let mut begin_body = [0u8; 8];
         begin_body[0..2].copy_from_slice(&1u16.to_be_bytes());
         write_record(&mut buf, RecordType::BeginRequest, 1, &begin_body);
-        let filler = vec![b'x'; u16::MAX as usize]; // 65535, the max one record can carry
+        let filler = vec![b'x'; u16::MAX as usize];
         write_record(&mut buf, RecordType::Params, 1, &filler);
-        write_record(&mut buf, RecordType::Params, 1, b"yy"); // 65535 + 2 > MAX_PARAMS_BYTES (65536)
+        write_record(&mut buf, RecordType::Params, 1, b"yy");
 
         let mut cursor = Cursor::new(buf);
         let err = read_request(&mut cursor, 0).unwrap_err();

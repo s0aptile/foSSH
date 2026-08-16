@@ -1,57 +1,3 @@
-//! Client side of §2.1's human-operator challenge-response auth gate
-//! AND §2.6/§3.11's first-run SETUP flow — both halves of the one wire
-//! protocol `operator_auth_server.mli` documents over the same Unix
-//! domain socket. Wire-exact against that file, which is the
-//! authoritative spec; nothing here improvises framing it doesn't
-//! specify.
-//!
-//! The two flows are related but structurally different as clients:
-//! challenge-response (`authenticate`/`authenticate_at`) is reactive —
-//! connect, then respond to whatever the server sends. SETUP
-//! (`setup`/`setup_at`) is the one-time flow `wizard.rs` drives,
-//! submitting a token and a public key the caller already has in
-//! hand. Per the .mli, SETUP and the public-key submission that
-//! follows a `SETUP_OK` happen on *one* connection, bounded by the
-//! server's own connection-wide wall-clock deadline (10s by default —
-//! see `operator_auth_server.ml`'s `default_connection_timeout_seconds`).
-//! That is why `setup_at` takes the finished, ready-to-send public key
-//! material as a plain argument rather than exposing separate
-//! "submit token" / "submit key" network calls with a UI-driven pause
-//! in between: holding the socket open across however long an
-//! operator takes to paste a key or `wizard.rs` takes to run
-//! `gpg --quick-generate-key` would race that same server-side
-//! deadline for no protocol benefit — the .mli is explicit that no
-//! server-side state survives past one connection, so there's nothing
-//! to preserve by splitting the round trip. `wizard.rs` collects the
-//! token (read from disk) and the key material (pasted or generated)
-//! entirely locally first, with no socket open, then makes the one
-//! `setup_at` call once both are ready.
-//!
-//! Unix domain socket, not QUIC: see the .mli's own header comment
-//! (no X.509 identity for an operator client to pin; this gate
-//! authenticates by signature, not transport certificate).
-//! `watchdog_status.rs` is this crate's QUIC client for a different
-//! channel (§3.4, core<->watchdog) — a second, independent client for
-//! a second, independent channel, not a variant of it.
-//!
-//! No feature gate, unlike `watchdog_status.rs`'s `quic` (needed
-//! because `fossh-ipc` pulls in quiche's own BoringSSL build): this
-//! module's only dependencies are `std::os::unix::net` and shelling
-//! out to `gpg`, both already unconditional.
-//!
-//! `gpg` is looked up on `PATH` (`Command::new("gpg")`), not a
-//! hardcoded `/usr/bin/gpg` the way the OCaml side's `Subprocess`
-//! helper needs (`Unix.create_process` requires an explicit path;
-//! `std::process::Command` doesn't) — matches the Rust-side precedent
-//! already established in `fossh-fcgi/tests/quic_command_interop.rs`.
-//!
-//! If the operator's key needs a passphrase, `gpg`'s own `pinentry`
-//! handles that prompt. This module does nothing to suspend the TUI's
-//! raw/alternate-screen terminal mode first — a GUI pinentry is
-//! unaffected, but a curses pinentry sharing the same terminal as the
-//! still-active TUI is a real, separate concern this pass doesn't
-//! solve.
-
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
@@ -63,51 +9,10 @@ use zeroize::Zeroizing;
 
 const READ_WRITE_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Wall-clock budget for receiving *one* line, on top of the per-
-/// syscall `READ_WRITE_TIMEOUT` above. Adversarial review (real
-/// repro): `BufReader::read_line` loops internally over `Read::read()`
-/// without ever returning control between calls, so a peer dripping
-/// one byte every few seconds — each individual `read()` comfortably
-/// inside `READ_WRITE_TIMEOUT` — never trips the socket timeout at all
-/// and keeps `read_line` blocked indefinitely. This is the exact same
-/// bug class `operator_auth_server.ml`'s own comment (around its
-/// `read_until`) documents finding and fixing server-side; the client
-/// never got the equivalent fix until now. Since every caller of this
-/// module runs synchronously on the TUI's single-threaded blocking
-/// event loop, an unbounded hang here freezes the whole process —
-/// including leaving the terminal stuck in raw mode, since
-/// `ratatui::restore()` in `main.rs` never runs while this call never
-/// returns. `read_line_bounded` below closes this by reading raw
-/// bytes itself and checking a deadline between every individual
-/// `read()`, not by trusting a per-syscall timeout alone.
-///
-/// Computed fresh immediately before *each* `read_line_bounded` call,
-/// not once for a whole `authenticate_at`/`setup_at` call — the gap
-/// between reads can include a real, open-ended wait on `gpg`'s own
-/// interactive `pinentry` prompt (an operator typing a passphrase),
-/// which has nothing to do with network drip and must not eat into a
-/// budget meant to bound the *next* read.
 const READ_DEADLINE_BUDGET: Duration = Duration::from_secs(20);
 
-/// Also closes the sibling gap: none of this module's `read_line`
-/// calls previously capped line length the way the server's own
-/// `max_setup_command_len`/`max_public_key_len` do, so a peer that
-/// sends bytes quickly but never a `\n` could grow the client's buffer
-/// without limit. Generous relative to any real protocol line (the
-/// longest is `ENROLLED <fingerprint>`, a few dozen bytes) purely to
-/// stay far away from ever rejecting something real.
 const MAX_LINE_LEN: usize = 8192;
 
-/// Same discipline as `operator_auth_server.ml`'s own `read_until` (see
-/// that function's comment for the drip-attack reasoning this
-/// mirrors): reads raw bytes one at a time up to and including the
-/// next `\n`, checking `deadline` between every individual `read()`
-/// rather than trusting `READ_WRITE_TIMEOUT` alone to bound the whole
-/// line. Byte-at-a-time is deliberately simple rather than chunked —
-/// every real line this module ever reads is at most a few dozen
-/// bytes, nowhere near where per-syscall overhead would matter, unlike
-/// the server's own multi-hundred-KB key-block case that motivated its
-/// chunked O(n) rewrite.
 fn read_line_bounded(
     reader: &mut impl std::io::Read,
     deadline: std::time::Instant,
@@ -139,9 +44,7 @@ fn read_line_bounded(
                         .map_err(|e| format!("line was not valid UTF-8: {e}"));
                 }
             }
-            // A single per-syscall timeout on an otherwise-live
-            // connection isn't itself fatal -- only the overall
-            // `deadline` above is. Loop back and check it.
+
             Err(e)
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut =>
@@ -160,9 +63,6 @@ fn env_path(key: &str, default: &str) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(default))
 }
 
-/// Same env var name and default `watchdog/bin/main.ml`'s
-/// `start_operator_auth_server` reads for this same socket — both
-/// sides of one socket path must agree.
 pub fn socket_path() -> PathBuf {
     env_path(
         "FOSSH_OPERATOR_AUTH_SOCKET",
@@ -218,9 +118,6 @@ fn describe_connect_error(path: &Path, e: &std::io::Error) -> String {
     }
 }
 
-/// The .mli's own stated shape for a nonce: 64 lowercase hex chars.
-/// Checked before signing — a malformed NONCE line is a protocol
-/// error, never something silently signed as-is.
 fn looks_like_a_nonce(s: &str) -> bool {
     s.len() == 64
         && s.bytes()
@@ -232,13 +129,6 @@ enum FirstLine {
     Nonce(String),
 }
 
-/// Pure, socket-free parse of the server's first line, split out so
-/// the framing rule is unit-testable without a live listener. Strips
-/// only the single trailing '\n' the .mli documents each line as
-/// ending with — never a broader whitespace trim, which is exactly
-/// the class of same-format-different-parser divergence ADR-0050
-/// found for a different wire format (`command_client.rs`'s
-/// `ocaml_compatible_trim`).
 fn parse_first_line(line: &str) -> Result<FirstLine, AuthError> {
     if line == "NOT_ENROLLED\n" {
         return Ok(FirstLine::NotEnrolled);
@@ -254,7 +144,6 @@ fn parse_first_line(line: &str) -> Result<FirstLine, AuthError> {
     }
 }
 
-/// Same discipline as `parse_first_line`, for the server's final reply.
 fn parse_final_line(line: &str) -> Result<String, AuthError> {
     if line == "DENIED\n" {
         return Err(AuthError::Denied);
@@ -270,12 +159,6 @@ fn parse_final_line(line: &str) -> Result<String, AuthError> {
     }
 }
 
-/// `gpg --armor --detach-sign` over exactly `data`'s bytes — nothing
-/// prepended or appended, matching the .mli's explicit "not the
-/// trailing newline, not the NONCE prefix". `gnupghome_override` is
-/// for tests only (a throwaway `GNUPGHOME` with a real generated key);
-/// production calls always pass `None`, deferring to whatever
-/// `GNUPGHOME`/`~/.gnupg` the operator already has.
 fn sign_with_gpg(data: &str, gnupghome_override: Option<&Path>) -> Result<Vec<u8>, AuthError> {
     let mut cmd = Command::new("gpg");
     cmd.args(["--batch", "--armor", "--detach-sign"])
@@ -289,10 +172,6 @@ fn sign_with_gpg(data: &str, gnupghome_override: Option<&Path>) -> Result<Vec<u8
         .spawn()
         .map_err(|e| AuthError::GpgNotAvailable(e.to_string()))?;
 
-    // The nonce is a fixed 64 bytes — far under any OS pipe buffer, so
-    // writing it fully before reading stdout back is safe (unlike
-    // `watchdog/lib/subprocess.ml`'s background-thread write, needed
-    // there for genuinely large manifest bodies).
     child
         .stdin
         .take()
@@ -318,10 +197,6 @@ fn sign_with_gpg(data: &str, gnupghome_override: Option<&Path>) -> Result<Vec<u8
     Ok(output.stdout)
 }
 
-/// The real logic, parameterized on socket path and `GNUPGHOME` so
-/// tests never need to mutate this process's global environment
-/// (`cargo test` runs in parallel by default). `authenticate()` below
-/// is the only production entry point.
 pub(crate) fn authenticate_at(
     socket_path: &Path,
     gnupghome_override: Option<&Path>,
@@ -335,13 +210,6 @@ pub(crate) fn authenticate_at(
         .set_write_timeout(Some(READ_WRITE_TIMEOUT))
         .map_err(|e| AuthError::Protocol(format!("setting write timeout: {e}")))?;
 
-    // Not a `BufReader` -- `read_line_bounded` above reads raw bytes
-    // itself (that's the whole point, see its own doc comment), so
-    // wrapping in a second buffering layer would only add pointless
-    // indirection. Still a separate cloned-fd reader, not a mutable
-    // borrow of `stream`, so `stream` stays free to write the
-    // signature between the two reads — mirrors the OCaml server's
-    // own in_channel_of_descr/out_channel_of_descr split over one fd.
     let mut reader = stream
         .try_clone()
         .map_err(|e| AuthError::Protocol(format!("cloning the socket for reading: {e}")))?;
@@ -387,31 +255,16 @@ pub fn authenticate() -> Result<String, AuthError> {
     authenticate_at(&socket_path(), None)
 }
 
-// --- §2.6/§3.11's first-run SETUP flow ---
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum SetupError {
     Unreachable(String),
-    /// A fresh connection got `NONCE ...` instead of `NOT_ENROLLED` —
-    /// a key is already enrolled, so the SETUP path is (correctly, per
-    /// the .mli) permanently unreachable for the lifetime of this
-    /// install.
+
     AlreadyEnrolled,
-    /// `SETUP_DENIED`: wrong or expired token, or nothing currently
-    /// live server-side (never generated, already burned, or a key
-    /// got enrolled some other way in the meantime).
+
     TokenDenied,
-    /// Caught client-side, before ever touching the socket — no
-    /// `BEGIN`/`END PGP PUBLIC KEY BLOCK` markers found. Distinct from
-    /// `EnrollFailed` specifically so a bad paste never even costs a
-    /// round trip against the server's own 10s connection deadline.
+
     MalformedKey(String),
-    /// `ENROLL_FAILED <reason code>` — the .mli's fixed vocabulary
-    /// (`already_enrolled`, `invalid_key`, `multiple_keys`,
-    /// `internal_error`, `unterminated_key`). The token is *not*
-    /// burned on this path (server-side, per the .mli), so the same
-    /// still-valid token can be resubmitted with different key
-    /// material without restarting the wizard.
+
     EnrollFailed(String),
     GpgNotAvailable(String),
     GpgFailed(String),
@@ -450,11 +303,7 @@ impl std::fmt::Display for SetupError {
 impl std::error::Error for SetupError {}
 
 const PUBLIC_KEY_BEGIN_MARKER: &str = "-----BEGIN PGP PUBLIC KEY BLOCK-----";
-/// Matches `operator_auth_server.ml`'s own `public_key_end_marker` —
-/// what the server's `read_until` actually scans for to know the key
-/// block is complete. Checked client-side too (see `SetupError::MalformedKey`)
-/// so a bad paste fails instantly instead of only after the server's
-/// own read eventually times out.
+
 const PUBLIC_KEY_END_MARKER: &str = "-----END PGP PUBLIC KEY BLOCK-----";
 
 fn looks_like_armored_public_key(s: &str) -> bool {
@@ -494,13 +343,6 @@ fn parse_enroll_reply(line: &str) -> Result<String, SetupError> {
     )))
 }
 
-/// The real logic, parameterized on socket path so tests never need a
-/// live watchdog — same shape as `authenticate_at`. `token` is the
-/// plaintext read verbatim from the setup-token file (trimmed of its
-/// own trailing newline by the caller); `public_key_armored` is
-/// already-finished key material (pasted, or exported from a freshly
-/// generated key) — see this module's own doc comment for why both
-/// arrive ready-made rather than being collected mid-connection.
 pub(crate) fn setup_at(
     socket_path: &Path,
     token: &str,
@@ -526,7 +368,6 @@ pub(crate) fn setup_at(
         .set_write_timeout(Some(READ_WRITE_TIMEOUT))
         .map_err(|e| SetupError::Protocol(format!("setting write timeout: {e}")))?;
 
-    // Not a `BufReader` -- see `authenticate_at`'s identical comment.
     let mut reader = stream
         .try_clone()
         .map_err(|e| SetupError::Protocol(format!("cloning the socket for reading: {e}")))?;
@@ -591,23 +432,12 @@ pub fn setup(token: &str, public_key_armored: &str) -> Result<String, SetupError
     setup_at(&socket_path(), token, public_key_armored)
 }
 
-/// A freshly generated operator identity: the fingerprint and armored
-/// public key (sent to the watchdog), and the armored *secret* key
-/// (shown to the operator exactly once per §3.11's own wording — a
-/// human-readable backup of a key that otherwise only ever lives in
-/// the local GPG keyring).
 pub struct GeneratedOperatorKey {
     pub fingerprint: String,
     pub public_key_armored: String,
     pub private_key_armored: Zeroizing<String>,
 }
 
-/// What `gnupghome_override` resolves to, or `gpg`'s own real default
-/// otherwise: `$GNUPGHOME`, falling back to `$HOME/.gnupg` — the same
-/// precedence `gpg` itself uses. `None` only if neither can be
-/// determined (no override, no `$HOME`), in which case there's nothing
-/// sensible for `ensure_gnupghome_exists` to create and `gpg` is left
-/// to fail on its own terms.
 fn resolve_gnupghome(gnupghome_override: Option<&Path>) -> Option<PathBuf> {
     if let Some(p) = gnupghome_override {
         return Some(p.to_path_buf());
@@ -622,21 +452,6 @@ fn resolve_gnupghome(gnupghome_override: Option<&Path>) -> Option<PathBuf> {
         .map(|h| PathBuf::from(h).join(".gnupg"))
 }
 
-/// Adversarial-review-worthy real bug, caught by this module's own
-/// test suite rather than left for review to find: `gpg
-/// --list-secret-keys` on a `GNUPGHOME` that does not exist yet exits
-/// fatally (confirmed directly: exit code 2, "directory does not
-/// exist!") rather than reporting zero keys the way an *empty* keyring
-/// does — `gpg` only auto-creates the directory itself on some
-/// operations, not this one. `generate_fresh_operator_key_at`'s own
-/// before/after diff calls this before anything else, so a truly
-/// fresh operator who has never run `gpg` before (no `~/.gnupg` yet)
-/// would hit this as a hard, confusing failure on their very first use
-/// of the setup wizard — not a hypothetical, the exact shape "fresh
-/// install, first-run setup" is what this whole flow is for. Creating
-/// the directory ourselves first (0700, matching what `gpg` itself
-/// would set) closes this for both the override path (tests) and the
-/// real default path (production, `gnupghome_override: None`).
 fn ensure_gnupghome_exists(gnupghome_override: Option<&Path>) -> Result<(), SetupError> {
     let Some(dir) = resolve_gnupghome(gnupghome_override) else {
         return Ok(());
@@ -699,30 +514,6 @@ fn gpg_export_armored(
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// Generates a fresh Ed25519 signing-only keypair straight into
-/// `gnupghome_override` if given, or — the production path,
-/// `generate_fresh_operator_key`'s own public wrapper always passes
-/// `None` — into whatever `GNUPGHOME`/`~/.gnupg` the operator's own
-/// shell already has. Deliberately *not* a throwaway location: this
-/// module's own `sign_with_gpg` (the challenge-response half already
-/// wired) always signs from that same default keyring in production
-/// (`gnupghome_override: None`). A key generated anywhere else would
-/// get enrolled with the watchdog successfully and then be invisible
-/// to that later signing step — a self-inflicted lockout right after
-/// a successful setup, not a hypothetical.
-///
-/// The new key's fingerprint is found by diffing the keyring's own
-/// secret-key fingerprint set before and after `--quick-generate-key`,
-/// not by searching `--list-secret-keys <uid>` for `uid` — a fixed or
-/// even timestamped UID string is not guaranteed unique against a
-/// keyring that already holds an earlier, abandoned attempt (e.g. a
-/// key generated successfully but never enrolled because `SETUP_DENIED`
-/// followed), and picking the wrong match out of a multi-result search
-/// would silently enroll the *old* key's public half while signing
-/// later with whichever secret key `gpg` happens to prefer — a subtle,
-/// hard-to-diagnose mismatch. A before/after set difference can't make
-/// that mistake: it names the exact key this call produced, or fails
-/// honestly if it can't find exactly one.
 fn generate_fresh_operator_key_at(
     uid: &str,
     gnupghome_override: Option<&Path>,
@@ -730,17 +521,6 @@ fn generate_fresh_operator_key_at(
     generate_fresh_operator_key_at_inner(uid, gnupghome_override, false)
 }
 
-/// `forced_empty_passphrase_for_tests`: adds `--pinentry-mode loopback
-/// --passphrase ""` to the generate command. Test-only, and for a real
-/// reason beyond convenience: without it, `gpg-agent` tries to show a
-/// real interactive `pinentry` prompt, which has no controlling TTY to
-/// appear on in an automated test/CI process — confirmed directly,
-/// this hangs for `gpg-agent`'s own internal timeout (~60s+) before
-/// failing with `agent_genkey failed: Timeout`, not a fast, clean
-/// error. Production (`generate_fresh_operator_key`'s public wrapper)
-/// never sets this — a real operator's key generation should always
-/// go through real `pinentry`, the same as `sign_with_gpg`'s own
-/// module doc already establishes for signing.
 fn generate_fresh_operator_key_at_inner(
     uid: &str,
     gnupghome_override: Option<&Path>,
@@ -823,8 +603,6 @@ mod tests {
         dir
     }
 
-    // --- pure parsing tests, no gpg/socket involved ---
-
     #[test]
     fn not_enrolled_line_parses_cleanly() {
         assert!(matches!(
@@ -863,13 +641,6 @@ mod tests {
         assert!(parse_first_line("NONCE deadbeef\n").is_err());
     }
 
-    // --- read_line_bounded: the drip-attack fix an adversarial review
-    // found missing (real repro: a peer dripping bytes slower than
-    // READ_WRITE_TIMEOUT never trips the socket-level timeout, since
-    // each individual read() genuinely succeeds -- only an overall
-    // deadline checked between reads catches it). Uses tiny deadlines
-    // so this doesn't need to wait out the real 20s READ_DEADLINE_BUDGET.
-
     #[test]
     fn read_line_bounded_reads_a_normal_line_fine() {
         let dir = scratch_dir("read-line-bounded-normal");
@@ -892,12 +663,7 @@ mod tests {
 
     #[test]
     fn read_line_bounded_times_out_a_slow_drip_that_never_completes_a_line() {
-        // The actual bug: each individual byte arrives comfortably
-        // within any per-syscall socket timeout, so only an overall
-        // deadline checked between reads can catch this -- confirmed
-        // by using a socket with NO read timeout set at all here (this
-        // test is entirely about read_line_bounded's own deadline
-        // logic, not READ_WRITE_TIMEOUT).
+
         let dir = scratch_dir("read-line-bounded-drip");
         let socket_path = dir.join("mock.sock");
         let listener = UnixListener::bind(&socket_path).unwrap();
@@ -907,8 +673,7 @@ mod tests {
                 let _ = conn.write_all(b"x");
                 std::thread::sleep(Duration::from_millis(20));
             }
-            // Deliberately never sends '\n' -- the client must have
-            // already given up well before this returns.
+
         });
         let mut conn = UnixStream::connect(&socket_path).unwrap();
         let start = std::time::Instant::now();
@@ -976,8 +741,6 @@ mod tests {
             Err(AuthError::Protocol(_))
         ));
     }
-
-    // --- real gpg, real key, no socket: the signing half in isolation ---
 
     fn generate_test_key(gnupghome: &Path, uid: &str) -> String {
         std::fs::create_dir_all(gnupghome).unwrap();
@@ -1073,11 +836,6 @@ mod tests {
             .unwrap_or(false)
     }
 
-    /// Reads raw bytes from `conn` until the buffer contains the
-    /// armored signature's own end marker — the same substring-search
-    /// shape `operator_auth_server.ml`'s `read_signature_block` uses,
-    /// not a line-oriented read (the signature block itself contains
-    /// embedded newlines).
     fn read_signature_block(conn: &mut UnixStream) -> Vec<u8> {
         let marker = b"-----END PGP SIGNATURE-----";
         let mut buf = Vec::new();
@@ -1190,38 +948,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // --- real cross-language interop: the actual compiled
-    // fossh-watchdog binary, not this test's own belief about what it
-    // does. This crate is bin-only (no [lib] target), so this lives
-    // inline rather than as a separate `tests/*.rs` file the way
-    // `fossh-fcgi/tests/quic_command_interop.rs` (the pattern this
-    // mirrors) does for a crate that has one. Skips, rather than
-    // fails, if the OCaml side hasn't been built in this checkout —
-    // same reasoning as that file's own skip.
-
     fn watchdog_binary_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../watchdog/_build/default/bin/main.exe")
     }
 
-    /// `main.exe` is dynamically linked against `libquiche.so.0`
-    /// (§3.4's OCaml/ctypes QUIC channel), which lives in this vendor
-    /// dir in a dev checkout — the RPM install path
-    /// (`/usr/lib64/fossh/`, registered with `ldconfig` via
-    /// `fossh-libquiche.conf`) is what makes the bare binary
-    /// resolvable without this on an actually-installed target
-    /// machine, which a dev checkout is not. Without setting this,
-    /// `Command::new(&binary)` below fails at the dynamic linker
-    /// ("error while loading shared libraries: libquiche.so.0: cannot
-    /// open shared object file") before the OCaml `main()` ever runs —
-    /// confirmed as the real, sole cause of both interop tests below
-    /// timing out waiting for a socket that a process which never
-    /// actually started can never bind. Mirrors the exact
-    /// `LD_LIBRARY_PATH="$(pwd)/quic/vendor"` override
-    /// `packaging/rpm/fossh.spec`'s own `%check` already uses for
-    /// `dune test`, applied here for the same reason on the Rust side.
-    /// Whatever the spawned watchdog wrote to stderr, for inclusion in
-    /// an assertion message. A failing interop test should never make
-    /// the reader go and re-run it by hand to find out why.
     fn watchdog_stderr(path: &Path) -> String {
         match std::fs::read_to_string(path) {
             Ok(s) if s.trim().is_empty() => "(the watchdog wrote nothing to stderr)".to_string(),
@@ -1248,8 +978,6 @@ mod tests {
         String::from_utf8(output.stdout).unwrap()[..64].to_string()
     }
 
-    /// Mirrors `watchdog/lib/manifest.ml`'s own `render`/`sign` exactly
-    /// (`"<sha256hex>  <path>\n"` per entry, then a plain `--clearsign`).
     fn sign_manifest(gnupghome: &Path, fingerprint: &str, covered_paths: &[&str]) -> String {
         let body: String = covered_paths
             .iter()
@@ -1293,11 +1021,6 @@ mod tests {
 
         let dir = scratch_dir("real-interop");
 
-        // The watchdog's own manifest-signing key, pre-generated here
-        // (not left to the watchdog's own first-start
-        // Keypair.ensure_keypair) because this test needs the
-        // fingerprint before the watchdog starts, to sign a manifest
-        // that key will later verify.
         let watchdog_gnupghome = dir.join("watchdog-gnupghome");
         let watchdog_fpr = generate_test_key(&watchdog_gnupghome, "fossh-watchdog-interop-test");
 
@@ -1306,41 +1029,20 @@ mod tests {
         let manifest_path = dir.join("manifest.clearsigned");
         std::fs::write(&manifest_path, &manifest).unwrap();
 
-        // The operator's own real identity -- a throwaway keypair that
-        // never touches the watchdog's own gnupghome, mirroring how a
-        // real operator's key lives on their own machine, not the
-        // watchdog's install.
         let operator_gnupghome = dir.join("operator-gnupghome");
         let operator_fpr = generate_test_key(&operator_gnupghome, "operator <op@example.invalid>");
         let operator_pubkey = export_pubkey_armored(&operator_gnupghome, &operator_fpr);
 
-        // Never enrolled -- proves DENIED against the real server, not
-        // just OK.
         let impostor_gnupghome = dir.join("impostor-gnupghome");
         generate_test_key(&impostor_gnupghome, "impostor <impostor@example.invalid>");
 
-        // Reproduces `Operator_key.enroll`'s own on-disk shape
-        // (`operator_key.ml`, not modified by this pass) from outside
-        // it, the same way `quic_command_interop.rs` reproduces core's
-        // own TLS-identity/manifest shapes without calling into OCaml
-        // code directly: `operator-fingerprint.pin` holds the raw
-        // fingerprint bytes (no trailing newline --
-        // `persist_fingerprint` writes exactly the string),
-        // `operator-gnupghome/` is a fresh homedir holding only the
-        // operator's public key.
         let key_dir = dir.join("operator-key-dir");
         std::fs::create_dir_all(&key_dir).unwrap();
         std::fs::write(key_dir.join("operator-fingerprint.pin"), &operator_fpr).unwrap();
         import_pubkey(&key_dir.join("operator-gnupghome"), &operator_pubkey);
 
         let auth_socket = dir.join("operator-auth.sock");
-        // The watchdog's own stderr, kept rather than discarded. An
-        // earlier revision sent it to /dev/null, so when the child
-        // died during startup this test reported whatever the client
-        // happened to hit next -- a bare "Broken pipe" -- and the
-        // actual cause ("setpriv: setresuid failed") was invisible.
-        // Surfaced on every assertion below that can fail because the
-        // watchdog is not alive.
+
         let watchdog_log = dir.join("watchdog.stderr");
         let port = find_free_loopback_port();
 
@@ -1410,8 +1112,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // --- SETUP flow: pure parsing, no socket/gpg involved ---
-
     #[test]
     fn setup_ok_line_parses_cleanly() {
         assert_eq!(parse_setup_reply("SETUP_OK\n"), Ok(()));
@@ -1473,16 +1173,11 @@ mod tests {
 
     #[test]
     fn a_private_key_block_does_not_look_like_a_public_one() {
-        // Guards against a paste mistake (secret key pasted where the
-        // public half belongs) slipping past the marker check purely
-        // because it also says "PGP ... KEY BLOCK".
+
         assert!(!looks_like_armored_public_key(
             "-----BEGIN PGP PRIVATE KEY BLOCK-----\nsomething\n-----END PGP PRIVATE KEY BLOCK-----\n"
         ));
     }
-
-    // --- SETUP flow: client-side short-circuits that must never touch
-    // the socket at all ---
 
     #[test]
     fn setup_at_rejects_a_malformed_key_before_ever_connecting() {
@@ -1533,10 +1228,6 @@ mod tests {
         assert!(matches!(result, Err(SetupError::Unreachable(_))));
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    // --- SETUP flow: hand-rolled mock listener speaking the real wire
-    // protocol, same shape as this module's own challenge-response
-    // mock tests above ---
 
     fn read_setup_line(conn: &mut UnixStream) -> String {
         let mut buf = Vec::new();
@@ -1627,11 +1318,7 @@ mod tests {
             let (mut conn, _) = listener.accept().unwrap();
             conn.write_all(format!("NONCE {nonce}\n").as_bytes())
                 .unwrap();
-            // A correct client must never send a SETUP line here — see
-            // the assertion in the test body below, which proves it by
-            // reusing this same connection for a second read that
-            // would only ever get bytes if the client had (wrongly)
-            // kept talking.
+
         });
 
         let result = setup_at(&socket_path, "the-real-token", A_VALID_LOOKING_KEY);
@@ -1671,8 +1358,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // --- key generation: real gpg, isolated GNUPGHOME, no socket ---
-
     #[test]
     fn generate_fresh_operator_key_produces_a_real_usable_keypair() {
         let dir = scratch_dir("generate-fresh-key");
@@ -1702,13 +1387,6 @@ mod tests {
             "the private half must actually be exported, not left empty"
         );
 
-        // Prove it's a real, usable key, not just correctly-shaped
-        // text: sign with it (via this module's own sign_with_gpg,
-        // pointed at the same isolated homedir) and verify the
-        // signature against the exported public key from a
-        // completely separate gnupghome, the same round trip
-        // `authenticate_signs_exactly_the_nonce_hex_and_accepts_a_real_ok_reply`
-        // above already does for a key made by the test-only helper.
         let data = "cd".repeat(32);
         let sig = sign_with_gpg(&data, Some(&gnupghome)).expect("signing with the fresh key");
         let verify_home = dir.join("verify-gnupghome");
@@ -1724,10 +1402,7 @@ mod tests {
 
     #[test]
     fn generate_fresh_operator_key_finds_the_new_key_not_an_earlier_one_already_in_the_keyring() {
-        // Regression guard for exactly the bug this function's own doc
-        // comment explains avoiding: an earlier, abandoned attempt
-        // (key generated, never enrolled) must not cause a second
-        // generate call to report the OLD fingerprint.
+
         let dir = scratch_dir("generate-fresh-key-diff");
         let gnupghome = dir.join("gnupghome");
         let earlier_fpr = generate_test_key(&gnupghome, "abandoned-attempt <old@example.invalid>");
@@ -1749,13 +1424,7 @@ mod tests {
 
     #[test]
     fn generate_fresh_operator_key_reports_gpg_not_available_cleanly() {
-        // Same technique this crate would need for a genuinely-missing
-        // gpg: point PATH somewhere gpg doesn't exist. Skipped rather
-        // than asserted if PATH can't be overridden safely in this
-        // process (mirrors the unsafe-env-var-mutation caveat already
-        // documented in app.rs's own operator-auth test) -- actually,
-        // Command::env is per-child and does not mutate this process's
-        // environment, so it's safe here without any such caveat.
+
         let dir = scratch_dir("generate-fresh-key-no-gpg");
         let empty_path_dir = dir.join("empty-path");
         std::fs::create_dir_all(&empty_path_dir).unwrap();
@@ -1773,13 +1442,6 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    // --- SETUP flow: real cross-language interop against the actual
-    // compiled fossh-watchdog binary, mirroring
-    // authenticate_interops_with_the_real_compiled_watchdog_binary
-    // above but exercising the SETUP half instead of an already-
-    // enrolled key. Skips (not fails) if the OCaml side isn't built —
-    // same reasoning as that test. ---
 
     #[test]
     fn setup_interops_with_the_real_compiled_watchdog_binary() {
@@ -1802,23 +1464,12 @@ mod tests {
         let manifest_path = dir.join("manifest.clearsigned");
         std::fs::write(&manifest_path, &manifest).unwrap();
 
-        // No pre-enrolled key this time -- a genuinely fresh
-        // operator-key-dir the watchdog creates itself, exercising the
-        // real first-run path end to end rather than the already-
-        // enrolled shape the sibling authenticate(...) interop test
-        // covers.
         let key_dir = dir.join("operator-key-dir-fresh");
         let token_path = dir.join("setup-token");
         std::fs::write(&token_path, "the-real-setup-token-for-this-test").unwrap();
 
         let auth_socket = dir.join("operator-auth.sock");
-        // The watchdog's own stderr, kept rather than discarded. An
-        // earlier revision sent it to /dev/null, so when the child
-        // died during startup this test reported whatever the client
-        // happened to hit next -- a bare "Broken pipe" -- and the
-        // actual cause ("setpriv: setresuid failed") was invisible.
-        // Surfaced on every assertion below that can fail because the
-        // watchdog is not alive.
+
         let watchdog_log = dir.join("watchdog.stderr");
         let port = find_free_loopback_port();
 
@@ -1857,7 +1508,6 @@ mod tests {
         let operator_fpr = generate_test_key(&operator_gnupghome, "operator <op@example.invalid>");
         let operator_pubkey = export_pubkey_armored(&operator_gnupghome, &operator_fpr);
 
-        // Wrong token first -- must not consume/burn the real one.
         let wrong_token_result =
             setup_at(&auth_socket, "definitely-not-the-token", &operator_pubkey);
         assert_eq!(
@@ -1870,8 +1520,6 @@ mod tests {
             "a denied SETUP attempt must not burn the still-valid token file"
         );
 
-        // The real token, real armored public key -- the actual
-        // §3.11 happy path against a real, freshly-started watchdog.
         let enrolled_fpr = match setup_at(
             &auth_socket,
             "the-real-setup-token-for-this-test",
@@ -1895,17 +1543,6 @@ mod tests {
             "a successful enrollment must burn (delete) the setup token file"
         );
 
-        // Reuse-after-burn: a brand new connection must not let the
-        // same (now stale) token complete a second enrollment. This
-        // actually proves *two* independent things, and the real
-        // watchdog demonstrates the stronger one: the .mli says the
-        // SETUP path becomes permanently unreachable the moment a key
-        // is enrolled (a fresh connection gets NONCE, not
-        // NOT_ENROLLED, forever after), so this correctly comes back
-        // AlreadyEnrolled, not TokenDenied -- the token being burned
-        // is almost moot, since the endpoint itself is gone. A denied-
-        // but-still-SETUP-reachable path is exercised separately above
-        // (the wrong-token case, before enrollment).
         let replay_result = setup_at(
             &auth_socket,
             "the-real-setup-token-for-this-test",
@@ -1918,10 +1555,6 @@ mod tests {
              this one token -- a stronger guarantee than 'the token is burned' alone"
         );
 
-        // And the enrolled key must now actually work for the
-        // separate challenge-response flow -- proof this is the same
-        // real identity the rest of §2.1 authenticates against, not
-        // just a SETUP-flow-local success.
         match authenticate_at(&auth_socket, Some(&operator_gnupghome)) {
             Ok(token) => assert_eq!(token.len(), 64),
             Err(e) => {

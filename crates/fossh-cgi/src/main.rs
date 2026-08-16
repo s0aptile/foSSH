@@ -1,28 +1,3 @@
-//! §7.1: the RFC 3875 CGI entrypoint. Reads the request from the CGI
-//! environment + stdin, writes a minimal fixed response, and exits.
-//!
-//! Deliberately thin: env/stdin I/O here, all actual decision-making in
-//! `handler.rs` (unit-tested) and `fossh-ingest`. Panics abort the
-//! process (`panic = "abort"`, workspace-wide release profile — see
-//! DECISIONS.md's ADR on the `fossh-ffi` workspace split) rather than
-//! unwinding, which is this binary's version of S2's "process exit code"
-//! panic boundary: nothing is written to stdout until the very end, in
-//! one buffered write, so a panic before that point produces no output
-//! at all — never a partial or malformed response — and nothing panics
-//! prints goes anywhere but stderr, which the client never sees.
-//!
-//! **No `fossh.toml` here, on purpose** (see DECISIONS.md). This binary
-//! reads a handful of `FOSSH_*` environment variables directly — the
-//! same names `fossh_core::config::Config`'s env-override pass
-//! recognizes, with the same defaults `Config::default()` would give —
-//! rather than calling `Config::load()`. `fossh-cli` (the long-running,
-//! not-per-request commands) parses the actual TOML file; the operator
-//! points their webserver's CGI directives at the same values via env
-//! vars (`SetEnv`, `fastcgi_param`, etc.), which is the native way CGI
-//! processes receive configuration anyway. `Config::load()`'s file
-//! search + TOML parse is real, if small, work — needless on a path
-//! §7.1 explicitly budgets at < 5 ms p99.
-
 #![forbid(unsafe_code)]
 
 mod handler;
@@ -35,20 +10,6 @@ use fossh_ingest::forwarded;
 use fossh_ingest::geoip::GeoipReader;
 use handler::{CgiEnv, HandleParams};
 
-/// Caps every CGI env var this binary reads at `ENV_VALUE_MAX` — the
-/// same per-value ceiling `fossh-core::config` already applies to
-/// `FOSSH_*` config env vars (S4). Without this, a header-derived value
-/// (`HTTP_X_FOSSH_NONCE` in particular: it's concatenated and BLAKE3-hashed
-/// by `NonceCache::fingerprint`, and used in HMAC-style signature
-/// verification, both before auth can reject anything) would flow
-/// through with no size limit at all — unlike `fossh-fcgi`, which gets
-/// this for free from `protocol::MAX_PARAMS_BYTES` capping its whole
-/// PARAMS stream, `fossh-cgi` reads each var straight from the process
-/// environment with no such structural bound. An oversized value is
-/// treated as absent (same as truly missing) — S2's "fail closed":
-/// every caller already handles `None` as "this header wasn't
-/// presented," which is a safe, conservative reading of "value was too
-/// large to trust."
 fn env_var(key: &str) -> Option<String> {
     std::env::var(key)
         .ok()
@@ -81,17 +42,12 @@ fn read_cgi_env(trusted_hops: u8) -> CgiEnv {
 
 enum BodyOutcome {
     Body(Vec<u8>),
-    /// CONTENT_LENGTH missing/unparseable — §7.1: "Reject chunked /
-    /// missing length."
+
     MissingLength,
-    /// CONTENT_LENGTH parsed fine but exceeds S4's request-body cap.
+
     TooLarge,
 }
 
-/// Reads exactly `CONTENT_LENGTH` bytes from stdin — never more than S4's
-/// cap, and the cap is checked against the *declared* length before any
-/// allocation or read happens, so an attacker-controlled `CONTENT_LENGTH`
-/// can't be used to make this allocate something huge.
 fn read_body() -> BodyOutcome {
     let Some(declared) = env_var("CONTENT_LENGTH").and_then(|s| s.parse::<usize>().ok()) else {
         return BodyOutcome::MissingLength;
@@ -125,8 +81,6 @@ fn status_line(code: u16) -> &'static str {
     }
 }
 
-/// §7.1: the ingest response is always this exact shape — fixed headers,
-/// no body, ever (not even on error; the status code carries everything).
 fn write_response(status: u16, allow_origin: Option<&str>) {
     let mut out = String::new();
     out.push_str("Status: ");
@@ -140,17 +94,12 @@ fn write_response(status: u16, allow_origin: Option<&str>) {
         out.push_str("\r\n");
     }
     out.push_str("\r\n");
-    // One buffered write — see the module doc comment on why that matters
-    // for the panic boundary.
+
     let _ = io::stdout().write_all(out.as_bytes());
 }
 
 fn main() {
-    // §3.2: drop privileges before doing anything else — before reading
-    // a single CGI env var or touching the data/salt directories. Not
-    // being root at all is the common case and not an error; any other
-    // outcome means the drop was attempted and failed, which is fatal —
-    // this process must never continue running as root.
+
     if let Err(e) = privdrop::drop_to_service_user()
         && e != privdrop::PrivDropError::NotRoot
     {
@@ -158,9 +107,6 @@ fn main() {
         std::process::exit(1);
     }
 
-    // Off by default (see fossh_ingest::forwarded's module doc comment) — an
-    // operator opts in only when this instance genuinely sits behind
-    // something that relays on a real visitor's behalf.
     let trusted_hops =
         forwarded::trusted_hops_from_env(env_var("FOSSH_TRUST_FORWARDED_FOR").as_deref());
     let env = read_cgi_env(trusted_hops);
@@ -170,8 +116,7 @@ fn main() {
     let salt_dir = std::env::var_os("FOSSH_SALT_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/run/fossh"));
-    // Same env var names and defaults as `Config`'s override pass and
-    // `Config::default()` — see the module doc comment.
+
     let rate_limit_per_sec = env_var("FOSSH_RATE_LIMIT_PER_SEC")
         .and_then(|s| s.parse().ok())
         .unwrap_or(60);
@@ -186,11 +131,7 @@ fn main() {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    // Same `FOSSH_COUNTRY_DB` semantics as `Config`'s own env override
-    // (`CountryDb::from_str`) — see the module doc comment on why this
-    // binary parses env vars directly instead of calling `Config::load`.
-    // Opened once per process here, not once per lookup inside
-    // `geoip::resolve` — see that module's own doc comment.
+
     let country_db = env_var("FOSSH_COUNTRY_DB")
         .map(|v| CountryDb::from_str(&v))
         .unwrap_or_default();
@@ -217,9 +158,6 @@ fn main() {
         Vec::new()
     };
 
-    // §3.8: per-install data-encryption key for the spool. Loaded here
-    // (not before the `/healthz` early return above) so that route
-    // stays true to its own "no data_dir access at all" invariant.
     let data_key = match fossh_admin::data_key::load_or_generate(&data_dir.join(".data_key")) {
         Ok(key) => key,
         Err(e) => {

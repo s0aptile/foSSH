@@ -29,9 +29,6 @@ let () =
       check "calling ensure_keypair again on the same homedir returns the SAME fingerprint, not a new one"
         (first = second);
 
-      (* Confirmed independently of ensure_keypair's own return value:
-         only one secret key actually exists in the homedir after two
-         calls, not two. *)
       let secret_key_count =
         match Subprocess.run ~prog:"/usr/bin/gpg"
                 ~argv:[| "gpg"; "--batch"; "--homedir"; gnupghome; "--with-colons"; "--list-secret-keys" |]
@@ -65,11 +62,6 @@ let () =
       check "a different homedir gets a genuinely different key"
         (other_fpr <> first);
 
-      (* §2.4, extended: this key used to be generated with an empty
-         passphrase — real, but not what a public description of "your
-         OpenPGP key's passphrase" should have implied. These checks
-         prove the replacement is genuine protection, not just a file
-         that happens to exist alongside the key. *)
       let passphrase =
         match Keypair.ensure_passphrase gnupghome with
         | Ok p -> p
@@ -97,20 +89,6 @@ let () =
         | Ok signed -> String.length signed > 0
         | Error _ -> false);
 
-      (* A fresh, separate key for the wrong-passphrase check —
-         deliberately not the same key the "correct passphrase" check
-         just unlocked above. A real, reproduced gotcha found while
-         writing this exact test: gpg-agent caches an unlocked key's
-         session for a period after a successful sign, so a second
-         sign attempt against the *same* gnupghome — even with a
-         wrong passphrase — can spuriously succeed by riding that
-         cache rather than actually checking the passphrase given to
-         it. Confirmed directly (a standalone repro against a
-         never-before-unlocked key correctly failed with gpg's own
-         "Bad passphrase", exit 2) that the underlying protection
-         itself is real; the ordering above was the test bug, not
-         Keypair/Manifest. A fresh key sidesteps the cache entirely
-         rather than trying to defeat or reset gpg-agent mid-test. *)
       let wrong_pass_key = generate_key ~uid () in
       check "signing with the WRONG passphrase is genuinely rejected, not silently accepted"
         (match

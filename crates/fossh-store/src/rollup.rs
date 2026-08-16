@@ -1,8 +1,3 @@
-//! Hourly rollups: the incremental fold that keeps `hits`/`uniques`/
-//! `p50`/`p95` correct as events stream in bucket by bucket, and the
-//! grouped read path (§9) with k-anonymity (P6) enforced centrally here
-//! so no caller can accidentally bypass it.
-
 use std::collections::HashMap;
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -14,16 +9,8 @@ use fossh_core::ua::{BrowserFamily, DeviceClass, OsFamily};
 
 use crate::{Store, StoreError};
 
-/// `(uniques_blob, hits, value_sum, value_hist_blob, value_count)` — the
-/// state an existing rollup row's `SELECT` reads back before folding in
-/// one more event.
 type ExistingRollup = (Vec<u8>, i64, i64, Option<Vec<u8>>, i64);
 
-/// Folds one event into its `(site_id, bucket, kind, name_id, path_id,
-/// country, browser, os, device)` rollup row, creating it if this is the
-/// first event to land there. Read-modify-write; callers run this inside
-/// a transaction (see `events::record_event`) so it's atomic against a
-/// concurrent compactor.
 pub(crate) fn upsert_rollup(
     conn: &Connection,
     event: &Event,
@@ -134,8 +121,7 @@ pub enum GroupByField {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GroupRow {
-    /// One value per requested `group_by` field, same order. The
-    /// k-anonymity fold's synthetic row has `"(other)"` in every position.
+
     pub dims: Vec<(GroupByField, String)>,
     pub hits: i64,
     pub uniques: u64,
@@ -176,19 +162,7 @@ impl Accumulator {
 }
 
 impl Store {
-    /// Grouped read over `[from_ts, to_ts)` for one site (§9). Always
-    /// applies k-anonymity (P6): any resulting group whose estimated
-    /// unique-visitor count is below `k_anonymity` is folded into a single
-    /// `"(other)"` row instead of being returned on its own — enforced
-    /// here, in the one query engine every read path (CLI, and later the
-    /// local-only read API) goes through, so nothing can bypass it.
-    ///
-    /// `uniques`/`value_hist` are per-bucket sketches, not per-group ones
-    /// — grouping by fewer dimensions than the full rollup key means
-    /// merging multiple rows' sketches in-process, since a HyperLogLog or
-    /// histogram blob can't be `SUM`'d in SQL. `hits` is the one metric
-    /// that's correctly additive at the SQL level, but it's folded here
-    /// too so all four metrics come from a single consistent pass.
+
     pub fn query_rollup(
         &self,
         site_id: SiteId,
@@ -264,47 +238,8 @@ impl Store {
             }
         }
 
-        // Complementary suppression.
-        //
-        // Dropping the small groups and publishing the rest looks safe
-        // and is not, because the caller can ask a second question. The
-        // same range with no grouping is one group, whose uniques
-        // comfortably clear `k`, so it is published in full — and the
-        // difference between that total and the sum of the published
-        // groups is exactly what was withheld. Run for real against the
-        // compiled binaries before this existed: three paths, one of
-        // them with a single visitor, `k = 5`.
-        //
-        //     group by path -> /a  hits 6, uniques 6
-        //                      /b  hits 6, uniques 6
-        //     no grouping   ->      hits 13, uniques 13
-        //
-        // 13 − 6 − 6 = 1. Not "a group was hidden" — its exact hit count
-        // and exact unique count, which with one hidden group is one
-        // visitor's exact activity. That is the outcome the whole fold
-        // exists to prevent, recovered with one subtraction.
-        //
-        // So when the withheld remainder is itself too small to publish,
-        // published groups are pulled into it, smallest first, until it
-        // is large enough to stand on its own. What subtraction then
-        // recovers is a bucket that already appears in the output.
-        //
-        // Smallest first because it costs the least: the groups nearest
-        // the threshold are the ones whose absence says least about
-        // anyone. It is still a real cost — a query can return fewer
-        // rows than the data has — and that is the price of the
-        // guarantee rather than a defect.
-        //
-        // This closes subtraction against the total. It is not a defense
-        // against differencing in general: a caller who queries many
-        // overlapping ranges and dimensions and solves the resulting
-        // system can still learn more than any single answer discloses.
-        // Nothing short of a query budget or differential privacy fixes
-        // that, and THREAT_MODEL.md says so rather than implying this
-        // covers it.
         if other_present && (other.hll.estimate().round() as u64) < k {
-            // Descending, so `pop` — which takes from the end — yields
-            // the smallest remaining group each time.
+
             kept.sort_by(|(_, a), (_, b)| {
                 b.hll
                     .estimate()
@@ -314,9 +249,7 @@ impl Store {
             while (other.hll.estimate().round() as u64) < k {
                 match kept.pop() {
                     Some((_, acc)) => other.absorb(acc.hits, &acc.hll, &acc.hist),
-                    // Everything there was, together, is still under the
-                    // threshold: the whole result is too small to
-                    // publish at all.
+
                     None => return Ok(Vec::new()),
                 }
             }
@@ -346,16 +279,6 @@ mod tests {
     use fossh_core::ua::{BrowserFamily, DeviceClass, OsFamily};
     use fossh_core::validate::Name;
 
-    /// `visitor_seed` is turned into a *realistic* rotating-salt hash via
-    /// the real `hash_visitor` function, rather than being used directly
-    /// as a fake "hash". `Hll` assumes its input is already well-distributed
-    /// across the 64-bit space (it buckets on the top 12 bits) — small
-    /// sequential integers like `0, 1, 2` all share the same top bits and
-    /// collide into one HLL register, which looks like an implementation
-    /// bug (severe undercounting) but is really a violated precondition in
-    /// the test fixture. Distinct seeds here reliably produce distinct,
-    /// spread-out hashes because they vary the "client IP" `hash_visitor`
-    /// hashes over, the same way real distinct visitors would.
     fn event(site: u32, ts: i64, name: &str, path: &str, visitor_seed: u64) -> Event {
         let visitor_hash = fossh_core::visitor::hash_visitor(
             &[0x42; 32],
@@ -399,7 +322,7 @@ mod tests {
     fn uniques_reflect_distinct_visitors_not_hit_count() {
         let mut store = Store::open_in_memory().unwrap();
         for i in 0..10 {
-            // 3 distinct visitor hashes, 10 hits.
+
             store
                 .record_event(&event(1, 1_700_000_000 + i, "pageview", "/a", i as u64 % 3))
                 .unwrap();
@@ -507,14 +430,6 @@ mod tests {
         );
     }
 
-    /// The whole reason complementary suppression exists: the grouped
-    /// answer and the ungrouped answer must not be subtractable.
-    ///
-    /// Before it, this exact data gave `/a` = 6 and `/b` = 6 grouped,
-    /// 13 ungrouped, and `13 - 6 - 6 = 1` handed back the suppressed
-    /// group's exact hits and exact uniques — one visitor's activity,
-    /// recovered with one subtraction. Reproduced against the compiled
-    /// binaries, not only here.
     #[test]
     fn the_hidden_remainder_cannot_be_recovered_by_subtracting_from_the_total() {
         let mut store = Store::open_in_memory().unwrap();
@@ -532,7 +447,7 @@ mod tests {
                 ))
                 .unwrap();
         }
-        // The one that must never be identifiable.
+
         store
             .record_event(&event(1, 1_700_000_000, "pageview", "/c", 999))
             .unwrap();
@@ -556,8 +471,6 @@ mod tests {
             "the total minus the published groups must leave nothing: {grouped:#?}"
         );
 
-        // And the bucket that absorbed it must not be the group itself
-        // wearing a different label.
         let other = grouped
             .iter()
             .find(|r| r.dims[0].1 == "(other)")
@@ -573,8 +486,6 @@ mod tests {
         );
     }
 
-    /// When even everything together is under the threshold, the answer
-    /// is nothing — not "everything, since none of it can be split."
     #[test]
     fn a_dataset_too_small_to_publish_at_all_returns_no_rows() {
         let mut store = Store::open_in_memory().unwrap();
@@ -715,14 +626,9 @@ mod tests {
     #[test]
     fn time_range_filters_buckets() {
         let mut store = Store::open_in_memory().unwrap();
-        // Hour-aligned timestamps: the rollup bucket is `ts.div_euclid(3600)
-        // * 3600`, so an arbitrary non-aligned `ts` (e.g. 1_000_000_000,
-        // which is 2800s into its hour) lands in a bucket *before* `ts`
-        // itself — a query range starting exactly at such a `ts` would
-        // then miss it. Starting from an already-aligned timestamp sidesteps
-        // that and keeps the test about range filtering, not bucket math.
-        let bucket_a = 36_000i64; // 36_000 / 3600 == 10, exactly hour-aligned
-        let bucket_b = bucket_a + 7_200; // two hours later — outside the query window below
+
+        let bucket_a = 36_000i64;
+        let bucket_b = bucket_a + 7_200;
         store
             .record_event(&event(1, bucket_a, "pageview", "/a", 1))
             .unwrap();

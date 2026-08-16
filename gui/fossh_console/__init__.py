@@ -2,7 +2,6 @@
 
 __all__ = ["main"]
 
-
 def main(argv=None):
     from .app import main as _main
 

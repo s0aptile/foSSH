@@ -1,13 +1,3 @@
-//! Everything the console reads out of `fossh-store`, independent of
-//! the watchdog (whose live status is `watchdog_status.rs`'s job).
-//!
-//! The k-anonymity fold (P6) is not reimplemented here and must never
-//! be: it is enforced once, inside `fossh-store`'s query engine, so no
-//! read path can bypass it — see `THREAT_MODEL.md`'s "curious
-//! operator" entry. This module passes `k_anonymity` through and
-//! reports whether the result came back entirely folded, so the
-//! console can say so plainly instead of drawing an empty chart.
-
 use std::path::{Path, PathBuf};
 
 use fossh_core::types::SiteId;
@@ -35,10 +25,7 @@ pub struct QueryRow {
 #[derive(Debug)]
 pub struct QueryResult {
     pub rows: Vec<QueryRow>,
-    /// True when every row that came back is the synthetic `(other)`
-    /// fold — the normal case for a low-traffic site, and something the
-    /// console has to distinguish from "no data" so it can explain
-    /// rather than look broken.
+
     pub entirely_folded: bool,
 }
 
@@ -46,10 +33,6 @@ pub fn db_path(data_dir: &Path) -> PathBuf {
     data_dir.join("fossh.db")
 }
 
-/// One day back from `now` — matches how "today" is defined for a quick
-/// glance; not a replacement for an explicit range. `rem_euclid`, not
-/// `%`: Rust's `%` takes the sign of the dividend, so a negative `now`
-/// would overshoot past the day start instead of rounding down to it.
 fn start_of_today(now: i64) -> i64 {
     now - now.rem_euclid(86_400)
 }
@@ -66,9 +49,6 @@ pub fn field_name(f: GroupByField) -> &'static str {
     }
 }
 
-/// The console sends field names as strings; this is the only place
-/// they are turned back into the enum, so an unknown one is rejected
-/// once rather than silently ignored somewhere downstream.
 pub fn parse_field(name: &str) -> Option<GroupByField> {
     match name {
         "kind" => Some(GroupByField::Kind),
@@ -109,10 +89,7 @@ pub fn load_summary(
             )
             .map_err(|e| e.to_string())?;
         let hits_today: i64 = rows.iter().map(|r| r.hits).sum();
-        // Uniques don't sum across HyperLogLog buckets the way hits do
-        // — this is a display approximation (a sum of already-estimated
-        // per-kind counts), good enough for a glance, not a substitute
-        // for a real merged-sketch estimate.
+
         let uniques_today: u64 = rows.iter().map(|r| r.uniques).sum();
         out.push(SiteSummary {
             slug: site.slug,
@@ -190,8 +167,7 @@ mod tests {
 
     #[test]
     fn every_group_by_field_round_trips_through_its_wire_name() {
-        // A field that serialises to a name `parse_field` doesn't know
-        // would be a console request that silently can't be made.
+
         for f in [
             GroupByField::Kind,
             GroupByField::Name,
@@ -257,8 +233,7 @@ mod tests {
 
     #[test]
     fn querying_a_site_that_does_not_exist_says_so_instead_of_returning_nothing() {
-        // An empty result and a typo in the slug look identical in the
-        // console unless they are distinguished here.
+
         let dir = scratch_dir("missing-site");
         let err = query(&dir, "nope", 0, 1_700_000_000, &[GroupByField::Path], 5).unwrap_err();
         assert!(err.contains("nope"), "unhelpful error: {err}");
@@ -267,9 +242,7 @@ mod tests {
 
     #[test]
     fn an_empty_result_is_not_reported_as_entirely_folded() {
-        // `entirely_folded` drives a specific explanation in the
-        // console ("your traffic is below k"); showing it for a site
-        // with genuinely no events would be a lie.
+
         let dir = scratch_dir("empty-not-folded");
         {
             let key = fossh_admin::data_key::load_or_generate(&dir.join(".data_key")).unwrap();

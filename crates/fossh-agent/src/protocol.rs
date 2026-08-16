@@ -1,44 +1,10 @@
-//! The wire types `fossh-console` and this binary agree on.
-//!
-//! One JSON object per line, in both directions, over the agent's own
-//! stdin/stdout — no socket, no port, no listener. The console spawns
-//! this process as a child and owns both pipes for its lifetime, which
-//! is the entire access-control story: there is nothing here to
-//! authenticate to, because there is no way for a second process to
-//! reach it in the first place.
-//!
-//! Why a bridge process at all rather than reimplementing these
-//! surfaces in Python: every protocol this exposes already has exactly
-//! one hardened implementation (`operator_auth_client.rs`'s SETUP and
-//! challenge-response flows, `watchdog_status.rs`'s QUIC/mTLS status
-//! query, `fossh-store`'s k-anonymity fold), and this project's own
-//! history is unusually clear about what a *second* implementation of
-//! an already-working wire protocol costs — see ADR-0050's stream-ID
-//! bug and its `trim()` divergence, both interop-only bugs that
-//! neither side's own same-language test suite could ever have caught.
-//! A Python reimplementation would have been a third. See ADR-0061.
-//!
-//! ## Error codes
-//!
-//! `code` is a small, closed, stable set specifically so the console
-//! can branch on it without matching on human-readable text. `message`
-//! is for humans and may change freely; `code` may not.
-
 use serde::{Deserialize, Serialize};
 
-/// Bumped only on a breaking change to the shapes in this file. The
-/// console checks this at handshake time and refuses to run against a
-/// mismatch rather than guessing — a version-skewed pair (a
-/// freshly-updated console against an agent still on disk from the
-/// previous RPM, mid-upgrade) is a real situation, and failing it
-/// loudly is much cheaper than debugging a silently absent field.
 pub const PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Debug, Deserialize)]
 pub struct Request {
-    /// Echoed back verbatim on the matching response. The console
-    /// correlates by this rather than by arrival order, since it is
-    /// free to have several requests outstanding.
+
     pub id: u64,
     pub method: String,
     #[serde(default)]
@@ -61,27 +27,19 @@ pub struct ErrorBody {
     pub message: String,
 }
 
-/// The closed set referenced in this module's own doc comment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
-    /// Malformed frame, unknown method, or parameters that don't fit
-    /// the method's shape. Always the caller's fault, never retryable
-    /// unchanged.
+
     BadRequest,
-    /// The thing named exists in the protocol but not on this install.
+
     NotFound,
-    /// Reachable in principle, not right now: watchdog down, feature
-    /// not compiled into this build, database not initialised yet.
-    /// The console shows these as a state, not as a failure.
+
     Unavailable,
-    /// A real, deliberate refusal by something that checked: a denied
-    /// setup token, a rejected signature. Distinct from `Unavailable`
-    /// because retrying identically will not help, and distinct from
-    /// `BadRequest` because the request itself was well-formed.
+
     Denied,
-    /// The operation would clobber or duplicate existing state.
+
     Conflict,
-    /// Anything this process failed to do for its own reasons.
+
     Internal,
 }
 
@@ -156,9 +114,7 @@ mod tests {
 
     #[test]
     fn a_success_frame_carries_no_error_key_at_all() {
-        // The console distinguishes the two shapes by `ok`, but a
-        // stray `"error": null` would still be a lie in the transcript
-        // and in any log an operator pastes into a bug report.
+
         let line =
             serde_json::to_string(&Response::success(7, serde_json::json!({"a": 1}))).unwrap();
         assert!(line.contains("\"ok\":true"));
@@ -196,9 +152,7 @@ mod tests {
 
     #[test]
     fn a_request_without_params_still_parses() {
-        // The console omits `params` entirely for no-argument methods
-        // rather than sending `{}`; `#[serde(default)]` is what makes
-        // that legal, and this pins it.
+
         let req: Request = serde_json::from_str(r#"{"id":1,"method":"agent.hello"}"#).unwrap();
         assert_eq!(req.id, 1);
         assert!(req.params.is_null());
@@ -206,9 +160,7 @@ mod tests {
 
     #[test]
     fn a_response_serialises_to_exactly_one_line() {
-        // The whole framing depends on this: `serde_json` does not
-        // emit newlines in compact mode, and every string it writes is
-        // escaped, so no field value can smuggle a frame boundary.
+
         let line = serde_json::to_string(&Response::failure(
             1,
             MethodError::internal("first line\nsecond line"),

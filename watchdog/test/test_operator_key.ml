@@ -1,13 +1,6 @@
 open Fossh_watchdog_lib
 open Test_helpers
 
-(* Test_helpers.generate_key produces a signing-only primary key, no
-   subkey -- the one shape that happened to work even with the
-   pre-fix, buggy fpr:-line-counting logic. Adds a real encryption
-   subkey, the normal default shape for any real-world OpenPGP
-   identity (gpg --full-gen-key, GPA, Kleopatra, Thunderbird all
-   produce this), to actually exercise the case adversarial review
-   found broken. *)
 let add_encryption_subkey (k : key) : unit =
   let (_ : string) =
     run_gpg_ok ~gnupghome:k.gnupghome
@@ -51,10 +44,6 @@ let () =
             | _ -> false);
           check "the rejected import did not partially enroll" (Operator_key.enrolled_fingerprint ~dir:other_dir = Ok None);
 
-          (* Regression test for a real, adversarial-review-found bug:
-             a rejected multi-key import used to poison the shared
-             gnupghome permanently -- retrying with just ONE of the
-             two keys, on the exact same dir, used to still fail. *)
           (match Operator_key.enroll ~dir:other_dir (export_pubkey second) with
           | Error e ->
               failwith
@@ -66,11 +55,6 @@ let () =
 
           cleanup second);
 
-      (* Regression test: a real key with a subkey (the normal shape
-         for an actual operator's existing identity, not the
-         signing-only shape Test_helpers.generate_key happens to
-         produce) must enroll successfully, not be misread as
-         "multiple keys". *)
       let with_subkey_dir = mkdtemp () in
       Fun.protect
         ~finally:(fun () -> rm_rf with_subkey_dir)
@@ -91,16 +75,6 @@ let () =
             | Error _ -> true
             | Ok _ -> false));
 
-      (* Regression test for a real, adversarial-review-found bug (see
-         enroll's own comment above the tmp_gnupghome path): the temp
-         gnupghome used to be named from Unix.getpid () alone, which
-         collides across concurrent THREADS of the same process (they
-         share one pid), even though it happens to be unique across
-         concurrent PROCESSES. A countdown latch (not a hopeful sleep)
-         forces several real threads to call enroll on the same dir at
-         the same literal instant -- before the fix, every one of them
-         corrupted each other's in-flight gnupghome and failed with
-         garbled gpg errors; none cleanly won, none cleanly lost. *)
       let racing_dir = mkdtemp () in
       Fun.protect
         ~finally:(fun () -> rm_rf racing_dir)

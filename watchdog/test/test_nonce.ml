@@ -26,15 +26,10 @@ let () =
     (not (Nonce.constant_time_equal a (a ^ "0")));
   check "constant_time_equal: empty strings equal each other" (Nonce.constant_time_equal "" "");
 
-  (* Entropy failures are raised as a documented exception rather than
-     escaping as Sys_error/End_of_file, and the fd is closed on every
-     path. Guarded once at the source rather than at each of the seven
-     call sites -- the codebase had already been bitten five times by
-     the wrap-every-caller convention. *)
   check "a huge request fails cleanly rather than escaping as Sys_error"
     (match Nonce.read_random_bytes max_int with
      | exception Nonce.Entropy_unavailable _ -> true
-     | exception Out_of_memory -> true (* Bytes.create refuses first; also clean *)
+     | exception Out_of_memory -> true
      | exception Invalid_argument _ -> true
      | _ -> false);
   check "repeated reads do not leak file descriptors"
@@ -43,11 +38,6 @@ let () =
      let after = Sys.readdir "/proc/self/fd" |> Array.length in
      after <= before + 2);
 
-  (* GOODSIG carries only a 64-bit long key id; VALIDSIG carries the
-     full 160-bit fingerprint. Pinning against the former is pinning
-     against 64 bits, which is short enough to manufacture a collision
-     against. parse must report the full fingerprint when gpg gives
-     it, which it does for every good signature. *)
   let full = "305885A276CF155B94AD29FC35715893BCA6F73D" in
   let real_gpg_output =
     "[GNUPG:] NEWSIG\n\

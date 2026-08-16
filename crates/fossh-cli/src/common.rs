@@ -1,5 +1,3 @@
-//! Shared helpers used across subcommands.
-
 use std::path::{Path, PathBuf};
 
 use fossh_core::config::Config;
@@ -25,16 +23,6 @@ pub fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
-/// Shared by `doctor` and `glibc-check` (§2.5/§3.1) so the two never
-/// drift out of sync on how `ldd --version` gets turned into a
-/// pass/fail — they did drift once already: both call sites used to
-/// spawn `ldd` and inspect `output.stdout` without ever checking
-/// `output.status`, so an `ldd` that *failed* (non-zero exit — e.g. a
-/// half-broken glibc install, exactly the kind of host this check
-/// exists to catch) but still printed something matching
-/// `MAJOR.MINOR`-shaped text on stdout would parse as a clean pass.
-/// Caught in adversarial review before either call site shipped; fixed
-/// once, here, instead of twice.
 pub fn detect_glibc_version() -> Result<(u32, u32), String> {
     let output = std::process::Command::new("ldd")
         .arg("--version")
@@ -57,12 +45,6 @@ pub fn detect_glibc_version() -> Result<(u32, u32), String> {
         .ok_or_else(|| format!("could not parse `ldd --version` output: {stdout:?}"))
 }
 
-/// §3.8: loads the same per-install data-encryption key
-/// `fossh-cgi`/`fossh-fcgi` seal spool frames and the database under —
-/// one secret shared by every on-disk use, not a separate one per
-/// purpose. Process-fatal on failure, matching `open_store`'s own
-/// posture below: every subcommand that reaches this needs a real key
-/// to do anything useful, so there's nothing safer to fall back to.
 pub fn load_data_key(data_dir: &Path) -> zeroize::Zeroizing<[u8; 32]> {
     match fossh_admin::data_key::load_or_generate(&data_dir.join(".data_key")) {
         Ok(key) => key,

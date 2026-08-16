@@ -1,29 +1,5 @@
 #!/bin/sh
-# Builds fossh's RPM + SRPM via a real `rpmbuild`, with `_topdir` and
-# `_buildhost` overridden so neither the real build machine's home-
-# directory path nor its hostname leaks into package metadata —
-# rpmbuild's own defaults do both otherwise, confirmed real (13+
-# `strings` hits from a bare `rpmbuild -bb`/`-bs` against this exact
-# spec, on this exact machine — see DECISIONS.md ADR-0054). Neither
-# leak is `packaging/rpm/fossh.spec`'s own fault; both are generated
-# by rpmbuild itself, driven entirely by these two defaults. Run this
-# instead of a bare `rpmbuild -ba` against that spec.
-#
-# `--nodeps`: this dev environment's Rust is rustup-managed, not the
-# system `cargo`/`rust` RPMs the spec's own `BuildRequires` names —
-# expected here, not a bug in the spec (see dev/DURUM.md). A real
-# Fedora build host (or Koji/mock) with those RPMs installed should
-# build without it.
-#
-# If `ocaml-ctypes`/`ocaml-findlib` aren't installed as system RPMs
-# (true on this dev machine as of this writing), rpmbuild's `%build`
-# needs the local opam switch's env (OCAMLPATH etc.) to find them —
-# the spec's own `%build` deliberately doesn't source it itself, since
-# a real Fedora build host is expected to have the system packages
-# instead. Reproduced for real once already: a first run of this exact
-# script, without this block, failed `dune build` inside rpmbuild's
-# isolated %build with "Library integers not found" — rpmbuild's child
-# process doesn't inherit an opam env nobody activated in its parent.
+
 set -eu
 
 project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -34,38 +10,12 @@ if [ -d "$project_root/watchdog/_opam" ]; then
   eval "$(cd "$project_root/watchdog" && opam env)"
 fi
 
-# mktemp -d, not "$project_root/dist/rpmbuild": this project's own
-# checkout necessarily lives under the real user's home directory, so
-# ANY path built from $project_root still contains the real username
-# as a substring — the exact false-clean mistake already made and
-# caught once (see DECISIONS.md ADR-0054's own first verification
-# attempt). A plain /tmp entry has no such risk.
 topdir=$(mktemp -d)
 trap 'rm -rf "$topdir"' EXIT
 mkdir -p "$topdir/SOURCES" "$topdir/SPECS" "$topdir/BUILD" "$topdir/RPMS" "$topdir/SRPMS" "$topdir/BUILDROOT"
 
 echo "build-release-rpm: building the source tarball" >&2
-# HEAD alone would silently drop uncommitted tracked-file changes from the
-# tarball (reproduced here: HEAD was still 0.1.0-alpha.1 while the working
-# tree, and this spec copy below, were already 0.1.2-alpha.1).
-#
-# `git stash create` (the original approach here) snapshots the current
-# INDEX+worktree into a real commit object without touching HEAD, the
-# real index, or the stash list -- but it fundamentally cannot include
-# untracked files, a real git limitation, not a flag we forgot. Found by
-# this project's first real clean-VM install verification: new untracked
-# files (watchdog/lib/operator_key.{ml,mli}, operator_auth_server.{ml,mli})
-# were silently missing from the tarball while already-tracked files
-# elsewhere referenced them, so rpmbuild's own isolated %build failed with
-# "Unbound module Operator_auth_server" -- a real, reproduced bug this
-# workaround-in-a-workaround exists to close.
-#
-# Fixed with a scratch index (GIT_INDEX_FILE pointed at a throwaway file,
-# never the real one) seeded from HEAD then `add -A`'d exactly the way a
-# real `git add -A` would -- picking up untracked files while still
-# respecting .gitignore, so PUBLISH.md/private-onlyauthor/ etc. still
-# correctly never enter this snapshot. Still never touches HEAD, the real
-# index, or the stash list.
+
 scratch_index=$(mktemp)
 trap 'rm -rf "$topdir" "$scratch_index"' EXIT
 GIT_INDEX_FILE="$scratch_index" git -C "$project_root" read-tree HEAD
@@ -104,17 +54,6 @@ fi
 
 mkdir -p "$project_root/dist"
 
-# Clear the old RPMs before copying the new ones in. Without this,
-# dist/ accumulates: a subpackage that changed architecture (the
-# console and selfheal became `noarch` in 0.2.0) leaves its previous
-# x86_64 build sitting alongside the new one, and anything that later
-# globs dist/*.rpm -- scripts/build-release-zip.sh does exactly that --
-# bundles both, or bundles the stale one. That is the same
-# "stale artifact shipped inside a freshly built zip" failure ADR-0058
-# already caught once by hand; this is the mechanical fix for it.
-#
-# Only *.rpm is removed, and only from dist/. Anything else an operator
-# has put there is left alone.
 rm -f "$project_root"/dist/*.rpm
 
 find "$topdir/RPMS" "$topdir/SRPMS" -name '*.rpm' -exec cp {} "$project_root/dist/" \;

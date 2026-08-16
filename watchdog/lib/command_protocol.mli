@@ -1,11 +1,3 @@
-(* See command_protocol.ml's own header comment for the full design
-   rationale. The one thing that lives here rather than there:
-   [session_token] is exposed *without* its constructor, so the only
-   way any caller outside this module can produce a value of this
-   type is [issue_session] — a wire-parsed [string] can never be
-   silently substituted for one, which is the actual, compiler-
-   enforced point of this file existing at all. *)
-
 type session_token
 
 type command = Restart | Reload | Status
@@ -21,8 +13,6 @@ val command_of_name : string -> command option
 val describe_child_state : child_state -> string
 val describe_tamper_state : tamper_state -> string
 
-(** Raises [Session.Too_many_sessions] once the live-session cap is
-    reached. Use [issue_session_opt] where that must not be fatal. *)
 val issue_session : ?lifetime_seconds:float -> unit -> session_token
 
 val issue_session_opt : ?lifetime_seconds:float -> unit -> session_token option

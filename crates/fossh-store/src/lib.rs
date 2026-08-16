@@ -1,13 +1,4 @@
 #![forbid(unsafe_code)]
-//! foSSH SQLite storage (§6, M2): schema + migrations, interning, hourly
-//! rollups (with mergeable HLL/histogram sketches so `uniques`/`p50`/`p95`
-//! survive raw-row deletion), retention/vacuum, and a k-anonymity-enforcing
-//! grouped query engine.
-//!
-//! `rusqlite`'s `bundled` feature vendors and compiles SQLite itself, so
-//! the only unsafe code anywhere near this crate is inside that C library
-//! and the `libsqlite3-sys` bindings — none of it in `fossh-store`
-//! (`#![forbid(unsafe_code)]`, S1).
 
 mod events;
 mod intern;
@@ -29,21 +20,13 @@ pub use sites::Site;
 
 const REQUIRED_MODE: u32 = 0o600;
 
-/// Owns the SQLite connection. All storage operations are methods on this
-/// type, split across sibling modules (`events`, `rollup`, `retention`,
-/// `sites`) via separate `impl Store` blocks.
 #[derive(Debug)]
 pub struct Store {
     conn: rusqlite::Connection,
 }
 
 impl Store {
-    /// S8: "DB and spool files `0600`... Refuse to start if permissions
-    /// are wider; print the exact `chmod` to run." An *existing* file
-    /// with wider permissions is refused outright, not silently
-    /// tightened: silently rewriting permissions on a file that already
-    /// violated the invariant could paper over a real misconfiguration
-    /// (or tampering) instead of surfacing it.
+
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         ensure_file_ready(path)?;
         let conn = rusqlite::Connection::open(path)?;
@@ -67,7 +50,7 @@ impl Store {
             Err(e) if is_not_a_database(&e) => {}
             Err(e) => return Err(e.into()),
         }
-        drop(conn); // release the file before the plaintext probe reopens it
+        drop(conn);
 
         let plain_conn = rusqlite::Connection::open(path)?;
         if probe(&plain_conn).is_err() {
@@ -83,8 +66,6 @@ impl Store {
         Self::from_connection(conn)
     }
 
-    /// An in-process, non-persistent store — used by tests and by any
-    /// caller that wants the schema/query logic without a file on disk.
     pub fn open_in_memory() -> Result<Self, StoreError> {
         let conn = rusqlite::Connection::open_in_memory()?;
         Self::from_connection(conn)
@@ -193,7 +174,7 @@ fn migrate_plaintext_to_encrypted(
         .unwrap_or(0);
 
     let tmp_path = temp_migration_path(path);
-    let _ = fs::remove_file(&tmp_path); // clear out any dead attempt from a previous crashed run
+    let _ = fs::remove_file(&tmp_path);
     fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -242,11 +223,9 @@ pub enum StoreError {
     Io(std::io::Error),
     Validation(fossh_core::validate::ValidationError),
     Json(serde_json::Error),
-    /// A blob in `uniques` or `value_hist` didn't deserialize to a
-    /// sketch of the expected fixed size — the schema invariant that
-    /// should prevent this is exactly what `schema::tests` checks.
+
     CorruptSketch,
-    /// S8: an existing DB file's permissions are wider than `0600`.
+
     PermissionsTooOpen {
         path: PathBuf,
         mode: u32,
@@ -341,7 +320,7 @@ mod tests {
         let path = scratch_path("reopen");
         let _ = fs::remove_file(&path);
         Store::open(&path).unwrap();
-        Store::open(&path).unwrap(); // must not error the second time
+        Store::open(&path).unwrap();
         fs::remove_file(&path).ok();
     }
 
@@ -603,7 +582,7 @@ mod tests {
             let path = scratch_path("reopen-encrypted");
             cleanup(&path);
             Store::open_encrypted(&path, &KEY_A).unwrap();
-            Store::open_encrypted(&path, &KEY_A).unwrap(); // must not error the second time
+            Store::open_encrypted(&path, &KEY_A).unwrap();
             cleanup(&path);
         }
     }

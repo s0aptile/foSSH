@@ -1,17 +1,3 @@
-//! §3.8: encrypts spool frames at rest with ChaCha20-Poly1305 (AEAD),
-//! keyed by the per-install data-encryption key `fossh-admin::data_key`
-//! manages. A fresh random 12-byte nonce is generated per call and
-//! prepended to the returned ciphertext — safe to reuse the same key
-//! across every frame this way, since each frame gets its own nonce
-//! (the one thing that must never repeat under a given key for this
-//! construction to hold).
-//!
-//! Deliberately not exposed as a general-purpose "encrypt anything"
-//! API — `seal`/`open` exist for exactly one caller (`spool.rs`) and
-//! one shape of data (an already-length-framed, CRC-guarded payload),
-//! not as reusable crypto plumbing for anything else this crate might
-//! grow later.
-
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 
@@ -20,13 +6,6 @@ use crate::random::read_random_bytes;
 
 const NONCE_LEN: usize = 12;
 
-/// Encrypts `plaintext` under `key`, returning `nonce ‖ ciphertext‖tag`.
-/// Infallible in practice for this crate's inputs (a fixed 32-byte key,
-/// a fresh 12-byte nonce, no associated data, plaintext far under
-/// ChaCha20-Poly1305's ~64 GiB limit) — the one documented failure
-/// mode `aead::Aead::encrypt` has doesn't apply here, so this panics
-/// rather than threading a practically-unreachable error type through
-/// every caller.
 pub fn seal(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, IngestError> {
     let nonce_bytes = read_random_bytes(NONCE_LEN)?;
     let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
@@ -41,12 +20,6 @@ pub fn seal(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, IngestError> {
     Ok(out)
 }
 
-/// Inverse of `seal`. Any failure — too short to even contain a nonce,
-/// wrong key, or a tampered/corrupt ciphertext — is reported as
-/// `IngestError::CorruptFrame`: from the verifier's side, "the wrong
-/// key" and "someone altered this" are indistinguishable and must fail
-/// the same uniform way (S2), the same reasoning this codebase already
-/// applies to signature verification elsewhere (`fossh_ingest::auth`).
 pub fn open(key: &[u8; 32], sealed: &[u8]) -> Result<Vec<u8>, IngestError> {
     if sealed.len() < NONCE_LEN {
         return Err(IngestError::CorruptFrame);

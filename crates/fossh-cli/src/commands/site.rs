@@ -1,5 +1,3 @@
-//! `fossh site create|list|disable|enable|rotate-key` (§9).
-
 use fossh_core::base32;
 
 use crate::args::{comma_list, flag_value, has_flag, positional, wants_help};
@@ -18,10 +16,7 @@ SUBCOMMANDS:\n    \
 Manage sites, their bearer write keys, and their signed-mode signing keys.";
 
 pub fn run(args: &[String]) -> i32 {
-    // Only intercepts `fossh site --help`/`-h` itself — once a
-    // subcommand is chosen, that subcommand's own `wants_help` check
-    // handles it, so e.g. `site create --help` shows create's usage,
-    // not this generic one.
+
     if matches!(
         args.first().map(String::as_str),
         Some("--help") | Some("-h")
@@ -49,12 +44,6 @@ fn print_new_key(slug: &str, write_key: &[u8; 32]) {
     println!("  {key}");
 }
 
-/// Generates a fresh Ed25519 keypair for signed-mode auth (§8, B-03 fix:
-/// the server stores only `verifying_key`, never anything the private
-/// key could be recovered from — see `fossh-ingest`'s `auth.rs` module
-/// doc comment). Returns the raw 32-byte verifying key alongside the
-/// `SigningKey` so callers can both persist the public half and print
-/// the private half in the same operation.
 fn generate_signing_keypair() -> Result<(ed25519_dalek::SigningKey, [u8; 32]), String> {
     let seed_bytes = fossh_ingest::random::read_random_bytes(32).map_err(|e| e.to_string())?;
     let mut seed = [0u8; 32];
@@ -82,11 +71,7 @@ fn create(args: &[String]) -> i32 {
         eprintln!("usage: fossh site create <slug> [--allow name,name] [--public-key]");
         return 2;
     };
-    // `fossh-store` itself has no slug format/emptiness check (it's a
-    // free-text column) — an empty or whitespace-only slug reaches here
-    // easily by accident (an unset shell variable in a provisioning
-    // script: `fossh site create "$SLUG"`) and would otherwise silently
-    // create a site with no usable name.
+
     if slug.trim().is_empty() {
         eprintln!("fossh site create: <slug> must not be empty");
         return 2;
@@ -126,12 +111,7 @@ fn create(args: &[String]) -> i32 {
         unix_now(),
         public,
     ) {
-        // `fossh-store`'s error is a thin wrapper over the raw sqlite
-        // message ("sqlite: UNIQUE constraint failed: sites.slug") —
-        // meaningless to an operator who doesn't know the schema.
-        // Recognized by string match rather than by depending on
-        // `rusqlite` directly here just to match on its error kind (out
-        // of `fossh-cli`'s dependency budget, S11, for one message).
+
         if e.to_string().contains("UNIQUE constraint failed") {
             eprintln!(
                 "fossh site create: a site named '{slug}' already exists — use `fossh site rotate-key {slug}` for a new write key, or pick a different slug"
@@ -198,12 +178,6 @@ fn enable(args: &[String]) -> i32 {
     set_disabled(args, false)
 }
 
-/// `disable` and `enable` are the same operation with the flag flipped,
-/// including the part that is easy to forget: the on-disk site cache
-/// that `fossh-cgi` reads must be rewritten, or the ingest path goes on
-/// answering from the old state until something else happens to touch
-/// it. Writing them as one function is how the second one cannot drift
-/// from the first.
 fn set_disabled(args: &[String], disabled: bool) -> i32 {
     let verb = if disabled { "disable" } else { "enable" };
     let usage = format!("usage: fossh site {verb} <slug>");
@@ -305,14 +279,6 @@ fn rotate_key(args: &[String]) -> i32 {
     0
 }
 
-/// Rotates only a site's signed-mode verifying key — independent of
-/// `rotate_key`'s bearer write key, since B-03's fix made these two
-/// separate credentials (`fossh-store::Store::set_sign_pubkey`). Also
-/// the migration path for a site created before this fix: those sites
-/// have no `sign_pubkey` on file yet (signed-mode auth for them fails
-/// closed — see `fossh-ingest::ingest::authenticate`), and this command
-/// is how an operator opts them in without disturbing their existing
-/// bearer write key or anything already integrated against it.
 fn rotate_signing_key(args: &[String]) -> i32 {
     if wants_help(args) {
         println!("usage: fossh site rotate-signing-key <slug>");

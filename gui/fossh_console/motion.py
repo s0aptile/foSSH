@@ -23,25 +23,21 @@ from typing import Callable
 
 from gi.repository import Gtk
 
-
 class Duration:
     """Milliseconds. Three steps, deliberately — a scale with a value
     for every occasion is a scale nobody applies consistently."""
 
-    #: A control acknowledging a press; a reveal toggling.
     MICRO = 150
-    #: The default. View changes, rows appearing, values counting.
-    STANDARD = 250
-    #: Something large moving, or a number crossing a big distance.
-    LARGE = 400
 
+    STANDARD = 250
+
+    LARGE = 400
 
 def animations_enabled() -> bool:
     settings = Gtk.Settings.get_default()
     if settings is None:
         return False
     return settings.get_property("gtk-enable-animations")
-
 
 def _bezier(p1x: float, p1y: float, p2x: float, p2y: float) -> Callable[[float], float]:
     """A cubic Bézier easing curve through (0,0), (p1), (p2), (1,1).
@@ -56,7 +52,7 @@ def _bezier(p1x: float, p1y: float, p2x: float, p2y: float) -> Callable[[float],
     """
 
     def sample(a: float, b: float, t: float) -> float:
-        # Horner form of the Bézier polynomial with P0=0 and P3=1.
+
         c = 3.0 * a
         bb = 3.0 * (b - a) - c
         aa = 1.0 - c - bb
@@ -99,14 +95,9 @@ def _bezier(p1x: float, p1y: float, p2x: float, p2y: float) -> Callable[[float],
 
     return ease
 
-
-#: Fast out of the gate, long gentle settle. The curve to use for
-#: anything arriving or growing — it reads as the thing having weight.
 EASE_OUT = _bezier(0.32, 0.72, 0.0, 1.0)
 
-#: Symmetric. For something moving between two places it is already in.
 EASE_IN_OUT = _bezier(0.65, 0.0, 0.35, 1.0)
-
 
 def animate(
     widget: Gtk.Widget,
@@ -146,7 +137,6 @@ def animate(
 
     widget.add_tick_callback(tick)
 
-
 def format_count(value: float) -> str:
     """Whole numbers, grouped, with no decimal tail mid-animation.
 
@@ -155,7 +145,6 @@ def format_count(value: float) -> str:
     animation read as a number changing rather than as a glitch.
     """
     return f"{int(round(value)):,}"
-
 
 def count_to(
     label: Gtk.Label,

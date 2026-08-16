@@ -1,5 +1,3 @@
-//! `fossh init [--dir PATH]` (§9).
-
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -31,10 +29,6 @@ pub fn run(args: &[String]) -> i32 {
         return 1;
     }
 
-    // §3.8: the per-install data-encryption key, generated here on a
-    // brand-new install if it doesn't exist yet — the same key
-    // `fossh-cgi` already generates first for the spool, shared (not
-    // duplicated) with the database below.
     let data_key = match fossh_admin::data_key::load_or_generate(&dir.join(".data_key")) {
         Ok(key) => key,
         Err(e) => {
@@ -43,9 +37,6 @@ pub fn run(args: &[String]) -> i32 {
         }
     };
 
-    // Opening the store runs its schema migration as a side effect, and
-    // is also where a brand-new `fossh.db` first gets encrypted under
-    // the key above.
     if let Err(e) = fossh_store::Store::open_encrypted(&db_path(&dir), &data_key) {
         eprintln!("fossh init: initializing database: {e}");
         return 1;
@@ -58,11 +49,7 @@ pub fn run(args: &[String]) -> i32 {
             config_path.display()
         );
     } else {
-        // `country_db = "none"` (not the `"builtin"` shown in §10's
-        // example) because no offline country database is embedded in
-        // this build yet — see DECISIONS.md. `"none"` is explicitly a
-        // valid, supported configuration (§10), so this is an honest
-        // default, not a placeholder.
+
         let config = Config {
             data_dir: dir.clone(),
             country_db: CountryDb::None,

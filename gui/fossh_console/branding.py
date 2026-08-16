@@ -37,33 +37,16 @@ import functools
 
 from gi.repository import Gtk, Pango, PangoCairo
 
-#: The wordmark's own face, and only the wordmark's.
-#:
-#: Bitcount Grid Single is a dot-matrix display family (Google Fonts,
-#: OFL-1.1). It suits a logotype for infrastructure software and suits
-#: nothing else in this window — a paragraph of body text set in it
-#: would be unreadable — so it is deliberately kept off `UI_FAMILIES`
-#: and applied to the two runs of the mark and nowhere else.
-#:
-#: Not packaged by Fedora. Absent, the mark falls through to the UI
-#: face and still reads correctly: the construction that carries it is
-#: the weight contrast and the optical size difference between `fo`
-#: and `SSH`, not the face itself. That was the point of building the
-#: mark out of type rather than out of a picture.
 WORDMARK_FAMILIES = [
     "Bitcount Grid Single",
     "Bitcount Grid Double",
     "Bitcount Prop Single",
 ]
 
-#: Preference order. The last entry in each list is always something
-#: that exists on any desktop.
 UI_FAMILIES = ["Roboto", "Inter", "Cantarell", "Noto Sans", "Sans"]
 MONO_FAMILIES = ["Roboto Mono", "Source Code Pro", "DejaVu Sans Mono", "Monospace"]
-#: Google's icon set, `material-icons-fonts` on Fedora. Absent is fine
-#: — `iconography.py` falls back to the theme's symbolic icons.
-ICON_FAMILIES = ["Material Symbols Outlined", "Material Icons"]
 
+ICON_FAMILIES = ["Material Symbols Outlined", "Material Icons"]
 
 @functools.lru_cache(maxsize=1)
 def _installed_families() -> set[str]:
@@ -73,7 +56,6 @@ def _installed_families() -> set[str]:
         return set()
     return {family.get_name().lower() for family in font_map.list_families()}
 
-
 def resolve_family(candidates: list[str]) -> str:
     installed = _installed_families()
     for name in candidates:
@@ -81,14 +63,11 @@ def resolve_family(candidates: list[str]) -> str:
             return name
     return candidates[-1]
 
-
 def ui_family() -> str:
     return resolve_family(UI_FAMILIES)
 
-
 def mono_family() -> str:
     return resolve_family(MONO_FAMILIES)
-
 
 def wordmark_family() -> str | None:
     """The display face for the mark, or `None` to use the UI face."""
@@ -98,7 +77,6 @@ def wordmark_family() -> str | None:
             return name
     return None
 
-
 def icon_family() -> str | None:
     installed = _installed_families()
     for name in ICON_FAMILIES:
@@ -106,15 +84,8 @@ def icon_family() -> str | None:
             return name
     return None
 
-
-#: The TUI set its chrome title to "foSSH ◆ local admin console". The
-#: diamond is the one piece of ornament this project has ever used, so
-#: it comes across intact — dropping it in favour of a plain dot or
-#: nothing would be a small change that makes the product feel like a
-#: different one.
 DIAMOND = "◆"
 TAGLINE = "local admin console"
-
 
 def wordmark_markup(size_pt: float, *, accent_hex: str | None = None) -> str:
     """Pango markup for `foSSH` at a given size.
@@ -127,12 +98,7 @@ def wordmark_markup(size_pt: float, *, accent_hex: str | None = None) -> str:
     family_attr = f' face="{face}"' if face else ""
 
     lower_size = int(size_pt * Pango.SCALE)
-    # 0.86: what makes cap height read as level with the lowercase
-    # ascender for a humanist sans. Capitals set at the same nominal
-    # size as lowercase always look too large beside them, because cap
-    # height exceeds x-height — matching them by measurement is what
-    # makes a mixed-case wordmark look wrong in a way most people feel
-    # without being able to name.
+
     caps_size = int(size_pt * 0.86 * Pango.SCALE)
 
     colour = f' foreground="{accent_hex}"' if accent_hex else ""
@@ -141,7 +107,6 @@ def wordmark_markup(size_pt: float, *, accent_hex: str | None = None) -> str:
         f'<span{family_attr} size="{caps_size}" weight="800" '
         f'letter_spacing="-512"{colour}>SSH</span>'
     )
-
 
 class Wordmark(Gtk.Box):
     """The mark as a widget: `foSSH ◆ local admin console`.
@@ -159,9 +124,7 @@ class Wordmark(Gtk.Box):
         self.add_css_class("wordmark")
 
         name = Gtk.Label()
-        # No inline colour: `.wordmark-name` in `style.css` supplies it
-        # from the palette, so it follows light/dark instead of being
-        # baked into markup that only suits one of them.
+
         name.add_css_class("wordmark-name")
         name.set_markup(wordmark_markup(size_pt))
         name.set_use_markup(True)

@@ -1,8 +1,3 @@
-//! A single, shared source of randomness: `/dev/urandom`. Used for the
-//! daily salt (P2) and, by `fossh-cli`, for generating write keys (§8)
-//! and their signing nonces where needed — one implementation, not one
-//! per caller.
-
 use std::fs::File;
 use std::io::Read;
 
@@ -29,8 +24,7 @@ mod tests {
 
     #[test]
     fn two_calls_are_not_identical() {
-        // Not a statistical randomness test — just a sanity check that
-        // this isn't reading all-zero or a fixed buffer.
+
         let a = read_random_bytes(32).unwrap();
         let b = read_random_bytes(32).unwrap();
         assert_ne!(*a, *b);

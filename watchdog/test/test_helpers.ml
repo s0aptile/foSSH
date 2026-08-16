@@ -1,8 +1,3 @@
-(* Shared test scaffolding: fresh, throwaway GNUPGHOMEs with real
-   Ed25519 keys generated in them — every test in this suite exercises
-   the real `gpg`/`gpgv` binaries against real keys, not a mock or a
-   hand-rolled stand-in for OpenPGP semantics. *)
-
 open Fossh_watchdog_lib
 
 let mkdtemp () =
@@ -31,15 +26,6 @@ let run_gpg_ok ~(gnupghome : string) (args : string list) : string =
 
 type key = { gnupghome : string; fingerprint : string; passphrase : string }
 
-(* Delegates to the real product code (Keypair.ensure_keypair) rather
-   than duplicating gpg key-generation logic here — every test that
-   calls [generate_key] (nearly all of them, across every test file in
-   this suite) now exercises the exact function real watchdog startup
-   will call, not a parallel test-only reimplementation of it. Fetches
-   the real passphrase too (Keypair.ensure_passphrase, same idempotent
-   shape — reads back what ensure_keypair already generated) since
-   Manifest.sign now needs one for every real signing key, tests
-   included. *)
 let generate_key ?(uid = "test <test@example.invalid>") () : key =
   let gnupghome = mkdtemp () in
   match Keypair.ensure_keypair ~gnupghome ~uid with
@@ -52,10 +38,6 @@ let generate_key ?(uid = "test <test@example.invalid>") () : key =
 let export_pubkey (k : key) : string =
   run_gpg_ok ~gnupghome:k.gnupghome [ "--export"; k.fingerprint ]
 
-(* Imports [pubkey_binary] into a fresh homedir and returns its path
-   (caller must [rm_rf] it) — used wherever a test needs a verifier
-   whose keyring state is independent of the signer's own homedir,
-   e.g. "this verifier only ever saw the already-revoked key". *)
 let fresh_homedir_with_key (pubkey_binary : string) : string =
   let homedir = mkdtemp () in
   Tempfile.with_contents pubkey_binary (fun path ->
@@ -63,14 +45,6 @@ let fresh_homedir_with_key (pubkey_binary : string) : string =
       ());
   homedir
 
-(* Revokes [k]'s key in place (its own homedir). GnuPG prefixes the
-   auto-generated revocation certificate's armor header with a colon
-   (`:-----BEGIN PGP...`) specifically so it can never be imported by
-   accident — real, deliberate GnuPG safety behavior, confirmed by
-   reading the certificate file's own explanatory comment, not assumed
-   — so this strips exactly that one leading colon before importing,
-   the same manual step a human following GnuPG's own instructions
-   would take. *)
 let revoke_in_place (k : key) : unit =
   let rev_path = Filename.concat k.gnupghome "openpgp-revocs.d" in
   let rev_file =
@@ -109,15 +83,6 @@ let detach_sign (k : key) (data : string) : string =
 
 let cleanup (k : key) : unit = rm_rf k.gnupghome
 
-(* A real countdown latch, not a sleep-based stagger: every
-   participating thread calls [arrive_and_wait l n], blocking until
-   all [n] have arrived, then all are released together. A sleep-based
-   stagger only makes overlapping execution *likely*; this makes every
-   participant's post-latch work start from the same instant, every
-   run -- the difference that actually found the real thread-collision
-   bug in Operator_key.enroll's temp-gnupghome naming (see
-   test_operator_key.ml and test_setup_token.ml's own latch-based
-   scenarios), which two-threads-and-hope testing had not caught. *)
 type latch = { mutex : Mutex.t; cond : Condition.t; mutable arrived : int }
 
 let make_latch () : latch = { mutex = Mutex.create (); cond = Condition.create (); arrived = 0 }
@@ -129,17 +94,6 @@ let arrive_and_wait (l : latch) (n : int) : unit =
   else while l.arrived < n do Condition.wait l.cond l.mutex done;
   Mutex.unlock l.mutex
 
-(* Deterministic, in-process fd-exhaustion fault injection — the same
-   real trigger this project has already found and fixed one Sys_error
-   escape with (Nonce.generate's own open_in_bin "/dev/urandom", per
-   DECISIONS.md: "reproduced directly under a real ulimit -n 256").
-   `dup`ing one already-open fd is far cheaper than repeatedly opening a
-   real path, and doesn't need an external `ulimit` wrapper process (a
-   plain [Unix.putenv "TMPDIR" ...] mid-process was tried and confirmed
-   NOT to work for this purpose: [Filename.get_temp_dir_name] reads the
-   environment once, cached for the life of the process, not on every
-   call — confirmed directly against the stdlib before settling on this
-   approach). Returns the fds to pass to [release_exhausted_fds]. *)
 let exhaust_fds () : Unix.file_descr list =
   let base = Unix.openfile "/dev/null" [ Unix.O_RDONLY ] 0 in
   let acquired = ref [ base ] in

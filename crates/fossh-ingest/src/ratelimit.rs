@@ -1,17 +1,10 @@
-//! S10: per-site rate limiting. Token bucket, default 60 events/s burst
-//! 600, keyed by `site_id` via one state file per site. Same file-backed
-//! (not mmap'd) approach as `auth::NonceCache` — see the crate-level doc
-//! comment for why. A plain read-then-write-back under concurrent CGI
-//! processes gives exactly the "no lock, tolerate ±1 slop" behavior S10
-//! asks for.
-
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
 use crate::IngestError;
 
-const STATE_BYTES: usize = 16; // 8-byte f64 token count + 8-byte i64 last-refill timestamp
+const STATE_BYTES: usize = 16;
 
 pub struct TokenBucket {
     path: PathBuf,
@@ -28,10 +21,6 @@ impl TokenBucket {
         }
     }
 
-    /// Attempts to consume one token. `Ok(true)` = allowed; `Ok(false)` =
-    /// bucket empty (caller responds `429`, drops the event, and counts
-    /// it in an internal `dropped_ratelimit` counter — S10's exact
-    /// wording — which is the ingest pipeline's job, not this type's).
     pub fn try_consume(&self, now: i64) -> Result<bool, IngestError> {
         let open_opts = || {
             let mut o = OpenOptions::new();
@@ -196,13 +185,13 @@ mod tests {
     #[test]
     fn tokens_refill_over_time() {
         let path = scratch_path("refill");
-        let bucket = TokenBucket::new(path.clone(), 10, 5); // 10/s, burst 5
+        let bucket = TokenBucket::new(path.clone(), 10, 5);
         let now = 1_700_000_000;
         for _ in 0..5 {
             assert!(bucket.try_consume(now).unwrap());
         }
         assert!(!bucket.try_consume(now).unwrap());
-        // One second later, 10 tokens worth of refill (capped at burst=5) should be available.
+
         assert!(bucket.try_consume(now + 1).unwrap());
         std::fs::remove_file(&path).ok();
     }
@@ -210,11 +199,10 @@ mod tests {
     #[test]
     fn refill_never_exceeds_burst_cap() {
         let path = scratch_path("cap");
-        let bucket = TokenBucket::new(path.clone(), 1_000_000, 3); // huge refill rate, tiny burst
+        let bucket = TokenBucket::new(path.clone(), 1_000_000, 3);
         let now = 1_700_000_000;
         assert!(bucket.try_consume(now).unwrap());
-        // A long time later, the bucket must still be capped at `burst`,
-        // not overflow to something absurd.
+
         for i in 0..3 {
             assert!(
                 bucket.try_consume(now + 1_000_000).unwrap(),

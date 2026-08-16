@@ -1,15 +1,4 @@
 #!/bin/sh
-# Proves scripts/check-identity-hygiene.sh actually catches something,
-# rather than trusting a clean run against the real repo at face value
-# — the same "deliberate-failure test" pattern §17 already requires
-# for the SQL-concatenation grep gate, applied here per §19.4.12's
-# explicit "prove the gate works with a deliberate-failure test."
-#
-# Builds a throwaway git repo with a deliberately bad commit (a real-
-# looking author identity, a real-shaped home path, and an unquoted
-# $0aptile in a .sh file) and asserts the gate fails on it — then
-# does the same for a clean fixture and asserts the gate passes.
-# Touches nothing in the real repository.
 
 set -eu
 
@@ -57,10 +46,7 @@ cat > bad.sh <<'EOF'
 echo "author: \$0aptile"
 EOF
 git add -A
-# --reset-author: plain `--amend` preserves the *original* author
-# identity by default (only the message changes) — without this flag
-# the fixture would still fail on author identity alone, which would
-# be a bug in this test harness, not a real finding about the gate.
+
 git commit -q --amend --reset-author -m "cleaned fixture commit"
 
 if "$gate"; then

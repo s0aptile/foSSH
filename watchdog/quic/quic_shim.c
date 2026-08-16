@@ -5,10 +5,6 @@
 #include <string.h>
 #include <sys/socket.h>
 
-/* Fills `storage` with a real `sockaddr_in`/`sockaddr_in6` built by
- * `inet_pton` (never hand-assembled byte-by-byte) and returns its
- * length, or 0 if `ip_str` does not parse as an address of the
- * requested family. */
 static socklen_t fill_sockaddr(struct sockaddr_storage *storage, int family,
                                 const char *ip_str, uint16_t port) {
   memset(storage, 0, sizeof(*storage));

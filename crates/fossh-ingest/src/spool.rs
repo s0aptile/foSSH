@@ -1,29 +1,3 @@
-//! §7.1 spool: length-prefixed, CRC32'd frames appended to a spool file
-//! with a single `write()` call, atomic across concurrent CGI processes up
-//! to the size POSIX/Linux actually guarantee that for. Frame layout
-//! (little-endian): `[u32 payload_len][u32 crc32(payload)][payload]`.
-//! `payload` is a compact hand-rolled binary encoding of an `Event` — not
-//! JSON, since a frame is written on every request and read back by the
-//! compactor, and JSON's self-describing overhead buys nothing here.
-//!
-//! POSIX only guarantees a single `write()` to be atomic (indivisible
-//! against other writers) up to `PIPE_BUF` (4 KiB on Linux) — and even
-//! that guarantee is written for pipes/FIFOs; Linux extends the same
-//! practical behavior to a regular file opened `O_APPEND` for writes this
-//! small. A single event's frame is comfortably inside that bound. S4's
-//! batch cap (64 events, each up to ~5 KB with a full 16-property
-//! payload) is not, and nothing can make an above-`PIPE_BUF` write
-//! atomic against POSIX's own rules. This module always issues exactly
-//! one `write()` regardless of frame size — best atomicity for the
-//! overwhelmingly common single-small-event case, and a short write
-//! surfaces as `IngestError::Io`, never a silently truncated frame.
-//!
-//! `write()` (not `write_all()`) is what makes this a single syscall:
-//! `std::fs::File`'s `Write::write` on Unix is a thin wrapper over one
-//! `write(2)` call, whereas `write_all` loops until the buffer is
-//! exhausted. That's the whole reason to call `write` directly here and
-//! treat a short return as an error instead of retrying it away.
-
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -35,17 +9,10 @@ use fossh_core::validate::{Key, Name, Val};
 
 use crate::IngestError;
 
-/// §7.1: "Spool files rotate at 8 MiB."
 pub const SPOOL_ROTATE_BYTES: u64 = 8 * 1024 * 1024;
 
-const HEADER_LEN: usize = 8; // u32 payload_len + u32 crc32, both little-endian
+const HEADER_LEN: usize = 8;
 
-/// Standard reflected CRC-32 (IEEE 802.3 polynomial, `0xEDB88320`) —
-/// bit-by-bit, no lookup table. Frames are small (a handful of KB at
-/// most) and written/read once each, so the ~8x slowdown against a
-/// table-driven implementation is irrelevant; the table would be the only
-/// "dependency-shaped" chunk of this module, and it's not needed. Verified
-/// against the standard `"123456789"` → `0xCBF4_3926` conformance vector.
 pub fn crc32(data: &[u8]) -> u32 {
     let mut crc: u32 = 0xFFFF_FFFF;
     for &byte in data {
@@ -88,8 +55,6 @@ fn need(pos: usize, n: usize, len: usize) -> Result<(), IngestError> {
     }
 }
 
-/// Encodes one already-validated `Event` into a spool payload (the part
-/// after the `[len][crc]` header — `append_frame` adds that).
 pub fn encode_event(event: &Event) -> Vec<u8> {
     let mut out = Vec::with_capacity(128);
     out.extend_from_slice(&event.site_id.get().to_le_bytes());
@@ -112,7 +77,7 @@ pub fn encode_event(event: &Event) -> Vec<u8> {
         None => out.push(0),
     }
 
-    out.extend_from_slice(event.country.as_str().as_bytes()); // always exactly 2 ASCII bytes
+    out.extend_from_slice(event.country.as_str().as_bytes());
     out.push(event.browser.as_u8());
     out.push(event.os.as_u8());
     out.push(event.device.as_u8());
@@ -132,7 +97,7 @@ pub fn encode_event(event: &Event) -> Vec<u8> {
         None => out.push(0),
     }
 
-    out.push(event.props.len() as u8); // S4 bounds this to <= 16 well before encoding
+    out.push(event.props.len() as u8);
     for (k, v) in &event.props {
         write_str(&mut out, k.as_str());
         write_str(&mut out, v.as_str());
@@ -140,9 +105,6 @@ pub fn encode_event(event: &Event) -> Vec<u8> {
     out
 }
 
-/// Inverse of `encode_event`. Fails closed (S2) on any structural
-/// inconsistency — a spool frame that doesn't decode cleanly is treated
-/// the same as a CRC mismatch, not partially trusted.
 pub fn decode_event(buf: &[u8]) -> Result<Event, IngestError> {
     let mut pos = 0usize;
 
@@ -242,9 +204,6 @@ pub fn decode_event(buf: &[u8]) -> Result<Event, IngestError> {
     })
 }
 
-/// Path of the per-spool-dir advisory lock file `append_frame` and
-/// `compact::drain_site_spool` both take, in shared/exclusive mode
-/// respectively, around the sections that touch `current.bin`'s identity.
 fn lock_path(dir: &Path) -> std::path::PathBuf {
     dir.join("spool.lock")
 }
@@ -257,16 +216,6 @@ pub(crate) fn open_lock_file(dir: &Path) -> std::io::Result<File> {
         .open(lock_path(dir))
 }
 
-/// Appends one event to `dir/current.bin` as a single `write()` call
-/// (see the module doc comment). Rotates `current.bin` to a
-/// timestamp-named file first if it's already at or past
-/// `SPOOL_ROTATE_BYTES` — rotation itself is a `rename()`, not a write to
-/// the file being appended, so it doesn't affect this call's atomicity.
-///
-/// `key` (§3.8) is the per-install data-encryption key
-/// (`fossh_admin::data_key`) — the encoded event is sealed
-/// (`crate::crypto::seal`) before it ever touches disk, so the on-disk
-/// payload is ciphertext, not the plaintext `encode_event` produces.
 pub fn append_frame(dir: &Path, event: &Event, key: &[u8; 32]) -> Result<(), IngestError> {
     fs::create_dir_all(dir)?;
     let lock = open_lock_file(dir)?;
@@ -296,13 +245,6 @@ pub fn append_frame(dir: &Path, event: &Event, key: &[u8; 32]) -> Result<(), Ing
     frame.extend_from_slice(&crc32(&payload).to_le_bytes());
     frame.extend_from_slice(&payload);
 
-    // S8: spool files are 0600. Unlike `fossh-store::Store::open`
-    // (M4, refuses to start on a pre-existing wide-permission DB file),
-    // this *tightens* rather than refuses — §7.1's "never block the
-    // request" wins for the per-request hot path; a permissions drift
-    // here doesn't carry the same stakes as the long-term database, and
-    // `fossh doctor` (M4) already reports on-disk permission drift for
-    // an operator to notice out-of-band.
     let is_new = !current.exists();
     let mut file = OpenOptions::new()
         .append(true)
@@ -322,25 +264,11 @@ pub fn append_frame(dir: &Path, event: &Event, key: &[u8; 32]) -> Result<(), Ing
     Ok(())
 }
 
-/// One decoded frame from a drained spool file, or a note that a frame
-/// was corrupt (dropped, not fatal to the rest of the drain — a single
-/// torn frame, e.g. from a crash mid-append, must not lose every event
-/// after it).
 pub enum DrainedFrame {
     Event(Event),
     Corrupt,
 }
 
-/// Reads every complete frame out of `path` in order. Stops (without
-/// erroring) at the first incomplete trailing frame — the tail end of a
-/// write still in progress when the compactor runs looks exactly like
-/// that, and it'll be picked up whole on the next drain.
-///
-/// `key` must be the same per-install data-encryption key `append_frame`
-/// sealed each payload with — a mismatched key decrypts to garbage
-/// indistinguishably from a corrupt frame (see `crate::crypto::open`),
-/// so a frame written under a different key is reported as
-/// `DrainedFrame::Corrupt`, not a distinct error.
 pub fn read_frames(path: &Path, key: &[u8; 32]) -> Result<Vec<DrainedFrame>, IngestError> {
     let mut file = match File::open(path) {
         Ok(f) => f,
@@ -359,7 +287,7 @@ pub fn read_frames(path: &Path, key: &[u8; 32]) -> Result<Vec<DrainedFrame>, Ing
         let payload_start = pos + HEADER_LEN;
         let payload_end = payload_start + payload_len;
         if payload_end > buf.len() {
-            break; // incomplete trailing frame — leave it for the next drain
+            break;
         }
         let payload = &buf[payload_start..payload_end];
         if crc32(payload) != expected_crc {
@@ -499,9 +427,7 @@ mod tests {
 
     #[test]
     fn spool_file_on_disk_does_not_contain_the_plaintext_path_or_name() {
-        // §3.8: the whole point is that the bytes on disk aren't
-        // readable without the key — assert that directly against the
-        // real file, not just that encode/decode round-trips in memory.
+
         let dir = scratch_dir("at-rest");
         let mut ev = sample_event();
         ev.path = Some(SanitizedPath::from_raw("/a-very-distinctive-path-marker"));
@@ -518,7 +444,6 @@ mod tests {
             "nor the plaintext event name"
         );
 
-        // But it still round-trips correctly with the right key.
         let frames = read_frames(&dir.join("current.bin"), &TEST_KEY).unwrap();
         assert_eq!(frames.len(), 1);
         match &frames[0] {
@@ -582,9 +507,7 @@ mod tests {
     fn truncated_trailing_frame_is_left_for_next_drain() {
         let dir = scratch_dir("truncated-tail");
         append_frame(&dir, &sample_event(), &TEST_KEY).unwrap();
-        // Simulate a write that was cut off mid-frame (e.g. process killed
-        // mid-append) by chopping bytes off the end of a second, otherwise
-        // well-formed append.
+
         append_frame(&dir, &sample_event(), &TEST_KEY).unwrap();
         let path = dir.join("current.bin");
         let full = fs::read(&path).unwrap();
@@ -605,11 +528,11 @@ mod tests {
         append_frame(&dir, &sample_event(), &TEST_KEY).unwrap();
         let path = dir.join("current.bin");
         let mut bytes = fs::read(&path).unwrap();
-        // Flip a byte inside the payload (well past the header) to break the CRC.
+
         let flip_at = bytes.len() - 3;
         bytes[flip_at] ^= 0xFF;
         fs::write(&path, &bytes).unwrap();
-        append_frame(&dir, &sample_event(), &TEST_KEY).unwrap(); // a good frame after the corrupt one
+        append_frame(&dir, &sample_event(), &TEST_KEY).unwrap();
 
         let frames = read_frames(&path, &TEST_KEY).unwrap();
         assert_eq!(frames.len(), 2);
@@ -627,8 +550,6 @@ mod tests {
 
         append_frame(&dir, &sample_event(), &TEST_KEY).unwrap();
 
-        // The oversized file must have been renamed aside, and a fresh
-        // (small) current.bin holds just the new frame.
         let entries: Vec<_> = fs::read_dir(&dir)
             .unwrap()
             .map(|e| e.unwrap().file_name().into_string().unwrap())

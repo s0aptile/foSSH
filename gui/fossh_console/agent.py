@@ -36,18 +36,9 @@ from typing import Any, Callable
 
 from gi.repository import GLib
 
-#: Bumped in lockstep with `PROTOCOL_VERSION` in the Rust side. A
-#: mismatch means a half-upgraded install — a console from the new RPM
-#: against an agent still on disk from the old one — and is reported
-#: rather than guessed at, because the alternative is a missing field
-#: surfacing much later as an unrelated-looking crash.
 PROTOCOL_VERSION = 1
 
-#: A ceiling on any single call. Every agent operation has its own,
-#: tighter internal timeout; this exists only so that a wedged child can
-#: never strand the queue permanently.
 DEFAULT_TIMEOUT_SECONDS = 90.0
-
 
 class AgentError(Exception):
     """A structured failure from the agent, or from reaching it.
@@ -73,7 +64,6 @@ class AgentError(Exception):
         """
         return self.code in ("unavailable", "transport")
 
-
 def find_agent_binary() -> Path | None:
     """Where `fossh-agent` is, in the order worth trying.
 
@@ -90,7 +80,6 @@ def find_agent_binary() -> Path | None:
     if packaged.exists():
         return packaged
 
-    # gui/fossh_console/agent.py -> gui/fossh_console -> gui -> repo root
     repo_root = Path(__file__).resolve().parent.parent.parent
     for profile in ("release", "debug"):
         candidate = repo_root / "target" / profile / "fossh-agent"
@@ -99,7 +88,6 @@ def find_agent_binary() -> Path | None:
 
     found = shutil.which("fossh-agent")
     return Path(found) if found else None
-
 
 class _Call:
     __slots__ = ("request_id", "line", "on_ok", "on_err", "timeout")
@@ -110,7 +98,6 @@ class _Call:
         self.on_ok = on_ok
         self.on_err = on_err
         self.timeout = timeout
-
 
 class Agent:
     """A running `fossh-agent` child, and the queue in front of it."""
@@ -125,8 +112,6 @@ class Agent:
         self._id_lock = threading.Lock()
         self._stopping = threading.Event()
         self.info: dict[str, Any] = {}
-
-    # -- lifecycle ---------------------------------------------------
 
     def start(self) -> None:
         """Spawns the child and starts the I/O thread.
@@ -151,14 +136,10 @@ class Agent:
                 [str(self._binary)],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                # Left attached to the console's own stderr on purpose:
-                # under a desktop session that is the journal, which is
-                # where a diagnostic belongs. It is never parsed.
+
                 stderr=None,
                 env=env,
-                # Text mode with an explicit encoding rather than the
-                # locale's: the protocol is UTF-8 by definition, and a
-                # non-UTF-8 locale must not change how it is decoded.
+
                 text=True,
                 encoding="utf-8",
                 errors="replace",
@@ -204,8 +185,6 @@ class Agent:
     def binary_path(self) -> Path | None:
         return self._binary
 
-    # -- calling -----------------------------------------------------
-
     def call(
         self,
         method: str,
@@ -229,9 +208,7 @@ class Agent:
 
         line = json.dumps(
             {"id": request_id, "method": method, "params": params or {}},
-            # The agent caps a request line at 1 MiB and treats crossing
-            # it as fatal, so the console must not emit a needlessly
-            # large frame: no indentation, no spaces.
+
             separators=(",", ":"),
             ensure_ascii=False,
         )
@@ -263,8 +240,6 @@ class Agent:
 
         self.call("agent.hello", on_ok=_check, on_err=on_err)
 
-    # -- the I/O thread ----------------------------------------------
-
     def _io_loop(self) -> None:
         while True:
             item = self._queue.get()
@@ -272,7 +247,7 @@ class Agent:
                 return
             try:
                 self._serve(item)
-            except Exception as exc:  # noqa: BLE001 - the thread must not die
+            except Exception as exc:
                 self._fail(item, AgentError("transport", f"Talking to the helper failed: {exc}"))
 
     def _serve(self, call: _Call) -> None:
@@ -288,10 +263,6 @@ class Agent:
             self._fail(call, self._death_error(process))
             return
 
-        # A blocking readline, bounded by a watchdog timer that kills
-        # the child if it never answers. Without the timer a wedged
-        # agent would strand this thread — and therefore every later
-        # call — with no way out.
         timer = threading.Timer(call.timeout, self._kill_wedged_child)
         timer.daemon = True
         timer.start()
@@ -320,10 +291,7 @@ class Agent:
 
         frame_id = frame.get("id")
         if frame_id != call.request_id:
-            # The agent answers serially, so the only frame that can
-            # arrive here is the answer to this request. An id of 0 is
-            # its documented "I could not parse what you sent", which
-            # is a console bug worth surfacing rather than retrying.
+
             if frame_id == 0:
                 message = frame.get("error", {}).get(
                     "message", "the helper could not parse that request"

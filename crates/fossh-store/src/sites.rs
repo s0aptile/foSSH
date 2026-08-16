@@ -1,19 +1,3 @@
-//! Site CRUD (§9: `fossh site create|list|disable|rotate-key`). Key
-//! *generation* and the write-key wire format (`fossh_<slug>_<base32>`)
-//! belong to whichever crate authenticates requests (`fossh-ingest`) and
-//! whichever generates them for an operator (`fossh-cli`) — this module
-//! only ever sees and stores `BLAKE3(key)`, never the key itself (§8: "the
-//! key itself is never stored").
-//!
-//! `public` (added beyond §6's literal `CREATE TABLE`, see DECISIONS.md):
-//! §8 describes bearer-mode keys as "flagged `public=1` at creation, ...
-//! rate-limited harder, and [restricted to] the site's allowlist" — a
-//! column §6's own schema snippet never defines. `fossh-ingest` uses it to
-//! decide both the harder rate limit and whether to echo `Origin` back in
-//! `Access-Control-Allow-Origin` (only ever for public/browser-facing
-//! sites; signed server-to-server requests aren't browser requests, so
-//! CORS doesn't apply to them at all).
-
 use rusqlite::{OptionalExtension, params};
 
 use fossh_core::types::SiteId;
@@ -141,21 +125,10 @@ impl Store {
         .collect()
     }
 
-    /// Returns whether a site was found and disabled.
     pub fn disable_site(&self, slug: &str) -> Result<bool, StoreError> {
         self.set_site_disabled(slug, true)
     }
 
-    /// Returns whether a site was found and re-enabled.
-    ///
-    /// The counterpart existed in the schema from the start — `disabled`
-    /// has always been a flag rather than a deletion — but for several
-    /// releases nothing could clear it. An operator who disabled a site
-    /// to stop it briefly had no way back short of opening the database
-    /// by hand, which is not something this project should ever ask of
-    /// anyone. Re-enabling deliberately does not touch the write key: a
-    /// site paused and resumed keeps working with the key its sites
-    /// already hold.
     pub fn enable_site(&self, slug: &str) -> Result<bool, StoreError> {
         self.set_site_disabled(slug, false)
     }
@@ -168,9 +141,6 @@ impl Store {
         Ok(affected > 0)
     }
 
-    /// Returns whether a site was found and rotated. Only `key_hash`
-    /// (the bearer-mode verifier) changes — `sign_pubkey` is a separate
-    /// credential with its own rotation entry point, `set_sign_pubkey`.
     pub fn rotate_site_key(&self, slug: &str, new_key_hash: &[u8; 32]) -> Result<bool, StoreError> {
         let affected = self.conn.execute(
             "UPDATE sites SET key_hash = ?1 WHERE slug = ?2",
@@ -179,10 +149,6 @@ impl Store {
         Ok(affected > 0)
     }
 
-    /// Returns whether a site was found and given a new signed-mode
-    /// verifying key. Independent of `rotate_site_key`: a site's bearer
-    /// write key and its signed-mode keypair are two different
-    /// credentials, rotated separately.
     pub fn set_sign_pubkey(
         &self,
         slug: &str,
@@ -308,9 +274,6 @@ mod tests {
         assert!(site.disabled);
     }
 
-    /// Disabling was a one-way door for several releases: the flag went
-    /// up and nothing could put it back down without opening the
-    /// database by hand.
     #[test]
     fn enable_site_reverses_disable_without_touching_the_key() {
         let store = Store::open_in_memory().unwrap();
@@ -325,13 +288,9 @@ mod tests {
         let site = store.find_site_by_slug("blog").unwrap().unwrap();
         assert!(!site.disabled);
 
-        // The key a site's own pages already carry must keep working —
-        // otherwise "pause and resume" would silently mean "pause and
-        // redeploy every page".
         assert!(store.find_site_by_key_hash(&hash_of(1)).unwrap().is_some());
         assert_eq!(site.allowlist, vec!["pageview".to_string()]);
 
-        // Idempotent in both directions, and honest about a missing slug.
         assert!(store.enable_site("blog").unwrap());
         assert!(!store.enable_site("does-not-exist").unwrap());
     }

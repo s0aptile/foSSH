@@ -1,27 +1,3 @@
-//! DDL and migrations. Versioned via `PRAGMA user_version` — v0 (fresh
-//! database) runs `SCHEMA_V1` and stamps `user_version = 1`; a future
-//! migration adds another `if version < N` step, never rewrites this one.
-//!
-//! Two deliberate departures from the illustrative `CREATE TABLE` in §6 —
-//! both recorded in `DECISIONS.md`:
-//!
-//! - `rollup_hourly.uniques` is `BLOB NOT NULL` (a HyperLogLog sketch),
-//!   not `INTEGER`. §6's own prose says uniques are "stored as a BLOB, so
-//!   raw visitor values can be deleted at day boundary while cardinality
-//!   survives" — that sentence and the `INTEGER` in the same section's SQL
-//!   snippet can't both be right, and BLOB is the one a mergeable,
-//!   incrementally-updated sketch actually requires.
-//! - `rollup_hourly` also has a `value_hist BLOB` column beyond §6's
-//!   listing, holding a mergeable histogram sketch. `p50`/`p95` stay
-//!   `INTEGER` as shown — cheap-to-read point estimates recomputed from
-//!   `value_hist` on every upsert — but correctly *updating* them as more
-//!   events land in an already-written bucket needs the sketch; a plain
-//!   integer alone can't be merged with a later batch's percentile.
-//!
-//! Neither addition reopens P1: the invariant test below still asserts an
-//! exact column set, and both new columns are aggregate/sketch data with
-//! no visitor-level or PII-shaped content — P1's actual concern.
-
 pub const PRAGMAS: &str = "
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
@@ -129,13 +105,6 @@ mod tests {
         .collect()
     }
 
-    /// P1: "The storage schema physically has no column capable of holding
-    /// an IP, email, username, URL query string, or raw UA. Enforced by a
-    /// schema test that asserts the exact column set." This is that test —
-    /// for every table, not just `events`. Adding a column anywhere in
-    /// this schema means updating this test, on purpose, which is the
-    /// point: it forces a conscious re-review of P1 (see the module doc
-    /// comment) rather than a column silently appearing.
     #[test]
     fn events_table_has_exactly_the_expected_columns() {
         let store = Store::open_in_memory().unwrap();
@@ -243,8 +212,7 @@ mod tests {
     #[test]
     fn migration_is_idempotent() {
         let store = Store::open_in_memory().unwrap();
-        // Calling migrate again (as `Store::open` would on a pre-existing
-        // database) must not error or duplicate anything.
+
         super::migrate(&store.conn).unwrap();
         super::migrate(&store.conn).unwrap();
         let version: i64 = store
@@ -256,11 +224,7 @@ mod tests {
 
     #[test]
     fn v1_to_v2_migration_adds_sign_pubkey_without_disturbing_existing_sites() {
-        // A raw connection standing in for a pre-existing on-disk database
-        // that was created before `sign_pubkey` existed — `Store::open`
-        // itself always migrates straight to the latest version, so this
-        // simulates the actual upgrade path by building schema v1 by hand
-        // first, exactly like a real pre-fix install would have on disk.
+
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(PRAGMAS).unwrap();
         conn.execute_batch(SCHEMA_V1).unwrap();

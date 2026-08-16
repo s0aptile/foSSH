@@ -1,11 +1,6 @@
 open Fossh_watchdog_lib
 open Test_helpers
 
-(* Test_helpers.detach_sign produces a binary signature -- this
-   listener's wire protocol needs an armored one (see
-   Operator_auth_server's own .mli), so this test signs locally with
-   --armor added rather than changing the shared helper for every
-   other test that doesn't need it. *)
 let detach_sign_armored (k : key) (data : string) : string =
   Tempfile.with_contents data (fun data_path ->
       let sig_path = Filename.temp_file "fossh-watchdog-test-" ".asc" in
@@ -60,16 +55,6 @@ let () =
       in
       wait_for_socket 200;
 
-      (* Sanity check on the final state (0600, not the looser
-         mode a default umask would otherwise leave it at) -- the
-         actual TOCTOU window this closes (a real, measured 0755
-         immediately after bind(), before this fix) was confirmed by
-         a manual empirical repro (stat() right after bind(), before
-         chmod()) during review, not by this test: the window is
-         between two syscalls milliseconds apart, not something a
-         black-box test connecting from outside can reliably observe
-         without adding test-only synchronization hooks into
-         production code just to make it observable. *)
       check "the socket file's final permissions are 0600"
         (let st = Unix.stat socket_path in
          st.Unix.st_perm = 0o600);
@@ -119,16 +104,6 @@ let () =
       check "garbage signature bytes are DENIED, not a crash" (input_line ic = "DENIED");
       Unix.close sock;
 
-      (* Regression test for a real bug caught before this ever left
-         the sandbox: a client that connects and reads the nonce but
-         never sends a signature must not hang the single-threaded
-         accept loop forever. The server above runs with a 0.3s
-         SO_RCVTIMEO specifically so this test can prove that bound
-         exists without waiting out the real 10s default: the second
-         connection can only be *accepted* once the stalled one's read
-         times out and the accept loop moves on, so seeing the second
-         connection served at all, well under the real default, is
-         itself the proof. *)
       let stalled_sock, stalled_ic, _stalled_oc = connect socket_path in
       let (_ : string) = nonce_of_line (input_line stalled_ic) in
       let started = Unix.gettimeofday () in
@@ -145,15 +120,6 @@ let () =
       Unix.close sock;
       Unix.close stalled_sock;
 
-      (* Regression test for the real drip-DoS adversarial review
-         found: an attacker who sends one byte at a time, each well
-         under the per-syscall timeout, never completing a signature.
-         The server above runs with connection_timeout_seconds:0.3 so
-         this can run fast; the drip sends a byte every 0.1s (well
-         under 0.3s) for 2s total (well over the connection deadline) --
-         under the old (broken) fix this would never be interrupted
-         by anything but the per-syscall timeout, which a drip that
-         never stops defeats entirely. *)
       let drip_sock = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
       Unix.connect drip_sock (Unix.ADDR_UNIX socket_path);
       let drip_ic = Unix.in_channel_of_descr drip_sock in

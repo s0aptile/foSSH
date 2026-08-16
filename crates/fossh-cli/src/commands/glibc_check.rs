@@ -1,14 +1,3 @@
-//! `fossh glibc-check` — standalone, fast preflight gate meant for the
-//! systemd unit's `ExecStartPre=` (§3.2/§3.11): "detect the host's
-//! glibc version and refuse to run with a clear error if the host is
-//! below the floor, rather than failing with an opaque dynamic-linker
-//! error." Deliberately does not touch `fossh.toml`, the database, or
-//! anything else `doctor`'s fuller suite checks — a fresh `dnf install`
-//! with no site configured yet must still be gateable before the
-//! service is allowed to start at all, and systemd should not have to
-//! run the full `doctor` suite (which touches the database) just to
-//! decide whether to start.
-
 use crate::args::wants_help;
 use crate::common::detect_glibc_version;
 
@@ -51,20 +40,12 @@ pub fn run(args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    // `run()` itself always shells out to the real `ldd` on this host —
-    // there's no fake-able seam here without threading a trait/closure
-    // through just for a test, which isn't worth it for a ~15-line
-    // function. `detect_glibc_version`'s exit-status handling and
-    // `glibc_gate`'s parsing are exercised directly in `common.rs` and
-    // `fossh-core`, respectively — this module is glue over both.
+
     use super::*;
 
     #[test]
     fn runs_against_the_real_host_without_panicking() {
-        // This environment's real ldd (2.43) is above the floor, so
-        // this doubles as a real-host smoke test, not just "didn't
-        // crash" — see dev/DURUM.md's §3.1 retrospective for why a
-        // below-floor case isn't faked here.
+
         assert_eq!(run(&[]), 0);
     }
 }

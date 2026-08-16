@@ -21,15 +21,8 @@ from .views.overview import OverviewView
 from .views.setup import SetupView
 from .views.telemetry import TelemetryView
 
-#: Below this the sidebar folds away. Matches libadwaita's own
-#: convention for the narrow breakpoint rather than a number picked
-#: here, so this window behaves like every other adaptive GNOME app.
 BREAKPOINT_WIDTH = 640
 
-#: `(stack name, sidebar label, iconography key)`. The icon key is
-#: resolved through `iconography`, which picks a Material glyph, a
-#: theme symbolic, or a last-resort name depending on what is actually
-#: installed — see that module.
 PAGES = [
     ("overview", "Overview", "overview"),
     ("telemetry", "Telemetry", "telemetry"),
@@ -37,7 +30,6 @@ PAGES = [
     ("setup", "Setup", "setup"),
     ("legal", "Legal", "legal"),
 ]
-
 
 class ConsoleWindow(Adw.ApplicationWindow):
     def __init__(self, application: Adw.Application, agent) -> None:
@@ -53,8 +45,7 @@ class ConsoleWindow(Adw.ApplicationWindow):
             "telemetry": TelemetryView(agent),
             "integrations": IntegrationsView(agent, self._toaster),
             "setup": SetupView(agent, self._toaster),
-            # Takes no agent: it renders files from disk and has
-            # nothing to ask the helper for.
+
             "legal": LegalView(),
         }
 
@@ -65,21 +56,13 @@ class ConsoleWindow(Adw.ApplicationWindow):
             self._content_stack.add_named(view, name)
 
         split = Adw.NavigationSplitView()
-        # Content before sidebar, and it matters: `_build_sidebar`
-        # selects the first row, which fires `_on_row_selected`, which
-        # sets the content pane's title. Building the sidebar first
-        # meant that handler ran against a `_title` that did not exist
-        # yet — an AttributeError swallowed by GTK's signal machinery,
-        # leaving the title stuck and the initial refresh never fired.
+
         split.set_content(self._build_content())
         split.set_sidebar(self._build_sidebar())
         self._split = split
 
         self._toaster.set_child(split)
 
-        # One breakpoint, one property. The sidebar collapses; nothing
-        # else about the layout has to change, because every view is
-        # already inside an `Adw.Clamp`.
         breakpoint_ = Adw.Breakpoint.new(
             Adw.BreakpointCondition.parse(f"max-width: {BREAKPOINT_WIDTH}px")
         )
@@ -89,10 +72,7 @@ class ConsoleWindow(Adw.ApplicationWindow):
         self.set_content(self._toaster)
         self._install_shortcuts()
 
-        # Everything above exists now, so the first navigation is safe.
         self._sidebar_list.select_row(self._sidebar_list.get_row_at_index(0))
-
-    # -- chrome ------------------------------------------------------
 
     def _build_sidebar(self) -> Adw.NavigationPage:
         self._sidebar_list = Gtk.ListBox()
@@ -110,27 +90,14 @@ class ConsoleWindow(Adw.ApplicationWindow):
             box.append(icon(icon_key))
             box.append(Gtk.Label(label=label, xalign=0))
             row.set_child(box)
-            # The row's accessible name comes from its label already;
-            # the icon inside is marked presentational by
-            # `iconography`, so nothing announces twice.
+
             self._sidebar_list.append(row)
 
-        # Deliberately NOT selecting a row here. `row-selected` fires
-        # synchronously, and its handler reaches for `_title`, `_split`
-        # and `_content_page` -- none of which exist until `__init__`
-        # has finished assembling them. Selecting during construction
-        # produced two separate AttributeErrors of exactly that shape,
-        # each swallowed by GTK's signal machinery and each showing up
-        # as a window that drew but never navigated. The initial
-        # selection happens at the end of `__init__` instead, where
-        # every field it touches is real.
         self._sidebar_list.connect("row-selected", self._on_row_selected)
 
         toolbar = Adw.ToolbarView()
         header = Adw.HeaderBar()
-        # The wordmark replaces the sidebar's plain title. Carried over
-        # from the TUI's own chrome, diamond and all — see
-        # `branding.py` for why that detail is not decoration.
+
         header.set_title_widget(Wordmark(size_pt=14.0, show_tagline=False))
         toolbar.add_top_bar(header)
         toolbar.set_content(self._sidebar_list)
@@ -195,16 +162,12 @@ class ConsoleWindow(Adw.ApplicationWindow):
             if accels and app is not None:
                 app.set_accels_for_action(f"win.{name}", accels)
 
-        # Digit shortcuts for the four pages, the way every sidebar app
-        # people already use behaves.
         for index, (page_name, _label, _icon) in enumerate(PAGES, start=1):
             action = Gio.SimpleAction.new(f"page-{page_name}", None)
             action.connect("activate", lambda *_a, n=page_name: self.show_page(n))
             self.add_action(action)
             if app is not None:
                 app.set_accels_for_action(f"win.page-{page_name}", [f"<Control>{index}"])
-
-    # -- navigation --------------------------------------------------
 
     def _on_row_selected(self, _listbox, row: Gtk.ListBoxRow | None) -> None:
         if row is None:
@@ -233,8 +196,6 @@ class ConsoleWindow(Adw.ApplicationWindow):
     def refresh_all(self) -> None:
         for view in self._views.values():
             view.refresh()
-
-    # -- dialogs -----------------------------------------------------
 
     def _show_shortcuts(self) -> None:
         lines = [

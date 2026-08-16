@@ -15,7 +15,6 @@ from ..agent import AgentError
 from ..iconography import symbolic_name
 from ..widgets import StatTile, StatusRow, pad, section
 
-
 class OverviewView(Gtk.Box):
     def __init__(self, agent) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
@@ -39,12 +38,8 @@ class OverviewView(Gtk.Box):
         self._stack.add_named(self._error_page, "error")
         self._stack.set_visible_child_name("loading")
 
-    # -- construction ------------------------------------------------
-
     def _build_loading(self) -> Gtk.Widget:
-        # A centred spinner, not a skeleton: this load is normally
-        # under a hundred milliseconds, and a skeleton that flashes is
-        # worse than a spinner that barely appears.
+
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.CENTER)
         box.append(Adw.Spinner(width_request=32, height_request=32))
         return box
@@ -62,9 +57,7 @@ class OverviewView(Gtk.Box):
         hint.add_css_class("mono")
         hint.add_css_class("card-surface")
         hint.set_selectable(True)
-        # Margins stand in for padding: a Gtk.Label has no padding
-        # property, and wrapping it in a box for twelve pixels would be
-        # a widget that exists for nothing.
+
         pad(hint, top=12, bottom=12, start=16, end=16)
         page.set_child(hint)
         return page
@@ -77,7 +70,6 @@ class OverviewView(Gtk.Box):
         clamp = Adw.Clamp(maximum_size=900, child=outer)
         scroller.set_child(clamp)
 
-        # -- today's figures
         today = section("Today", "Since midnight, across every site on this install.")
         tiles = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12, homogeneous=True)
         self._hits = StatTile("Events", with_sparkline=True)
@@ -89,12 +81,9 @@ class OverviewView(Gtk.Box):
         today.append(tiles)
         outer.append(today)
 
-        # -- health
         health = section("Health")
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
-        # No margins here: `.card-surface` carries its own padding, and
-        # adding margins as well would inset the card away from the
-        # tiles above it.
+
         card.add_css_class("card-surface")
 
         self._watchdog_row = StatusRow("Watchdog")
@@ -115,7 +104,6 @@ class OverviewView(Gtk.Box):
         health.append(card)
         outer.append(health)
 
-        # -- per-site table
         sites_section = section("Sites")
         self._site_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         self._site_list.add_css_class("boxed-list")
@@ -123,8 +111,6 @@ class OverviewView(Gtk.Box):
         outer.append(sites_section)
 
         return scroller
-
-    # -- data --------------------------------------------------------
 
     def refresh(self) -> None:
         if not self._loaded_once:
@@ -134,9 +120,7 @@ class OverviewView(Gtk.Box):
             on_ok=self._on_summary,
             on_err=self._on_summary_error,
         )
-        # Fired separately and never awaited: against an absent watchdog
-        # this waits out a real multi-second QUIC timeout, and the rest
-        # of the page has no reason to sit behind it.
+
         self._agent.call(
             "watchdog.status",
             on_ok=self._on_watchdog,
@@ -158,10 +142,6 @@ class OverviewView(Gtk.Box):
         self._uniques.set_value(total_uniques)
         self._sites.set_value(len(sites))
 
-        # The sparkline shows this install's sites ranked by volume —
-        # a real shape drawn from real values, not a fabricated time
-        # series. Per-hour history would need a query per site and is
-        # what the Telemetry page is for.
         self._hits.set_series(sorted((float(s.get("hits_today", 0)) for s in sites), reverse=True))
         self._uniques.set_series(
             sorted((float(s.get("uniques_today", 0)) for s in sites), reverse=True)
@@ -232,11 +212,7 @@ class OverviewView(Gtk.Box):
         else:
             self._tamper_row.set_state("idle", "not checked")
         self._health_note.set_visible(False)
-        # A tampered install and "this build has no watchdog support"
-        # rendered identically before this: same position, same weight,
-        # same card. The layout has to escalate when something is
-        # genuinely wrong, or the one state that matters is the one
-        # nobody notices.
+
         self._set_alarmed(tamper == "tampered" or child == "stopped")
 
     def _set_alarmed(self, alarmed: bool) -> None:
@@ -246,12 +222,7 @@ class OverviewView(Gtk.Box):
             self._health_card.remove_css_class("alarmed")
 
     def _on_watchdog_error(self, error: AgentError) -> None:
-        # Not an error state on screen. On EPEL and RHEL the watchdog
-        # subpackage does not exist at all, and on a fresh install it
-        # simply has not been started yet — both are ordinary, and
-        # showing them in red would be false alarm.
-        # Unreachable is a state, not an alarm -- on EPEL there is no
-        # watchdog to reach.
+
         self._set_alarmed(False)
         self._watchdog_row.set_state("idle", "unreachable")
         self._tamper_row.set_state("idle", "unavailable")

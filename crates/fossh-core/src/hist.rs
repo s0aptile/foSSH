@@ -1,18 +1,3 @@
-//! A tiny, hand-rolled, mergeable log2-bucket histogram used to maintain
-//! `p50`/`p95` estimates in hourly rollups as events stream in across
-//! multiple compaction passes (§6). Same rationale as `hll.rs`: no
-//! dependency, small, and — critically — mergeable, which a plain running
-//! percentile cannot be once the raw values that fed it are gone (P7
-//! deletes raw event rows after `retention_days`; the rollup has to keep
-//! working from sketches alone after that).
-//!
-//! Bucket `i` (for `i >= 1`) covers the value range `[2^(i-1), 2^i - 1]`;
-//! bucket `0` covers exactly `{0}`. `percentile()` returns the *lower
-//! bound* of the bucket the requested percentile falls in — a coarse,
-//! order-of-magnitude estimate (bucket width doubles every step), not an
-//! exact value. That precision is a deliberate, documented trade for
-//! staying mergeable and dependency-free; see DECISIONS.md.
-
 pub const NUM_BUCKETS: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,13 +19,10 @@ impl Histogram {
     }
 
     fn bucket_index(value: u64) -> usize {
-        let bit_length = 64 - value.leading_zeros() as usize; // 0 for value==0
+        let bit_length = 64 - value.leading_zeros() as usize;
         bit_length.min(NUM_BUCKETS - 1)
     }
 
-    /// Folds one non-negative observation (Timing: milliseconds; Action:
-    /// count/amount) into the sketch. Negative values are ignored — they
-    /// don't occur for the fields this sketch is used for.
     pub fn add(&mut self, value: i64) {
         if value < 0 {
             return;
@@ -49,9 +31,6 @@ impl Histogram {
         self.buckets[idx] = self.buckets[idx].saturating_add(1);
     }
 
-    /// Merges another sketch into this one (element-wise sum — unlike
-    /// `Hll::merge`, this is a true union of the two observation counts,
-    /// since a count histogram's buckets are additive).
     pub fn merge(&mut self, other: &Histogram) {
         for (a, b) in self.buckets.iter_mut().zip(other.buckets.iter()) {
             *a = a.saturating_add(*b);
@@ -62,9 +41,6 @@ impl Histogram {
         self.buckets.iter().map(|&c| c as u64).sum()
     }
 
-    /// Estimated `p`-th percentile (`p` in `[0.0, 1.0]`) — the lower bound
-    /// of the bucket containing the `ceil(p * total)`-th observation.
-    /// Returns `0` for an empty histogram.
     pub fn percentile(&self, p: f64) -> i64 {
         let total = self.total();
         if total == 0 {
@@ -121,7 +97,7 @@ mod tests {
         for _ in 0..100 {
             h.add(100);
         }
-        // 100 = 0b1100100, bit_length 7, bucket 7 covers [64, 127].
+
         let p = h.percentile(0.5);
         assert_eq!(p, 64);
     }

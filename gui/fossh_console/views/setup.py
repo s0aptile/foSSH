@@ -25,7 +25,6 @@ from gi.repository import Adw, Gdk, Gtk
 from ..agent import AgentError
 from ..iconography import symbolic_name
 
-
 class SetupView(Gtk.Box):
     def __init__(self, agent, toaster: Adw.ToastOverlay) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
@@ -50,8 +49,6 @@ class SetupView(Gtk.Box):
         self._stack.add_named(self._problem_page, "problem")
         self._stack.set_visible_child_name("loading")
 
-    # -- pages -------------------------------------------------------
-
     def _loading_page(self) -> Gtk.Widget:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.CENTER)
         box.append(Adw.Spinner(width_request=32, height_request=32))
@@ -69,9 +66,7 @@ class SetupView(Gtk.Box):
         )
         again = Gtk.Button(label="Look again")
         again.add_css_class("pill")
-        # A live retry, so it must not read as inert. Without this it
-        # renders as a flat outline that looks disabled -- an
-        # affordance contradicting its own function.
+
         again.add_css_class("suggested-action")
         again.set_halign(Gtk.Align.CENTER)
         again.connect("clicked", lambda *_: self.reload())
@@ -205,8 +200,6 @@ class SetupView(Gtk.Box):
         )
         return self._enrolled_status
 
-    # -- flow --------------------------------------------------------
-
     def refresh(self) -> None:
         self._agent.call("setup.state", on_ok=self._on_state, on_err=self._on_error)
 
@@ -276,10 +269,7 @@ class SetupView(Gtk.Box):
         start, end = self._private_buffer.get_bounds()
         text = self._private_buffer.get_text(start, end, False)
         if not text.strip():
-            # Reachable only if the agent replied without a private
-            # key. Saying "copied. Paste it somewhere safe" over an
-            # empty clipboard would be a false success at the one
-            # moment where losing the key is unrecoverable.
+
             self._toast("There is nothing to copy.")
             return
         display = Gdk.Display.get_default()
@@ -312,11 +302,7 @@ class SetupView(Gtk.Box):
 
     def _enroll(self, public_key_armored: str, *, on_fail) -> None:
         def ok(result: dict) -> None:
-            # Drop the private key from the buffer as soon as it has
-            # done its job. Python cannot guarantee the string is gone
-            # from memory, which is exactly why the agent never wrote
-            # it anywhere — but leaving it on screen behind a completed
-            # flow would be careless on top of that.
+
             self._private_buffer.set_text("")
             self._generated_public_key = None
             fingerprint = result.get("fingerprint", "")
@@ -329,11 +315,7 @@ class SetupView(Gtk.Box):
         def err(error: AgentError) -> None:
             on_fail()
             if error.code == "denied":
-                # The agent distinguishes "wrong token" (fatal, needs a
-                # fresh one) from "bad key" (token survives, try
-                # again). Both arrive as `denied`, and its message
-                # already says which — so this shows the message rather
-                # than inventing a state machine to second-guess it.
+
                 self._toast(error.message)
                 self._agent.call("setup.state", on_ok=self._on_state, on_err=self._on_error)
                 return

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Renders each console page to a PNG, for looking at.
 
 Not a test — nothing here asserts. It exists because "the process
@@ -20,14 +19,13 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, Gdk, GLib, Graphene, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, GLib, Graphene, Gtk
 
-from fossh_console.agent import Agent, AgentError  # noqa: E402
-from fossh_console.app import ConsoleApplication  # noqa: E402
-from fossh_console.window import PAGES, ConsoleWindow  # noqa: E402
+from fossh_console.agent import Agent, AgentError
+from fossh_console.app import ConsoleApplication
+from fossh_console.window import PAGES, ConsoleWindow
 
 OUT_DIR = Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/fossh-console-shots")
-
 
 def capture(window: Gtk.Window, path: Path) -> bool:
     """Renders the realized window into `path`.
@@ -55,7 +53,6 @@ def capture(window: Gtk.Window, path: Path) -> bool:
 
     snapshot = Gtk.Snapshot()
 
-    # The ground the real window paints on, under everything else.
     from fossh_console.palette import scheme
     background = Gdk.RGBA()
     background.parse(scheme(Adw.StyleManager.get_default().get_dark())["brand_bg"])
@@ -74,7 +71,6 @@ def capture(window: Gtk.Window, path: Path) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
     texture.save_to_png(str(path))
     return True
-
 
 class Harness(ConsoleApplication):
     """Subclasses the real application rather than reimplementing it.
@@ -97,10 +93,7 @@ class Harness(ConsoleApplication):
         self._captured: list[str] = []
 
     def do_activate(self) -> None:
-        # Any exception raised inside a GTK vfunc is printed and then
-        # swallowed, leaving the main loop running with nothing on
-        # screen -- indistinguishable from a hang unless the harness
-        # itself gives up. It gives up.
+
         try:
             self._activate()
         except Exception:
@@ -124,8 +117,7 @@ class Harness(ConsoleApplication):
             on_ok=lambda _i: self._window.refresh_all(),
             on_err=lambda e: print(f"handshake: {e.message}", file=sys.stderr),
         )
-        # Long enough for layout, the crossfade, and the agent's own
-        # replies to have all landed.
+
         GLib.timeout_add(1800, self._next)
 
     def _next(self) -> bool:
@@ -151,10 +143,8 @@ class Harness(ConsoleApplication):
             GLib.timeout_add(250, self._next)
             return False
 
-        # A beat for the page's own crossfade and its agent round trip.
         GLib.timeout_add(900, shoot)
         return False
-
 
 if __name__ == "__main__":
     sys.exit(Harness().run([]))

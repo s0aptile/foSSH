@@ -1,15 +1,3 @@
-//! Interning helpers shared by `events` and `rollup`. Each function's SQL
-//! is a complete, hardcoded literal — no `format!`/`push_str` building a
-//! query string anywhere near these, which is what S3's CI grep gate
-//! (added in M8) actually greps for. Take `&rusqlite::Connection` so
-//! callers can pass a `&rusqlite::Transaction` too (it derefs to
-//! `Connection`), keeping interning and the row insert it precedes in one
-//! atomic unit.
-//!
-//! Prop *keys* intern into the same `names` table as event names (§6 has
-//! no separate keys table, and both are short allowlisted identifiers
-//! under the same grammar — see DECISIONS.md).
-
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::StoreError;
@@ -41,9 +29,7 @@ pub(crate) fn intern_ref(conn: &Connection, s: &str) -> Result<i64, StoreError> 
     .map_err(StoreError::from)
 }
 
-/// Looks up an interned id without inserting — used for read paths
-/// (queries never need to *create* a name/path row).
-#[allow(dead_code)] // used once query-side lookups grow past the join-based approach in rollup.rs
+#[allow(dead_code)]
 pub(crate) fn lookup_name_id(conn: &Connection, s: &str) -> Result<Option<i64>, StoreError> {
     conn.query_row("SELECT id FROM names WHERE s = ?1", params![s], |row| {
         row.get(0)
@@ -79,9 +65,7 @@ mod tests {
         let name_id = intern_name(&store.conn, "shared-string").unwrap();
         let path_id = intern_path(&store.conn, "shared-string").unwrap();
         let ref_id = intern_ref(&store.conn, "shared-string").unwrap();
-        // All three are free to reuse the same underlying id space (each
-        // table has its own autoincrement) — nothing should crash or
-        // collide across tables.
+
         assert!(name_id >= 1 && path_id >= 1 && ref_id >= 1);
     }
 

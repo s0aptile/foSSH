@@ -50,25 +50,15 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-#: Identifies the visit in the operator's own data afterwards.
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/131.0.0.0 Safari/537.36 foSSH-Verify/0.0.2.2"
 )
 
-#: Hard ceiling on a run. A page that has not fired its beacon within
-#: this has not fired it.
 DEFAULT_TIMEOUT_MS = 20_000
 
-#: How long to keep watching after the page reports itself loaded.
-#: Beacons are commonly sent from a deferred script or on the first
-#: idle callback, so stopping at `load` would report a false negative
-#: on a correct integration.
 SETTLE_MS = 3_000
 
-#: What a foSSH ingest request looks like. Deliberately broad — the
-#: endpoint path is whatever the operator configured — and narrowed by
-#: the caller's own `endpoint_hint` when there is one.
 DEFAULT_PATTERNS = (
     r"/fossh",
     r"/collect",
@@ -76,14 +66,12 @@ DEFAULT_PATTERNS = (
     r"/event",
 )
 
-
 @dataclass
 class Hit:
     url: str
     method: str
     status: int | None
     ms_after_start: int
-
 
 @dataclass
 class Result:
@@ -93,16 +81,11 @@ class Result:
     hits: list[Hit] = field(default_factory=list)
     page_status: int | None = None
     total_ms: int = 0
-    #: Set when the browser could not be used at all, as opposed to the
-    #: page simply not firing anything. The console shows these very
-    #: differently: one is a problem with the operator's site, the
-    #: other is a problem with this machine.
-    unavailable: bool = False
 
+    unavailable: bool = False
 
 class VerificationUnavailable(Exception):
     """Playwright or its browser is missing."""
-
 
 def _install_hint() -> str:
     return (
@@ -113,7 +96,6 @@ def _install_hint() -> str:
         "Everything else in this console works without them; only this check is unavailable."
     )
 
-
 def available() -> bool:
     """Whether a verification could run right now.
 
@@ -121,11 +103,10 @@ def available() -> bool:
     to press something that will only tell them it cannot work.
     """
     try:
-        from playwright.sync_api import sync_playwright  # noqa: F401
+        from playwright.sync_api import sync_playwright
     except ImportError:
         return False
     return True
-
 
 def validate_target(url: str) -> str | None:
     """Refuses anything that is not an ordinary web page.
@@ -143,10 +124,8 @@ def validate_target(url: str) -> str | None:
         return "That address contains a space or a control character."
     return None
 
-
 class Cancelled(Exception):
     """Raised internally when `cancel` is set. Never escapes `verify`."""
-
 
 def verify(
     url: str,
@@ -187,8 +166,7 @@ def verify(
 
     patterns = list(DEFAULT_PATTERNS)
     if endpoint_hint.strip():
-        # An exact endpoint beats the heuristics, so it goes first and
-        # is escaped -- it is a URL, not a pattern the operator wrote.
+
         patterns.insert(0, re.escape(endpoint_hint.strip()))
     matcher = re.compile("|".join(patterns))
 
@@ -204,15 +182,11 @@ def verify(
             progress("Starting a browser…")
             browser = p.chromium.launch(
                 headless=True,
-                # No sandbox concessions and no remote debugging port.
-                # The defaults are the safe ones; this only refuses the
-                # things that would weaken them.
+
                 args=["--disable-background-networking", "--no-first-run"],
             )
             try:
-                # Ephemeral by construction: `new_context` with no
-                # storage state and no persistent user-data-dir means
-                # nothing survives this block.
+
                 context = browser.new_context(
                     user_agent=USER_AGENT,
                     accept_downloads=False,
@@ -222,22 +196,6 @@ def verify(
                 context.set_default_timeout(timeout_ms)
                 page = context.new_page()
 
-                # Two events, not one, and the reason is a real trap.
-                #
-                # `requestfinished` fires when a response body has been
-                # fully read -- and a beacon endpoint answering `204 No
-                # Content` has no body, so for the exact request shape
-                # this feature exists to detect, it may never fire at
-                # all. Verified directly against a real Chromium: for a
-                # `fetch()` to a 204 endpoint, `request` and `response`
-                # both fire and `requestfinished` does not.
-                #
-                # So `request` records that the beacon was *sent* --
-                # which is the thing actually being tested, and is also
-                # all that is observable for a `sendBeacon` during
-                # unload -- and `response` fills in the status when
-                # there is one. Keyed by URL and method so the two
-                # events describe one hit rather than two.
                 by_key: dict[tuple[str, str], Hit] = {}
 
                 def record(url: str, method: str) -> Hit | None:
@@ -272,17 +230,12 @@ def verify(
                 check_cancelled()
 
                 progress("Watching for the beacon…")
-                # Beacons commonly fire after `load`, from a deferred
-                # script or an idle callback. Waiting for network idle
-                # and then a fixed settle is what makes a correct
-                # integration report as correct.
+
                 try:
                     page.wait_for_load_state("networkidle", timeout=SETTLE_MS)
                 except PlaywrightError:
                     pass
-                # Sliced rather than one long wait, so a cancellation
-                # is noticed within a fifth of a second instead of
-                # after the whole settle period.
+
                 waited = 0
                 while waited < SETTLE_MS:
                     check_cancelled()
@@ -294,8 +247,7 @@ def verify(
             finally:
                 browser.close()
     except Cancelled:
-        # `browser.close()` already ran in the `finally` above, so the
-        # browser is gone by the time this is reached.
+
         return Result(
             ok=False,
             summary="Cancelled",
@@ -304,7 +256,7 @@ def verify(
         )
     except ImportError:
         return Result(ok=False, summary="Verification is not available", detail=_install_hint(), unavailable=True)
-    except Exception as exc:  # noqa: BLE001 -- playwright raises broadly
+    except Exception as exc:
         message = str(exc)
         if "Executable doesn't exist" in message or "playwright install" in message:
             return Result(
@@ -322,12 +274,10 @@ def verify(
 
     return _summarise(hits, page_status, elapsed_ms())
 
-
 def _first_line(message: str) -> str:
     """Playwright errors are long and start with the useful sentence."""
     line = message.strip().splitlines()[0] if message.strip() else message
     return line[:300]
-
 
 def _summarise(hits: list[Hit], page_status: int | None, total_ms: int) -> Result:
     if page_status is not None and page_status >= 400:

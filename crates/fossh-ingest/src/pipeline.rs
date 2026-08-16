@@ -1,10 +1,3 @@
-//! Request → `Event` pipeline: wire parsing (JSON body or `/e.gif` query
-//! string), allowlist + grammar/bound validation, UA bucketing, and
-//! visitor hashing. Auth (`auth.rs`) and rate limiting (`ratelimit.rs`)
-//! happen before this runs; DNT/GPC opt-out (P5) and S4's size caps are
-//! enforced here, first, before anything else about the request is
-//! examined — S2's "fail closed" applies to the *cheapest* checks first.
-
 use std::collections::HashMap;
 
 use serde::Deserialize;
@@ -16,24 +9,18 @@ use fossh_core::visitor::hash_visitor;
 
 #[derive(Debug)]
 pub enum PipelineError {
-    /// Body (or the batch it decodes to) exceeds S4's caps — `413`.
+
     TooLarge,
-    /// Malformed JSON, a field failing its grammar/bound, or a name/prop
-    /// key not on the site's allowlist — `422`. Carries a reason for
-    /// internal use only; §7.1 says the ingest path is never allowed a
-    /// response body, so nothing here is ever echoed back to the caller.
+
     Invalid(String),
 }
 
 pub enum PipelineOutcome {
-    /// P5: `DNT: 1` or `Sec-GPC: 1` present (and respected) — the caller
-    /// responds `204` and records nothing, not even an aggregate counter.
+
     OptedOut,
     Accepted(Vec<Event>),
 }
 
-/// Everything the pipeline needs about the request and the site that
-/// nothing in the request body itself supplies.
 pub struct RequestContext<'a> {
     pub site_id: SiteId,
     pub site_allowlist: &'a [String],
@@ -45,10 +32,7 @@ pub struct RequestContext<'a> {
     pub respect_optout_signals: bool,
     pub now: i64,
     pub daily_salt: &'a [u8; 32],
-    /// GeoIP resolution happens outside this crate (§10's `country_db`);
-    /// `Country::UNKNOWN` ("ZZ") is a fully valid, supported value, not a
-    /// fallback used only on error (`country_db = "none"` makes every
-    /// event `ZZ` on purpose, per §10).
+
     pub country: Country,
 }
 
@@ -67,12 +51,6 @@ struct WireEvent {
     props: HashMap<String, String>,
 }
 
-// No `deny_unknown_fields`: unlike operator-facing `fossh.toml` (where a
-// typo should fail loudly), the wire protocol should tolerate fields a
-// newer client SDK sends that this version doesn't know about yet —
-// including a client-supplied `ts`, which is deliberately absent from
-// this struct so it's silently ignored rather than rejected (§6: "client
-// ts is ignored").
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum WireBody {
@@ -90,13 +68,6 @@ fn parse_kind(s: Option<&str>) -> Result<EventKind, PipelineError> {
     }
 }
 
-/// The already-typed shape both wire parsers (`from_json_body`,
-/// `from_query_string`) and `fossh-ffi`'s direct calls
-/// (`fossh_pageview`/`fossh_event`/`fossh_timing`, §11) build before
-/// handing an event to `assemble_event` — the one place allowlist
-/// membership, grammar/bound validation, UA bucketing, and visitor
-/// hashing actually happen, so there's exactly one code path that can
-/// produce a validated `Event`, no matter which transport it came from.
 pub struct EventFields {
     pub name: String,
     pub kind: Option<String>,
@@ -187,7 +158,6 @@ pub fn assemble_event(fields: EventFields, ctx: &RequestContext) -> Result<Event
     Ok(event)
 }
 
-/// `POST /e`: parses a JSON event or batch from the request body.
 pub fn from_json_body(
     raw_body: &[u8],
     ctx: &RequestContext,
@@ -195,7 +165,7 @@ pub fn from_json_body(
     if raw_body.len() > BODY_MAX {
         return Err(PipelineError::TooLarge);
     }
-    // P5, checked before anything else about the body is examined.
+
     if ctx.respect_optout_signals && (ctx.dnt || ctx.gpc) {
         return Ok(PipelineOutcome::OptedOut);
     }
@@ -217,9 +187,6 @@ pub fn from_json_body(
     Ok(PipelineOutcome::Accepted(events))
 }
 
-/// `GET /e.gif`: same validation, params in the query string instead of a
-/// JSON body. Supports `name`, `kind`, `path`, `referrer`, `value`, and
-/// `props.<key>=<value>` for properties.
 pub fn from_query_string(
     query: &str,
     ctx: &RequestContext,
@@ -364,7 +331,7 @@ mod tests {
 
     #[test]
     fn rejects_prop_key_not_on_allowlist() {
-        let allow = vec!["signup.completed".to_string()]; // "plan" not included
+        let allow = vec!["signup.completed".to_string()];
         let body = br#"{"name":"signup.completed","props":{"plan":"pro"}}"#;
         assert!(matches!(
             from_json_body(body, &ctx(&allow)),
@@ -442,11 +409,10 @@ mod tests {
 
     #[test]
     fn opted_out_event_has_no_visitor_hash_when_signals_are_respected_but_off_path() {
-        // Belt-and-suspenders: even outside the DNT/GPC 204-short-circuit,
-        // an opted-out request must never carry a visitor hash forward.
+
         let allow = vec!["pageview".to_string()];
         let mut c = ctx(&allow);
-        c.respect_optout_signals = false; // force past the 204 short-circuit
+        c.respect_optout_signals = false;
         c.dnt = true;
         let events = outcome_events(from_json_body(br#"{"name":"pageview"}"#, &c).unwrap());
         assert!(
@@ -458,7 +424,7 @@ mod tests {
     #[test]
     fn client_supplied_ts_is_ignored() {
         let allow = vec!["pageview".to_string()];
-        let body = br#"{"name":"pageview","ts":1}"#; // "ts" isn't a WireEvent field — must not error
+        let body = br#"{"name":"pageview","ts":1}"#;
         let events = outcome_events(from_json_body(body, &ctx(&allow)).unwrap());
         assert_eq!(
             events[0].ts, 1_700_000_000,

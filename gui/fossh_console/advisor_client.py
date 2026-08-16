@@ -58,36 +58,20 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-#: Loopback only. Not configurable from the interface on purpose — a
-#: settable model endpoint is a way to send an operator's diagnostics
-#: to somebody else's server.
 ENDPOINT = "http://127.0.0.1:11434"
 
-#: The tag Ollama actually has. Verified against `ollama list`.
 MODEL = "lfm2.5-thinking"
 
-#: The gate, as measured rather than assumed.
 MAX_TTFT_SECONDS = 1.7
 MIN_TOKENS_PER_SECOND = 38.5
 
-#: How long Ollama keeps the model resident between requests. Long
-#: enough that an operator working through several findings never pays
-#: the cold cost twice.
 KEEP_ALIVE = "30m"
 
-#: Four, matching the reservation in `capability.rs`. Six measured no
-#: faster (75.6 vs 76.5 tok/s), so the extra two cores would be taken
-#: from the machine's real work for nothing.
 NUM_THREAD = 4
 
-#: Sized for a reasoning trace *and* an answer. The trace alone has
-#: been measured at 587 tokens; a budget that only fits the trace
-#: returns an empty answer, which is the failure this number exists to
-#: prevent.
 NUM_PREDICT = 700
 
 _REASONING = re.compile(r"<think>.*?(?:</think>|\Z)", re.DOTALL | re.IGNORECASE)
-
 
 def _forbidden_terms() -> list[str]:
     """The shared list, from `packaging/model/forbidden-terms.json`.
@@ -123,9 +107,7 @@ def _forbidden_terms() -> list[str]:
         "without the list that redacts its output"
     )
 
-
 _TERMS: list[str] | None = None
-
 
 def scrub(text: str) -> str:
     """Removes anything this component must not disclose.
@@ -143,7 +125,6 @@ def scrub(text: str) -> str:
                 break
             out = out[:at] + "[redacted]" + out[at + len(term):]
     return out
-
 
 @dataclass
 class Measurement:
@@ -171,11 +152,9 @@ class Measurement:
             )
         return ""
 
-
 class AdvisorUnavailable(Exception):
     """The model cannot be used. Never fatal — the deterministic rules
     are the whole feature and run regardless."""
-
 
 def _strip_reasoning(text: str) -> str:
     """Removes the model's reasoning trace.
@@ -187,7 +166,6 @@ def _strip_reasoning(text: str) -> str:
     """
     return _REASONING.sub("", text).strip()
 
-
 def _post(path: str, payload: dict, timeout: float):
     request = urllib.request.Request(
         f"{ENDPOINT}{path}",
@@ -195,7 +173,6 @@ def _post(path: str, payload: dict, timeout: float):
         headers={"Content-Type": "application/json"},
     )
     return urllib.request.urlopen(request, timeout=timeout)
-
 
 def available(timeout: float = 2.0) -> bool:
     """Whether the runtime is reachable and has the model.
@@ -212,7 +189,6 @@ def available(timeout: float = 2.0) -> bool:
     names = [m.get("name", "") for m in tags.get("models", [])]
     return any(n == MODEL or n.startswith(f"{MODEL}:") for n in names)
 
-
 def _generate(prompt: str, *, timeout: float, num_predict: int = NUM_PREDICT) -> Measurement:
     payload = {
         "model": MODEL,
@@ -220,7 +196,7 @@ def _generate(prompt: str, *, timeout: float, num_predict: int = NUM_PREDICT) ->
         "stream": True,
         "keep_alive": KEEP_ALIVE,
         "options": {
-            # CPU only. See this module's header.
+
             "num_gpu": 0,
             "num_thread": NUM_THREAD,
             "num_predict": num_predict,
@@ -241,9 +217,7 @@ def _generate(prompt: str, *, timeout: float, num_predict: int = NUM_PREDICT) ->
                     continue
                 chunk = json.loads(line)
                 message = chunk.get("message", {})
-                # Reasoning arrives in its own field on this model, and
-                # inline as <think> on others. Either counts as the
-                # model having started, which is what TTFT measures.
+
                 produced = (message.get("thinking") or "") + (message.get("content") or "")
                 if produced and first_token_at is None:
                     first_token_at = time.perf_counter() - started
@@ -262,11 +236,9 @@ def _generate(prompt: str, *, timeout: float, num_predict: int = NUM_PREDICT) ->
     return Measurement(
         ttft_seconds=first_token_at,
         tokens_per_second=rate,
-        # Scrubbed here as well as in `explain`, so a caller reaching
-        # for `Measurement.answer` directly cannot bypass it.
+
         answer=scrub(_strip_reasoning("".join(pieces))),
     )
-
 
 def warm(timeout: float = 120.0) -> None:
     """Brings the model resident so the first real request is warm.
@@ -279,7 +251,6 @@ def warm(timeout: float = 120.0) -> None:
         _generate("ready", timeout=timeout, num_predict=1)
     except AdvisorUnavailable:
         pass
-
 
 def probe(timeout: float = 120.0) -> Measurement:
     """Times a real generation and reports whether it clears the gate.
@@ -294,7 +265,6 @@ def probe(timeout: float = 120.0) -> Measurement:
         "In one sentence: why does a file's permissions matter on a shared machine?",
         timeout=timeout,
     )
-
 
 def explain(prompt: str, *, timeout: float = 120.0) -> str:
     """One explanation, scrubbed.

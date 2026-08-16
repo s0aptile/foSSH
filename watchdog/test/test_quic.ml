@@ -1,18 +1,3 @@
-(* Real end-to-end proof that the OCaml ctypes bindings to libquiche
-   actually drive a working mTLS QUIC handshake — two real UDP sockets
-   on loopback, two real, independently-generated self-signed
-   certificates (via the system `openssl` binary, matching this
-   codebase's existing GnuPG tests' "shell out to a well-known,
-   already-present tool" pattern rather than an OCaml crypto library),
-   each side configured to trust only the other's specific certificate.
-   A real stream carries a real message both directions.
-
-   Deliberately the same two scenarios, generated the same way (EC
-   P-256, not Ed25519 — see generate_self_signed_cert below), as
-   crates/fossh-ipc's own tests/mtls_handshake.rs: this is the same
-   §3.4 channel from the other side, and the two test suites are meant
-   to stay comparable, not just both-separately-plausible. *)
-
 open Fossh_watchdog_lib
 open Fossh_watchdog_quic
 open Test_helpers
@@ -119,8 +104,7 @@ let a_real_mtls_quic_handshake_completes_and_a_stream_round_trips () =
 let a_client_presenting_the_wrong_certificate_is_rejected () =
   let watchdog_cert = generate_self_signed_cert "fossh-watchdog-wrongcert" in
   let core_cert = generate_self_signed_cert "fossh-core-wrongcert" in
-  (* A THIRD, unrelated cert -- this is what the client actually
-     presents; core only trusts watchdog_cert, so this must fail. *)
+
   let impostor_cert = generate_self_signed_cert "impostor" in
   let port = find_free_loopback_port () in
   let listen_addr = Unix.ADDR_INET (Unix.inet_addr_of_string "127.0.0.1", port) in
@@ -140,9 +124,7 @@ let a_client_presenting_the_wrong_certificate_is_rejected () =
         match Quic.accept_one ~listen_addr ~tls ~deadline with
         | Error _ -> server_rejected := true
         | Ok state ->
-            (* An established connection here would be the real bug --
-               matching fossh-ipc's own identical assertion on the Rust
-               side of this same scenario. *)
+
             server_rejected := false;
             Quic.close state)
       ()
@@ -156,10 +138,7 @@ let a_client_presenting_the_wrong_certificate_is_rejected () =
     }
   in
   let deadline = deadline_in 3.0 in
-  (* A client-side Ok here is not itself the bug (real, asynchronous
-     TLS 1.3 rejection timing -- see fossh-ipc's own identical note in
-     crates/fossh-ipc/tests/mtls_handshake.rs); what must never happen
-     is the *server* concluding the connection is usable. *)
+
   (match Quic.connect ~peer_addr:listen_addr ~tls:client_tls ~deadline with
   | Ok state -> Quic.close state
   | Error _ -> ());
@@ -171,18 +150,6 @@ let a_client_presenting_the_wrong_certificate_is_rejected () =
   rm_rf core_cert.dir;
   rm_rf impostor_cert.dir
 
-(* Regression test for an adversarial-review finding: an earlier
-   version of Quic.close was not idempotent (nothing marked a
-   connection as already closed), and calling it twice was a real,
-   reproduced double-free -- `free(): double free detected in tcache
-   2`, SIGABRT, not a theoretical concern. A caller invoking close
-   twice (once on an explicit path, once from a cleanup handler) is a
-   very plausible mistake once this is wired into the supervisor's own
-   real event loop, so this is pinned down directly rather than left
-   to be caught only incidentally by some other test. If the
-   regression ever reoccurs, this whole test *binary* aborts before
-   reaching "3 checks passed" -- there is no way for a crash here to
-   report as a quiet failure. *)
 let closing_a_connection_twice_does_not_crash () =
   let watchdog_cert = generate_self_signed_cert "fossh-watchdog-doubleclose" in
   let core_cert = generate_self_signed_cert "fossh-core-doubleclose" in

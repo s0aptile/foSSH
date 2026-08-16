@@ -1,8 +1,3 @@
-//! Minimal shared flag-parsing helpers (ADR-0003: hand-rolled, not
-//! `clap` — see `DECISIONS.md`).
-
-/// Finds `--name VALUE` in `args`, accepting either `--name value` (two
-/// tokens) or `--name=value` (one token).
 pub fn flag_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     for (i, arg) in args.iter().enumerate() {
         if arg == name {
@@ -17,29 +12,20 @@ pub fn flag_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     None
 }
 
-/// Whether a bare boolean flag (e.g. `--public-key`) is present.
 pub fn has_flag(args: &[String], name: &str) -> bool {
     args.iter().any(|a| a == name)
 }
 
-/// Whether `-h`/`--help` is present anywhere in a subcommand's own args.
-/// Every subcommand must check this *before* doing anything with side
-/// effects (see `commands::init`/`commands::maintain`, which used to
-/// ignore unrecognized flags — including this one — and run for real).
 pub fn wants_help(args: &[String]) -> bool {
     has_flag(args, "--help") || has_flag(args, "-h")
 }
 
-/// The first argument, if it doesn't look like a flag — used for
-/// required positional arguments like `<slug>`.
 pub fn positional(args: &[String]) -> Option<&str> {
     args.first()
         .map(String::as_str)
         .filter(|s| !s.starts_with("--"))
 }
 
-/// Splits a comma-separated flag value into trimmed, non-empty parts —
-/// `--allow a,b, c` -> `["a", "b", "c"]`.
 pub fn comma_list(value: &str) -> Vec<String> {
     value
         .split(',')

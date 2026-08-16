@@ -1,54 +1,3 @@
-//! Provider definitions: how to reach a particular external service,
-//! contributed as data rather than as code.
-//!
-//! An integration is an endpoint, a credential, and where the
-//! credential goes. A *provider* is a reusable template for one:
-//! "Datadog's events API lives here, takes a `DD-API-KEY` header, and
-//! needs to know your site region." The console offers them as a
-//! starting point so nobody has to look up a URL, and everything
-//! afterwards is the ordinary integration path.
-//!
-//! ## Why these are data and not plugins
-//!
-//! The obvious way to let developers extend an admin tool is to load
-//! their code into it. This deliberately does not, and the reason is
-//! what this particular tool is holding: every API key on the install,
-//! the setup token, and a private key at the moment it is generated.
-//! Code loaded into that process gets all of it, and a plugin system
-//! is a supply chain — one popular provider plugin with one bad
-//! release is a credential-exfiltration incident across every install
-//! that had it.
-//!
-//! A declarative provider cannot read a credential, cannot execute
-//! anything, and cannot reach the network on its own. The worst a
-//! malicious one can do is describe an endpoint pointing at its
-//! author's server — which is exactly what an operator typing that
-//! URL by hand could already do, is visible in the console before
-//! anything is sent, and is refused outright unless it is HTTPS.
-//! That is a bounded, inspectable failure, and it is the reason this
-//! is the shape it is. See ADR-0066.
-//!
-//! ## Where they come from
-//!
-//! Three directories, later ones overriding earlier by `id`:
-//!
-//! 1. `/usr/share/fossh/providers/` — shipped with the package.
-//! 2. `/etc/fossh/providers.d/` — added by whoever administers the
-//!    machine.
-//! 3. `$XDG_CONFIG_HOME/fossh/providers.d/` — added by the person
-//!    running the console.
-//!
-//! ## What cannot be expressed, said plainly
-//!
-//! Services that sign each request rather than presenting a static
-//! credential — AWS SigV4 being the obvious one — cannot be described
-//! this way, and no amount of template syntax would change that.
-//! Pretending otherwise would produce providers that look right and
-//! fail at the first request. For AWS specifically the workable shape
-//! is an API Gateway endpoint with an API key, or a Lambda function
-//! URL with a bearer token; both are ordinary API-key services and
-//! both work here.
-
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -56,21 +5,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::integrations::{Auth, Method, validate_endpoint, validate_header_name};
 
-/// Cap on how many providers will be loaded, and how big one may be.
-/// A provider directory is operator-controlled, not hostile, but these
-/// keep a mistake (a log file dropped in the directory) from becoming
-/// an unbounded read.
 const MAX_PROVIDERS: usize = 256;
 const MAX_PROVIDER_BYTES: u64 = 64 * 1024;
 
 pub const SYSTEM_DIR: &str = "/usr/share/fossh/providers";
 pub const SITE_DIR: &str = "/etc/fossh/providers.d";
 
-/// One value the operator has to supply before the endpoint is
-/// complete — a region, a workspace id, a hostname.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Field {
-    /// Substituted into `endpoint` wherever `{key}` appears.
+
     pub key: String,
     pub label: String,
     #[serde(default)]
@@ -83,22 +26,19 @@ pub struct Field {
 pub struct Provider {
     pub id: String,
     pub name: String,
-    /// Where to get a key and what it is called there. Shown as a
-    /// link, never fetched.
+
     #[serde(default)]
     pub docs: String,
-    /// May contain `{field}` placeholders, each of which must have a
-    /// matching entry in `fields`.
+
     pub endpoint: String,
     #[serde(default)]
     pub method: Method,
-    /// `"bearer"` or a header name.
+
     #[serde(default)]
     pub auth_header: Option<String>,
     #[serde(default)]
     pub fields: Vec<Field>,
-    /// What the credential looks like where it is issued, so an
-    /// operator can tell they have pasted the right one of several.
+
     #[serde(default)]
     pub key_hint: String,
 }
@@ -125,7 +65,7 @@ impl std::fmt::Display for ProviderError {
 impl std::error::Error for ProviderError {}
 
 impl Provider {
-    /// The `Auth` this provider implies.
+
     pub fn auth(&self) -> Auth {
         match &self.auth_header {
             None => Auth::Bearer,
@@ -133,11 +73,6 @@ impl Provider {
         }
     }
 
-    /// Checks everything that can be checked without operator input.
-    ///
-    /// Run at load time, so a broken provider is dropped with a
-    /// message instead of surfacing later as an integration that
-    /// cannot be created.
     pub fn validate(&self) -> Result<(), ProviderError> {
         let bad = |reason: &str| ProviderError::Invalid {
             id: self.id.clone(),
@@ -164,9 +99,6 @@ impl Provider {
             return Err(bad("its docs link is not an https:// URL"));
         }
 
-        // Every placeholder must be declared, and every declared field
-        // must be used. An undeclared one can never be filled in; an
-        // unused one is a question asked for no reason.
         let declared: Vec<&str> = self.fields.iter().map(|f| f.key.as_str()).collect();
         for placeholder in placeholders(&self.endpoint) {
             if !declared.contains(&placeholder.as_str()) {
@@ -194,21 +126,12 @@ impl Provider {
             }
         }
 
-        // A provider with no placeholders must already be a valid
-        // endpoint. One with placeholders is checked after filling.
         if placeholders(&self.endpoint).is_empty() {
             validate_endpoint(&self.endpoint).map_err(|e| bad(&e.to_string()))?;
         }
         Ok(())
     }
 
-    /// Fills the template and returns an endpoint ready to store.
-    ///
-    /// Values are substituted, then the *result* is validated as a
-    /// whole. Validating the template instead would let a value carry
-    /// a `?`, a `#`, or an `@` that changes which host the finished URL
-    /// actually addresses — the same class of trap `host_of` exists
-    /// for, one layer up.
     pub fn render_endpoint(
         &self,
         values: &BTreeMap<String, String>,
@@ -221,10 +144,6 @@ impl Provider {
                 .filter(|v| !v.is_empty())
                 .ok_or_else(|| ProviderError::MissingField(field.key.clone()))?;
 
-            // Refused rather than escaped: these are the characters
-            // that end an authority or start a query, and a region or
-            // workspace id has no business containing one. Escaping
-            // would silently produce a URL the operator did not mean.
             if value.chars().any(|c| {
                 c.is_whitespace()
                     || c.is_control()
@@ -253,7 +172,6 @@ impl Provider {
     }
 }
 
-/// Every `{name}` in `template`, in order, without duplicates.
 fn placeholders(template: &str) -> Vec<String> {
     let mut found = Vec::new();
     let mut rest = template;
@@ -282,12 +200,6 @@ pub fn search_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// Loads every provider from `dirs`, later directories overriding
-/// earlier ones by id.
-///
-/// A provider that fails validation is skipped and reported rather
-/// than aborting the load: one bad file dropped into a directory must
-/// not take away every other provider on the system.
 pub fn load_from(dirs: &[PathBuf]) -> (Vec<Provider>, Vec<ProviderError>) {
     let mut by_id: BTreeMap<String, Provider> = BTreeMap::new();
     let mut problems = Vec::new();
@@ -301,8 +213,7 @@ pub fn load_from(dirs: &[PathBuf]) -> (Vec<Provider>, Vec<ProviderError>) {
             .map(|e| e.path())
             .filter(|p| p.extension().is_some_and(|x| x == "toml"))
             .collect();
-        // Deterministic order, so two files defining the same id
-        // resolve the same way on every machine.
+
         paths.sort();
 
         for path in paths {
@@ -389,8 +300,7 @@ mod tests {
 
     #[test]
     fn a_placeholder_with_no_matching_field_is_refused() {
-        // It could never be filled in, so the provider would produce
-        // an endpoint with a literal brace in it.
+
         let mut p = base();
         p.endpoint = "https://api.{region}.example.com/v1".to_string();
         assert!(p.validate().is_err());
@@ -398,7 +308,7 @@ mod tests {
 
     #[test]
     fn a_field_the_endpoint_never_uses_is_refused() {
-        // Asking an operator for a value and then ignoring it.
+
         let mut p = base();
         p.fields = vec![Field {
             key: "region".to_string(),
@@ -429,9 +339,7 @@ mod tests {
 
     #[test]
     fn a_field_value_cannot_redirect_the_finished_url_to_another_host() {
-        // The whole reason substitution is validated afterwards. Each
-        // of these would produce a URL whose real host is not the one
-        // the provider names.
+
         let mut p = base();
         p.endpoint = "https://api.{region}.example.com/v1".to_string();
         p.fields = vec![Field {
@@ -442,11 +350,11 @@ mod tests {
         }];
 
         for hostile in [
-            "evil.invalid/",   // ends the authority early
-            "x@evil.invalid",  // userinfo, so the host is evil
-            "x?@evil.invalid", // query before the @
-            "x#@evil.invalid", // fragment before the @
-            "x:9999",          // a port the provider did not choose
+            "evil.invalid/",
+            "x@evil.invalid",
+            "x?@evil.invalid",
+            "x#@evil.invalid",
+            "x:9999",
             "x\\evil.invalid",
             "x evil",
         ] {
@@ -471,7 +379,7 @@ mod tests {
             Err(ProviderError::MissingField(k)) => assert_eq!(k, "region"),
             other => panic!("expected a named missing field, got {other:?}"),
         }
-        // Whitespace-only counts as missing, not as a value.
+
         assert!(p.render_endpoint(&values(&[("region", "   ")])).is_err());
     }
 
@@ -479,7 +387,7 @@ mod tests {
     fn placeholders_are_found_once_each_and_in_order() {
         assert_eq!(placeholders("https://{a}.x/{b}/{a}"), vec!["a", "b"]);
         assert_eq!(placeholders("https://x/"), Vec::<String>::new());
-        // An unclosed brace must not loop forever or panic.
+
         assert_eq!(placeholders("https://{unclosed"), Vec::<String>::new());
         assert_eq!(placeholders("}{"), Vec::<String>::new());
     }
@@ -529,8 +437,7 @@ auth_header = "X-Api-Key"
 
     #[test]
     fn one_broken_file_does_not_take_away_the_others() {
-        // A directory is operator-controlled; a stray file in it must
-        // cost that file, not the whole feature.
+
         let dir = scratch("broken");
         fs::write(dir.join("good.toml"), SAMPLE).unwrap();
         fs::write(dir.join("bad.toml"), "this is not toml at all {{{").unwrap();
@@ -568,7 +475,7 @@ auth_header = "X-Api-Key"
 
     #[test]
     fn a_directory_that_does_not_exist_is_skipped_silently() {
-        // Two of the three search paths are absent on most machines.
+
         let (providers, problems) = load_from(&[PathBuf::from("/nonexistent/fossh/providers")]);
         assert!(providers.is_empty());
         assert!(problems.is_empty());
@@ -590,9 +497,7 @@ auth_header = "X-Api-Key"
 
     #[test]
     fn every_bundled_provider_is_valid() {
-        // The definitions shipped in packaging/providers/ go through
-        // exactly the same validation an operator's would, so a typo
-        // in one fails the build rather than an operator's first use.
+
         let bundled = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packaging/providers");
         let (providers, problems) = load_from(&[bundled]);
         assert!(

@@ -1,22 +1,3 @@
-(* Shared helper for shelling out to `gpgv`/`gpg`/`sha256sum` via an
-   argv array, never a shell string — every caller in this codebase
-   passes untrusted or semi-trusted data (file paths, key IDs, nonce
-   bytes) as separate argv/stdin elements, so there is no shell
-   metacharacter injection surface, matching the same discipline the
-   Rust side of this project holds itself to for SQL/shell contexts. *)
-
-(* Live-run finding (real repro): `Unix.WSIGNALED`/`WSTOPPED` carry
-   OCaml's own portable internal signal encoding (small negative ints,
-   e.g. `Sys.sigkill = -7`), not the real OS signal number -- a real
-   `kill -9` logged as "killed by signal -7", not "9", confusing for
-   an operator or an alerting rule grepping log output. Translates the
-   common process-supervision-relevant signals back to their real
-   Linux numbers by matching against OCaml's own named `Sys.sig*`
-   constants (portable across OCaml versions/platforms by
-   construction, since those constants are whatever this runtime
-   actually uses) rather than hardcoding assumed values; anything not
-   in this short list still shows the raw OCaml int, labeled as such
-   rather than presented as if it were the real number. *)
 let describe_signal (n : int) : string =
   let named =
     [
@@ -32,29 +13,8 @@ let describe_signal (n : int) : string =
   | Some (_, name, real_n) -> Printf.sprintf "%s (%d)" name real_n
   | None -> Printf.sprintf "OCaml internal signal %d" n
 
-(* Every pipe end not explicitly handed to the child is close-on-exec.
-   `gpg` spawns `gpg-agent`, a lingering background daemon, as a side
-   effect of some operations; without this, `gpg-agent` inherits our
-   pipe fds across `gpg`'s own exec and holds them open indefinitely
-   even after `gpg` itself exits, hanging any read loop waiting for
-   EOF on that pipe. `Unix.create_process` still gets a correctly
-   open, non-cloexec fd 0/1/2 in the child either way, since a
-   `dup2`'d descriptor never inherits `CLOEXEC` from its source fd.
-   Reproduced this exact hang (and confirmed the fix with `pgrep`)
-   while building this module — see DECISIONS.md's ADR-0040. *)
 let pipe () = Unix.pipe ~cloexec:true ()
 
-(* stdin is written from a dedicated thread rather than sequentially
-   before reading stdout/stderr — writing everything first and only
-   then reading, as an earlier version of this function did, is an
-   unconditional deadlock risk for any input near or past the OS pipe
-   buffer size (traditionally 64KiB on Linux) once the child starts
-   producing output before it has fully drained stdin, which `gpg
-   --decrypt`/`--verify` genuinely does on real, plausibly-sized
-   manifests. Reproduced the hang for real (a few hundred KB against
-   `/bin/cat`, and again against real `gpg --decrypt` on a
-   several-hundred-KB clearsigned manifest) before switching to this
-   shape — see ADR-0041. *)
 let write_stdin_in_background (fd : Unix.file_descr) (content : string) : unit
     =
   let oc = Unix.out_channel_of_descr fd in
@@ -65,9 +25,7 @@ let write_stdin_in_background (fd : Unix.file_descr) (content : string) : unit
           output_string oc content;
           close_out oc
         with Sys_error _ ->
-          (* The child may exit (bad args, etc.) before reading all of
-             stdin — a broken pipe here is not this function's error
-             to report; the child's exit status is. *)
+
           ())
       ()
   in
@@ -112,8 +70,6 @@ let run_raw ~(prog : string) ~(argv : string array) ~(stdin_content : string) :
   let _, exit_status = Unix.waitpid [] pid in
   { stdout; stderr; exit_status }
 
-(* Convenience wrapper for the common "I just want stdout on success,
-   an error message otherwise" case (`sha256sum`, plain signing). *)
 let run ~(prog : string) ~(argv : string array) ~(stdin_content : string) :
     (string, string) result =
   let o = run_raw ~prog ~argv ~stdin_content in

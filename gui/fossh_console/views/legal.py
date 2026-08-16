@@ -33,15 +33,12 @@ from gi.repository import Adw, GLib, Gtk
 
 from ..iconography import symbolic_name
 
-#: `(tab label, filename, one-line description)`. Filenames are
-#: resolved against the search path below.
 DOCUMENTS = [
     ("Terms", "tos.md", "The terms this release is provided under, and the disclaimers that go with it."),
     ("Privacy", "PRIVACY.md", "What foSSH collects and what it does not — written for the people whose visits are counted."),
     ("Licence", "LICENSE", "The MIT licence, in full."),
     ("Retirement", "RETIREMENT.md", "Which releases are retired, and what was wrong with them."),
 ]
-
 
 def _search_paths() -> list[Path]:
     """Where the documents might be, packaged or in a checkout."""
@@ -54,14 +51,12 @@ def _search_paths() -> list[Path]:
         repo_root,
     ]
 
-
 def find_document(filename: str) -> Path | None:
     for base in _search_paths():
         candidate = base / filename
         if candidate.is_file():
             return candidate
     return None
-
 
 def markdown_to_pango(text: str) -> str:
     """The small subset these documents use.
@@ -82,8 +77,7 @@ def markdown_to_pango(text: str) -> str:
             continue
 
         if line.strip() == "---":
-            # A rule, drawn with the only thing Pango markup has: a
-            # dimmed run of box-drawing characters.
+
             out.append('<span alpha="35%">────────────────────</span>')
             continue
 
@@ -91,13 +85,10 @@ def markdown_to_pango(text: str) -> str:
         if bullet:
             line = f"  • {bullet.group(1)}"
 
-        # Inline: **bold**, then `code`. Bold first, so a bold run
-        # containing code still resolves.
         line = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", line)
         line = re.sub(r"`([^`]+)`", r'<tt>\1</tt>', line)
         out.append(line)
     return "\n".join(out)
-
 
 class LegalView(Gtk.Box):
     def __init__(self) -> None:
@@ -170,10 +161,8 @@ class LegalView(Gtk.Box):
         body = Gtk.Label(xalign=0)
         body.set_markup(markdown_to_pango(text))
         body.set_wrap(True)
-        body.set_wrap_mode(2)  # Pango.WrapMode.WORD_CHAR
-        # Selectable so it can be copied into a lawyer's inbox or a
-        # privacy policy, which is a large part of why anyone opens
-        # this page at all.
+        body.set_wrap_mode(2)
+
         body.set_selectable(True)
         body.set_xalign(0)
         outer.append(body)

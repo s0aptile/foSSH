@@ -21,10 +21,6 @@ let () =
   Session.revoke_all ();
   check "revoke_all clears an outstanding token" (not (Session.is_valid a));
 
-  (* The leak this guards: a token issued and then never mentioned
-     again. Lazy pruning on lookup never sees it, so before prune_expired
-     existed these accumulated for the process's whole lifetime -- and a
-     watchdog's lifetime is months. *)
   Session.revoke_all ();
   for _ = 1 to 50 do
     ignore (Session.issue ~lifetime_seconds:0.05 ())
@@ -34,8 +30,6 @@ let () =
   check "abandoned tokens are reclaimed once expired, without anyone looking them up"
     (Session.live_count () = 0);
 
-  (* And the cap, so an authenticated client cannot grow the table
-     without bound faster than entries expire. *)
   Session.revoke_all ();
   let first_of_the_batch = Session.issue () in
   let issued = ref 1 in
@@ -50,9 +44,6 @@ let () =
   check "the cap is where it says it is" (!issued = Session.max_live_sessions);
   check "the table stops at the cap" (Session.live_count () = Session.max_live_sessions);
 
-  (* Refusing must not be permanent: freeing one slot lets the next
-     operator in. A cap that latched would be a denial of service
-     dressed up as a fix. *)
   Session.revoke first_of_the_batch;
   let recovered =
     match Session.issue () with exception Session.Too_many_sessions -> false | _ -> true

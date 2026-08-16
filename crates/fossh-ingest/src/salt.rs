@@ -1,9 +1,3 @@
-//! P2: daily salt lifecycle. `daily_salt` is 32 random bytes, generated at
-//! first use, rotated at 00:00 UTC. In CGI mode there is no persistent
-//! process to hold it in memory across requests, so P2 explicitly carves
-//! out a tmpfs-backed file for that case: `0600`, regenerated when its
-//! mtime crosses the UTC day boundary, `shred`-overwritten on rotation.
-
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -42,7 +36,7 @@ fn write_new_salt(path: &Path) -> Result<Zeroizing<[u8; SALT_LEN]>, IngestError>
         .mode(0o600)
         .open(&tmp_path)?;
     file.write_all(&*salt)?;
-    let _ = file.sync_all(); // best-effort — tmpfs has no durability to lose anyway
+    let _ = file.sync_all();
 
     let mut perms = fs::metadata(&tmp_path)?.permissions();
     perms.set_mode(0o600);
@@ -76,11 +70,6 @@ fn read_if_fresh(
     }
 }
 
-/// Overwrites a file's bytes with zeroes before removing it — a `shred`
-/// stand-in without shelling out. Best-effort, with the same caveat every
-/// software-level shred has on copy-on-write/journaled/wear-levelled
-/// storage — which is exactly why P2 puts this file on tmpfs: plain RAM,
-/// none of those caveats apply.
 fn shred(path: &Path) -> Result<(), IngestError> {
     if let Ok(metadata) = fs::metadata(path)
         && let Ok(mut file) = OpenOptions::new().write(true).open(path)
@@ -96,10 +85,6 @@ fn shred(path: &Path) -> Result<(), IngestError> {
     }
 }
 
-/// Owns the salt file location for a site. Each CGI invocation is its own
-/// process with no shared state, so `current()` is meant to be called
-/// once per request; it transparently generates or rotates the on-disk
-/// salt as needed and returns the day's value.
 pub struct SaltManager {
     salt_dir: PathBuf,
 }
@@ -150,22 +135,13 @@ impl SaltManager {
     }
 }
 
-/// P2's other case: "generated in memory at first use, rotated at 00:00
-/// UTC" with no further qualification — the tmpfs file dance is *only*
-/// for CGI mode, called out explicitly as compensating for CGI having
-/// "no persistent process" to hold the salt in. `fossh-ffi` and (M7)
-/// `fossh-fcgi` *are* persistent processes, so they use this instead:
-/// the salt lives in the process's own memory, no filesystem involved at
-/// all, regenerated in place whenever the UTC day rolls over.
 pub struct InMemorySalt {
     salt: Zeroizing<[u8; SALT_LEN]>,
     day: i64,
 }
 
 impl InMemorySalt {
-    /// Generates the first salt immediately — matches P2's "generated in
-    /// memory at first use" (there's no lazy-init state to thread through
-    /// every subsequent call this way).
+
     pub fn new() -> Result<Self, IngestError> {
         let mut s = Self {
             salt: Zeroizing::new([0u8; SALT_LEN]),
@@ -185,8 +161,6 @@ impl InMemorySalt {
         Ok(())
     }
 
-    /// Returns today's salt, rotating first if the UTC day has changed
-    /// since the last call.
     pub fn current(&mut self) -> Result<&[u8; SALT_LEN], IngestError> {
         self.rotate_if_needed(SystemTime::now())?;
         Ok(&self.salt)
@@ -244,8 +218,6 @@ mod tests {
         let mgr = SaltManager::new(dir.clone());
         let yesterday = mgr.current().unwrap();
 
-        // Backdate the file's mtime by 2 days so the next `current_at` call
-        // (with "now" a day later) sees it as stale and rotates.
         let file = File::options().write(true).open(mgr.path()).unwrap();
         file.set_modified(SystemTime::now() - Duration::from_secs(2 * 86_400))
             .unwrap();
@@ -260,14 +232,12 @@ mod tests {
 
     #[test]
     fn old_salt_file_is_gone_after_rotation_not_just_overwritten_in_place() {
-        // Regression guard for the shred-then-recreate path: after
-        // rotation the file must still exist (freshly created), readable,
-        // and 0600 — not left in some half-shredded state.
+
         let dir = scratch_dir("rotate-integrity");
         let mgr = SaltManager::new(dir.clone());
         mgr.current().unwrap();
         let file = File::options().write(true).open(mgr.path()).unwrap();
-        file.set_modified(UNIX_EPOCH).unwrap(); // epoch — definitely a previous day
+        file.set_modified(UNIX_EPOCH).unwrap();
         let rotated = mgr.current_at(SystemTime::now()).unwrap();
         assert_eq!(rotated.len(), SALT_LEN);
         let mode = fs::metadata(mgr.path()).unwrap().permissions().mode() & 0o777;

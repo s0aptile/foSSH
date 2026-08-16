@@ -1,7 +1,3 @@
-//! `fossh maintain` (§9, §7.1): drain every site's spool, enforce
-//! retention, vacuum. This is the "or cron every minute" compactor §7.1
-//! mentions as an alternative to `fossh-fcgi`'s background thread (M7).
-
 use fossh_core::types::SiteId;
 
 use crate::args::wants_help;
@@ -26,11 +22,6 @@ pub fn run(args: &[String]) -> i32 {
     let mut store = open_store(&config.data_dir);
     let now = unix_now();
 
-    // §3.8: the same per-install data-encryption key `fossh-cgi` seals
-    // spool frames under, and `open_store` above already used to open
-    // the database itself — loaded a second time here (cheap: one small
-    // file read) rather than threading it out of `open_store`, since
-    // this is the one command that needs it for both purposes at once.
     let data_key = crate::common::load_data_key(&config.data_dir);
 
     let sites = match store.list_sites() {
@@ -68,11 +59,6 @@ pub fn run(args: &[String]) -> i32 {
         }
     };
 
-    // §7.1/P7: "a vacuum job runs ... on `fossh maintain`" — unconditional
-    // here, unlike the ingest hot path's separate 1/1000 probabilistic
-    // trigger (a decision that needs a source of randomness that has no
-    // business in the storage layer — see `fossh-store`'s
-    // `retention::vacuum` doc comment).
     if let Err(e) = store.vacuum() {
         eprintln!("fossh maintain: vacuum: {e}");
         return 1;

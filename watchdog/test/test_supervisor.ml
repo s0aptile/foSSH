@@ -7,7 +7,7 @@ let write_file path content =
   close_out oc
 
 let () =
-  (* spawn / wait_for_exit against a real, short-lived process *)
+
   let t = Supervisor.create ~program:"/bin/sh" [| "/bin/sh"; "-c"; "exit 7" |] in
   let pid = Supervisor.spawn t in
   check "spawn returns a positive pid" (pid > 0);
@@ -15,8 +15,6 @@ let () =
   | Exited 7 -> check "wait_for_exit reports the real exit code" true
   | _ -> check "wait_for_exit reports the real exit code" false);
 
-  (* restart-storm guard: policy allows N within the window, refuses
-     the (N+1)th *)
   let policy = { Supervisor.max_restarts = 3; window_seconds = 60.0 } in
   let t2 = Supervisor.create ~policy ~program:"/bin/true" [| "/bin/true" |] in
   let results =
@@ -25,9 +23,6 @@ let () =
   check "first max_restarts (3) attempts are allowed"
     (results = [ true; true; true; false; false ]);
 
-  (* spawn_if_safe / restart_if_safe: real end-to-end gate against a
-     real signed manifest that actually covers the supervised
-     program's own path, since ADR-0041's fix requires that. *)
   let k = generate_key () in
   let watched_dir = mkdtemp () in
   Fun.protect
@@ -50,9 +45,6 @@ let () =
       in
       let t3 = Supervisor.create ~program:"/bin/true" [| "/bin/true" |] in
 
-      (* Initial spawn now goes through the same gate restarts do
-         (ADR-0041, finding #1) — a manifest that doesn't cover
-         t3.program at all must refuse even the FIRST spawn. *)
       let manifest_missing_program = sign_manifest_for [ watched_file ] in
       (match
          Supervisor.spawn_if_safe t3 ~gnupghome:k.gnupghome
@@ -103,11 +95,6 @@ let () =
           check "restart_if_safe refuses a restart when a watched file changed" true
       | _ -> check "restart_if_safe refuses a restart when a watched file changed" false);
 
-      (* The time-of-check/time-of-use gap: the manifest verifies the
-         file at a path, and the exec reopens that path. Simulated by
-         letting verification pass and then replacing the program before
-         the launch, which is exactly what an attacker with write access
-         to the binary would arrange to happen in between. *)
       let swappable = Filename.concat watched_dir "swappable" in
       write_file swappable "#!/bin/sh\nexit 0\n";
       Unix.chmod swappable 0o755;
@@ -123,9 +110,6 @@ let () =
       | Spawn_refused_tamper _ -> check "the unmodified program launches normally" false);
       (match Supervisor.wait_for_exit t_race with Exited 0 -> () | _ -> ());
 
-      (* Verify against the real file, then swap it for another one at
-         the same path -- unlink and recreate, so the inode changes the
-         way a replaced binary's would. *)
       let verified_as =
         match Manifest.identity_of swappable with Ok id -> Some id | Error _ -> None
       in
@@ -140,9 +124,6 @@ let () =
       | exception Supervisor.Program_changed_since_verification _ ->
           check "a program swapped after verification is NOT launched" true);
 
-      (* And the refusal must arrive as a decision, never as an
-         exception escaping into the supervision loop -- a watchdog that
-         dies on tamper detection has stopped watching. *)
       (match
          Supervisor.restart_if_safe t_race ~gnupghome:k.gnupghome
            ~expected_key_fingerprint:k.fingerprint
@@ -154,10 +135,6 @@ let () =
           check "the swapped file is caught by the hash check on the next cycle" true
       | _ -> check "the swapped file is caught by the hash check on the next cycle" false);
 
-      (* §3.4: request_termination — the one cross-thread touch the
-         real QUIC command server (Quic_command_server) makes on a
-         live Supervisor.t, from a thread other than the one running
-         the wait_for_exit loop above. *)
       let t4 = Supervisor.create ~program:"/bin/true" [| "/bin/true" |] in
       check "request_termination on a supervisor with no tracked child is a safe no-op"
         (Supervisor.request_termination t4;
@@ -177,28 +154,6 @@ let () =
       check "take_requested_termination is false when nothing has ever requested one"
         (not (Supervisor.take_requested_termination t6));
 
-      (* Adversarial-review regression (ADR-0050, CRITICAL): a real,
-         reproduced bug had 6 individually-verified reload commands in
-         a row — an ordinary operational pattern, not an attack —
-         trip the crash-storm guard and `exit 4` the *entire watchdog
-         process*, because a command-triggered restart fed the exact
-         same counter a genuine crash loop needs. This drives more
-         than `default_policy.max_restarts` command-triggered restart
-         cycles through the real dispatch path
-         (request_termination -> wait_for_exit ->
-         take_requested_termination -> restart_after_requested_termination)
-         end to end and asserts every single one succeeds — proving
-         the storm guard is structurally bypassed for this path, not
-         merely "still passing today by chance."
-
-         A manifest covering *only* /bin/true, signed fresh here — not
-         the earlier manifest_covering_program above, which by this
-         point in the same test function has been invalidated on
-         purpose (the "restart_if_safe refuses a restart when a
-         watched file changed" check just above deliberately tampered
-         with watched_file, so re-using that same manifest here would
-         make every cycle below fail tamper-check for an unrelated
-         reason and never actually exercise the storm-guard bypass). *)
       let manifest_for_true_only = sign_manifest_for [ "/bin/true" ] in
       let t8 = Supervisor.create ~program:"/bin/true" [| "/bin/true" |] in
       let (_ : int) = Supervisor.spawn t8 in
@@ -225,13 +180,6 @@ let () =
         !all_completed;
       let (_ : Supervisor.wait_outcome) = Supervisor.wait_for_exit t8 in
 
-      (* §2.3 regression: `spawn` used to exec fossh-fcgi with no
-         privilege drop at all, inheriting fossh-watchdog's own uid.
-         See `Supervisor.privdrop_argv`'s doc for the mechanism. *)
-
-      (* Pure: catches a missing flag, especially the three
-         capability-clearing ones, whose absence would leak this
-         process's own ambient capabilities into the dropped child. *)
       check "privdrop_argv builds the exact expected setpriv invocation"
         (Supervisor.privdrop_argv ~user:"fossh-svc" ~program:"/usr/bin/fossh-fcgi"
            [| "/usr/bin/fossh-fcgi"; "--extra-flag" |]
@@ -242,13 +190,6 @@ let () =
             "/usr/bin/fossh-fcgi"; "--extra-flag";
           |]);
 
-      (* Real, executed end to end through the real, installed
-         setpriv, not a stub. Unprivileged, this process should see
-         setpriv itself refuse (exit 127, confirmed directly against a
-         standalone invocation before writing this test) rather than
-         silently fall back to running the child as its own identity
-         -- fail closed, not open. As real root, expect the drop to
-         actually succeed. *)
       let is_root = Unix.geteuid () = 0 in
       let t9 =
         Supervisor.create ~drop_privileges_to:(Some "fossh-svc") ~program:"/bin/true"
@@ -272,8 +213,6 @@ let () =
              lacks CAP_SETUID/CAP_SETGID"
             false);
 
-      (* Same program, no drop_privileges_to: proves the 127 above is
-         caused by the setpriv wrapping, not by /bin/true itself. *)
       let t10 = Supervisor.create ~program:"/bin/true" [| "/bin/true" |] in
       let (_ : int) = Supervisor.spawn t10 in
       (match Supervisor.wait_for_exit t10 with
@@ -288,15 +227,6 @@ let () =
              above is caused by the privilege-drop wrapping, not by /bin/true itself"
             false);
 
-      (* Real root only: inspect the live child's /proc/<pid>/status
-         to confirm it's really running as fossh-svc's uid/gid, and
-         that CapEff is all zero (mirrors privdrop.rs's own "verify
-         the drop stuck by trying to reclaim" -- there's no single
-         syscall to retry here, so "holds no capability at all" is the
-         equivalent property). Genuinely can't run without real root
-         or CAP_SETUID/CAP_SETGID -- see the hardening report for what
-         was and wasn't verified in the environment this actually ran
-         in. *)
       if is_root then (
         let t11 =
           Supervisor.create ~drop_privileges_to:(Some "fossh-svc") ~program:"/bin/sleep"

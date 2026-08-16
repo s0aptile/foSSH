@@ -1,20 +1,3 @@
-//! §3.4's app-level command protocol — core's (`fossh-svc`'s) side.
-//! `watchdog/lib/command_protocol.ml` is the responder (issues and
-//! verifies session tokens, dispatches to `Supervisor`); this module
-//! is the initiator's counterpart, wire-compatible with it but far
-//! smaller, since core never issues or verifies a session — it only
-//! ever echoes back the token the watchdog already handed it. No Rust
-//! equivalent of this existed anywhere before ADR-0050: tracing task
-//! #31's wiring found the wire protocol built and tested on the OCaml
-//! side only, with nothing on core's side able to speak it at all.
-//!
-//! Deliberately QUIC-independent pure logic, exactly like its OCaml
-//! counterpart — this module has no `fossh-ipc`/`quiche` dependency
-//! and is tested without a live connection. The caller (gated behind
-//! `fossh-fcgi`'s own `quic` feature, since that's where `fossh-ipc`
-//! actually lives) is responsible for getting these encoded lines
-//! onto and off of a real stream.
-
 #![forbid(unsafe_code)]
 
 pub const MAX_LINE_LEN: usize = 512;
@@ -36,9 +19,6 @@ impl Command {
     }
 }
 
-/// Wire-exact counterpart to `command_protocol.ml`'s `child_state` —
-/// one of the two fixed-keyword fields a `STATUS` reply carries, see
-/// `Response::Status` below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChildState {
     Running,
@@ -55,11 +35,6 @@ impl ChildState {
     }
 }
 
-/// Wire-exact counterpart to `command_protocol.ml`'s `tamper_state`.
-/// `Unknown` covers every way the watchdog's own live tamper recheck
-/// couldn't produce a real clean/tampered answer (e.g. its manifest
-/// file was unreadable at query time) — never silently reported as
-/// `Clean`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TamperState {
     Clean,
@@ -107,40 +82,16 @@ impl std::fmt::Display for ProtocolError {
 
 impl std::error::Error for ProtocolError {}
 
-/// Same 64-lowercase-hex shape `command_protocol.ml`'s own
-/// `looks_like_a_token` enforces (`Nonce.generate`'s output shape) —
-/// kept in lockstep with that function rather than re-derived, since
-/// a mismatch here would silently make every real session token this
-/// side ever receives fail its own syntax check.
 fn looks_like_a_token(s: &str) -> bool {
     s.len() == 64
         && s.bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// OCaml's `String.trim` (used throughout `command_protocol.ml`'s own
-/// `decode_session_hello`/`decode_command`/`decode_response`) strips
-/// exactly `' '`, `'\x0c'`, `'\n'`, `'\r'`, `'\t'` — a fixed ASCII
-/// set, per its own documented behavior. Rust's `str::trim` strips
-/// every Unicode-whitespace codepoint instead (confirmed empirically:
-/// it removes a trailing U+00A0 NBSP; OCaml's `String.trim` does
-/// not). Adversarial review flagged this divergence directly: two
-/// parsers meant to accept the identical wire text were not actually
-/// doing the identical thing, even though currently inert (neither
-/// side's own `encode_*` ever produces non-ASCII whitespace) — real
-/// protocol drift a same-language unit test on either side alone
-/// could never surface. This trims exactly OCaml's set so both sides
-/// parse byte-for-byte identically, not just "close enough" on the
-/// inputs each side's own tests happen to try.
 fn ocaml_compatible_trim(s: &str) -> &str {
     s.trim_matches(|c| matches!(c, ' ' | '\x0c' | '\n' | '\r' | '\t'))
 }
 
-/// Parses a `SESSION <token>` line (the responder's first message on
-/// a fresh connection) and returns the token, unvalidated beyond
-/// syntax — this side has no way to independently verify a session
-/// token's *validity*, only its shape; the token is only ever
-/// meaningful to whichever side issued it.
 pub fn decode_session_hello(line: &str) -> Result<String, ProtocolError> {
     if line.len() > MAX_LINE_LEN {
         return Err(ProtocolError::LineTooLarge(line.len()));
@@ -152,18 +103,10 @@ pub fn decode_session_hello(line: &str) -> Result<String, ProtocolError> {
     }
 }
 
-/// Encodes a `COMMAND <token> <name>` line — the wire-exact
-/// counterpart to `command_protocol.ml`'s own `encode_command`.
 pub fn encode_command(session_token: &str, cmd: Command) -> String {
     format!("COMMAND {session_token} {}\n", cmd.name())
 }
 
-/// Parses an `OK` / `ERROR <reason>` / `STATUS <child> <tamper>` reply
-/// line — same order of checks as `command_protocol.ml`'s own
-/// `decode_response` (OK, then the ERROR prefix, then STATUS), kept
-/// in lockstep rather than reordered so both sides agree on which
-/// shape a given line is even in edge cases neither side's own
-/// `encode_*` would ever actually produce.
 pub fn decode_response(line: &str) -> Result<Response, ProtocolError> {
     if line.len() > MAX_LINE_LEN {
         return Err(ProtocolError::LineTooLarge(line.len()));
@@ -193,10 +136,6 @@ pub fn decode_response(line: &str) -> Result<Response, ProtocolError> {
 mod tests {
     use super::*;
 
-    // Nonce.generate's own output shape: 64 lowercase hex chars. Built
-    // by repeating a 16-char unit rather than hand-typed, after a
-    // hand-typed version of this string silently landed 2 characters
-    // short and only surfaced as a confusing "malformed" test failure.
     fn real_token() -> String {
         let token = "0123456789abcdef".repeat(4);
         assert_eq!(token.len(), 64);
@@ -212,12 +151,7 @@ mod tests {
 
     #[test]
     fn trimming_matches_ocaml_string_trim_exactly_not_rust_str_trim() {
-        // A trailing NBSP (U+00A0): Rust's `str::trim` strips it
-        // (Unicode-whitespace-aware); OCaml's `String.trim` does not
-        // (fixed ASCII set only). Kept attached here — matching
-        // OCaml, not Rust's own default — is the whole point of
-        // `ocaml_compatible_trim`; this pins that choice down as a
-        // real regression test, not just a doc comment's claim.
+
         assert_eq!(ocaml_compatible_trim("OK\u{a0}"), "OK\u{a0}");
         assert_eq!(ocaml_compatible_trim(" OK \n"), "OK");
         assert_eq!(ocaml_compatible_trim("\x0cOK\x0c"), "OK");

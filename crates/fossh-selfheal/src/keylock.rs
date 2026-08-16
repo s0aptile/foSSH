@@ -1,87 +1,12 @@
-//! Keeping the model endpoint closed, and its configuration honest.
-//!
-//! Two separate mechanisms, deliberately not conflated.
-//!
-//! ## 1. Access — a per-install bearer secret
-//!
-//! Apache sits in front of Ollama on loopback and requires a secret
-//! generated once, at random. Nothing else can reach the model: Ollama
-//! itself binds `127.0.0.1`, Apache is the only thing in front of it,
-//! and the person whose visit is being counted is on a different
-//! machine entirely.
-//!
-//! Two properties of that file are load-bearing and neither is
-//! obvious:
-//!
-//! * **No trailing newline.** Apache's `file()` expression function
-//!   returns the file's bytes verbatim, so a secret written with a
-//!   newline compares as `"abc\n"` against a header of `"abc"` and
-//!   the check denies every request forever while looking entirely
-//!   correct. Written without one here, and asserted by a test.
-//! * **Readable by two different accounts.** Apache runs as `apache`
-//!   and this code runs as `fossh-svc`. A file readable by only one
-//!   of them leaves the endpoint either unreachable or unguarded, so
-//!   the packaged path is `root:apache` mode 0640 with `fossh-svc`
-//!   added to the `apache` group — arranged by the subpackage's
-//!   `%post`, because neither account can grant it to itself. The
-//!   0600 written below is for the development case, where one
-//!   account is running everything.
-//!
-//! It is a bearer secret rather than an OpenPGP challenge-response
-//! because Apache can check the former with one directive it already
-//! has, and the latter would mean inventing an HTTP auth scheme and a
-//! module to verify it. An invented protocol guarding a loopback
-//! socket would be worse security than a well-understood one, not
-//! better.
-//!
-//! ## 2. Tamper protection — an OpenPGP-signed configuration manifest
-//!
-//! This is where the OpenPGP key does real work. The model's
-//! configuration — which model, which endpoint, how many threads — is
-//! written out and clearsigned with a per-install key generated at
-//! random on first run. Before the advisory layer is used at all, that
-//! signature is verified against the key's own fingerprint. An edited
-//! endpoint, a swapped model, or a thread count raised until the box
-//! is saturated all fail that check, and failing it means the advisory
-//! layer does not run — the deterministic engine carries on exactly as
-//! before.
-//!
-//! This mirrors `watchdog/lib/manifest.ml` on purpose. That module
-//! already established the pattern in this codebase, including the two
-//! things that are easy to get wrong and were got wrong there first:
-//! the manifest has to cover the thing actually being used (ADR-0041),
-//! and `gpg --verify` has to be run with `--status-fd` parsing rather
-//! than trusting the exit code, because `gpgv` alone does not check
-//! revocation or expiry (ADR-0040).
-//!
-//! ## Fails closed
-//!
-//! Every failure here — no key, no manifest, a bad signature, an
-//! unreadable secret — disables the advisory layer and nothing else.
-//! There is no path where a tamper-check failure degrades the
-//! deterministic engine, because the engine does not consult this
-//! module at all.
-
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// Length of the generated bearer secret, in bytes before hex
-/// encoding. 32 bytes is the same width this project already uses for
-/// its data key and its nonces.
 const SECRET_BYTES: usize = 32;
 
 pub const SECRET_FILE: &str = "model-access-secret";
 pub const MANIFEST_FILE: &str = "model-config.asc";
 
-/// Exactly what the signature covers.
-///
-/// Every field here is one an attacker would want to change: point the
-/// endpoint somewhere else, swap in a different model, or raise the
-/// thread count until the machine stops serving. Adding a field to
-/// this struct without adding it to the signed manifest would be the
-/// ADR-0041 bug again, which is why there is a test asserting the
-/// serialised form contains each one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelConfig {
     pub model: String,
@@ -91,10 +16,9 @@ pub struct ModelConfig {
 
 #[derive(Debug)]
 pub enum LockError {
-    /// No configuration has been established yet — the ordinary state
-    /// before setup has run.
+
     NotConfigured,
-    /// The manifest exists but did not verify. Fails closed.
+
     Tampered(String),
     Io(String),
     Gpg(String),
@@ -129,11 +53,6 @@ pub fn manifest_path(state_dir: &Path) -> PathBuf {
     state_dir.join(MANIFEST_FILE)
 }
 
-/// Reads the per-install bearer secret, or generates one.
-///
-/// Created 0600 before anything is written into it — never written
-/// and then chmod'ed, which leaves a window where the secret is
-/// world-readable on disk.
 pub fn load_or_generate_secret(state_dir: &Path) -> Result<String, LockError> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -170,9 +89,6 @@ pub fn load_or_generate_secret(state_dir: &Path) -> Result<String, LockError> {
     Ok(random)
 }
 
-/// `/dev/urandom`, hex-encoded. The same source
-/// `fossh_ingest::random` and the watchdog's `Nonce` already use —
-/// deliberately not a userspace PRNG seeded from it.
 fn read_random_hex(bytes: usize) -> Result<String, LockError> {
     use std::io::Read;
     let mut buf = vec![0u8; bytes];
@@ -182,12 +98,6 @@ fn read_random_hex(bytes: usize) -> Result<String, LockError> {
     Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// The exact bytes the signature covers.
-///
-/// Canonical and sorted, so a manifest signed on one machine and
-/// verified on another cannot differ because a serialiser reordered a
-/// map. A trailing newline is included so the clearsigned form is
-/// stable.
 pub fn canonical_manifest(config: &ModelConfig) -> String {
     format!(
         "endpoint={}\nmodel={}\nthreads={}\n",
@@ -195,39 +105,12 @@ pub fn canonical_manifest(config: &ModelConfig) -> String {
     )
 }
 
-/// Verifies the clearsigned manifest and returns the configuration it
-/// attests to.
-///
-/// Two things here are load-bearing and both were got wrong first.
-///
-/// **Status is read from its own file, not from stdout.** `gpg
-/// --status-fd 1` interleaves its machine-readable status protocol
-/// with the *document's own content* on one stream, and nothing in
-/// that stream distinguishes them. A document whose body contains
-/// lines like `[GNUPG:] GOODSIG ...` and `[GNUPG:] VALIDSIG
-/// <the-fingerprint-you-expect> ...` therefore forges status
-/// directly into the verifier's input. Reproduced against a real
-/// gpg: an attacker-signed file carrying those two lines set both
-/// `good` and `fingerprint_matches` before the real status for the
-/// attacker's own key was ever reached. That particular attempt was
-/// still rejected, but only because the genuine `ERRSIG` happened to
-/// arrive afterwards and overrode it — ordering, not a defence.
-/// `--status-file` puts the protocol somewhere the document cannot
-/// reach, which is what the watchdog's own `Manifest` already does
-/// and what this module's header always claimed it did.
-///
-/// **The status protocol is parsed rather than the exit code
-/// trusted.** `gpg` exits 0 for a good signature from a revoked or
-/// expired key — the exact gap ADR-0040 found in the watchdog.
 pub fn verify(state_dir: &Path, expected_fingerprint: &str) -> Result<ModelConfig, LockError> {
     let path = manifest_path(state_dir);
     if !path.exists() {
         return Err(LockError::NotConfigured);
     }
 
-    // Named from the pid *and* a fresh nonce: `Operator_key`'s own
-    // pid-only temp paths collided across threads of one process, and
-    // that fix (ADR-0057) applies verbatim here.
     let status_path = std::env::temp_dir().join(format!(
         "fossh-model-status-{}-{}",
         std::process::id(),
@@ -251,8 +134,7 @@ pub fn verify(state_dir: &Path, expected_fingerprint: &str) -> Result<ModelConfi
                  established: {e}"
             ))
         })?;
-        // Status from the file, body from stdout. Neither stream can
-        // impersonate the other.
+
         let body = String::from_utf8_lossy(&output.stdout);
         parse_verified_manifest_parts(&status, &body, expected_fingerprint)
     })();
@@ -261,9 +143,6 @@ pub fn verify(state_dir: &Path, expected_fingerprint: &str) -> Result<ModelConfi
     result
 }
 
-/// Split out so the `--status-fd` grammar is testable without a
-/// keyring — the part most likely to be got wrong, and the part a
-/// live-only test would never exercise for the revoked/expired cases.
 pub fn parse_verified_manifest(
     gpg_output: &str,
     expected_fingerprint: &str,
@@ -271,8 +150,6 @@ pub fn parse_verified_manifest(
     parse_verified_manifest_parts(gpg_output, gpg_output, expected_fingerprint)
 }
 
-/// The real entry point: `status` and `body` come from separate
-/// streams, so a document can never contribute a status line.
 pub fn parse_verified_manifest_parts(
     status: &str,
     body: &str,
@@ -282,15 +159,12 @@ pub fn parse_verified_manifest_parts(
     let mut fingerprint_matches = false;
 
     for line in status.lines() {
-        // `--status-file` output has no `[GNUPG:] ` prefix; `--status-fd`
-        // merged into stdout does. Both are accepted so the
-        // single-stream entry point above keeps working.
+
         let rest = line.strip_prefix("[GNUPG:] ").unwrap_or(line);
         let mut parts = rest.split_whitespace();
         match parts.next() {
             Some("GOODSIG") => good = true,
-            // Any of these means do not proceed, regardless of
-            // GOODSIG, and regardless of gpg's exit code.
+
             Some("REVKEYSIG") => {
                 return Err(LockError::Tampered(
                     "the signing key is revoked".to_string(),
@@ -334,7 +208,6 @@ pub fn parse_verified_manifest_parts(
         ));
     }
 
-    // Only now is the content worth reading.
     parse_manifest_body(body)
 }
 
@@ -408,8 +281,7 @@ mod tests {
 
     #[test]
     fn a_revoked_key_is_refused_even_with_a_good_signature() {
-        // The exact gap ADR-0040 found in the watchdog: gpg exits 0
-        // here, and trusting the exit code would accept it.
+
         let err = parse_verified_manifest(
             &status(&[
                 "GOODSIG 1234 foSSH",
@@ -434,9 +306,7 @@ mod tests {
 
     #[test]
     fn a_signature_from_a_different_key_is_refused() {
-        // A valid, unexpired, unrevoked signature from someone else's
-        // key is exactly what an attacker who can write the manifest
-        // would produce.
+
         let err = parse_verified_manifest(
             &status(&[
                 "GOODSIG 1234 attacker",
@@ -450,22 +320,12 @@ mod tests {
 
     #[test]
     fn a_document_cannot_forge_status_lines_from_its_own_body() {
-        // The attack this module's `verify` was restructured for, as a
-        // unit test. A body carrying `GOODSIG` and a `VALIDSIG` naming
-        // the expected fingerprint must contribute nothing, because
-        // status now comes from its own stream.
-        //
-        // Reproduced against a real gpg first: an attacker-signed file
-        // with these two lines in its content had both flags set
-        // before the genuine status for the attacker's key was
-        // reached. It was still rejected, but only because `ERRSIG`
-        // arrived afterwards — ordering, not a defence.
+
         let forged_body = format!(
             "endpoint=http://evil.invalid:11434\nmodel=attacker:1.0\nthreads=64\n\
              [GNUPG:] GOODSIG DEADBEEF someone\n[GNUPG:] VALIDSIG {FPR} 2026-01-01\n"
         );
-        // A status stream that says the signature could not be checked
-        // at all — which is what gpg really reports for an unknown key.
+
         let real_status = "NEWSIG\nERRSIG DEADBEEF 22 10 01 1786789346 9\nNO_PUBKEY DEADBEEF\n";
 
         let err = parse_verified_manifest_parts(real_status, &forged_body, FPR).unwrap_err();
@@ -477,9 +337,7 @@ mod tests {
 
     #[test]
     fn status_lines_are_accepted_with_or_without_the_stream_prefix() {
-        // `--status-file` writes bare lines; `--status-fd` merged into
-        // stdout prefixes them with `[GNUPG:] `. Both must parse, or
-        // switching between them silently verifies nothing.
+
         let bare = format!("GOODSIG 1 x\nVALIDSIG {FPR} 2026-01-01\n");
         let body = "endpoint=http://127.0.0.1:11434\nmodel=m\nthreads=4\n";
         assert!(parse_verified_manifest_parts(&bare, body, FPR).is_ok());
@@ -498,9 +356,7 @@ mod tests {
 
     #[test]
     fn a_manifest_missing_a_field_is_refused_rather_than_defaulted() {
-        // Defaulting a missing `threads` would let an attacker delete
-        // the line rather than change it, and get a value of their
-        // choosing anyway.
+
         let text = format!(
             "[GNUPG:] GOODSIG 1 x\n[GNUPG:] VALIDSIG {FPR} 2026\nendpoint=http://127.0.0.1\nmodel=m\n"
         );
@@ -509,8 +365,7 @@ mod tests {
 
     #[test]
     fn fingerprint_comparison_is_case_insensitive() {
-        // gpg emits uppercase; a fingerprint stored lowercase
-        // elsewhere in this codebase must still match.
+
         assert!(
             parse_verified_manifest(
                 &status(&[
@@ -525,9 +380,7 @@ mod tests {
 
     #[test]
     fn the_canonical_form_covers_every_field_of_the_config() {
-        // Adding a field to `ModelConfig` without adding it to the
-        // signed bytes is the ADR-0041 bug — a manifest that does not
-        // cover the thing being used. This is what catches it.
+
         let config = ModelConfig {
             model: "lfm2.5-thinking:1.2b".to_string(),
             endpoint: "http://127.0.0.1:11434".to_string(),
@@ -555,11 +408,7 @@ mod tests {
 
     #[test]
     fn a_generated_secret_has_no_trailing_newline() {
-        // Apache's file() returns the bytes verbatim. A newline here
-        // makes `Require expr` compare "abc\n" against a header of
-        // "abc" and deny everything, permanently, while the config
-        // reads as correct. This is the assertion that keeps the two
-        // sides agreeing.
+
         let dir = scratch("no-newline");
         let secret = load_or_generate_secret(&dir).unwrap();
         let raw = fs::read(secret_path(&dir)).unwrap();
@@ -604,9 +453,7 @@ mod tests {
 
     #[test]
     fn an_empty_secret_file_is_an_error_rather_than_a_silent_regeneration() {
-        // Silently regenerating would leave Apache checking against a
-        // secret nothing else has, which presents as an unexplained
-        // 403 rather than as the truncated file it really is.
+
         let dir = scratch("empty-secret");
         fs::write(secret_path(&dir), "").unwrap();
         assert!(load_or_generate_secret(&dir).is_err());
@@ -615,8 +462,7 @@ mod tests {
 
     #[test]
     fn a_missing_manifest_reads_as_not_configured_not_as_tampering() {
-        // Before setup runs there is no manifest, and calling that
-        // "tampered" would make every fresh install look attacked.
+
         let dir = scratch("no-manifest");
         assert!(matches!(verify(&dir, FPR), Err(LockError::NotConfigured)));
         fs::remove_dir_all(&dir).ok();

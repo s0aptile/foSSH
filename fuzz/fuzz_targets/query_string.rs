@@ -1,8 +1,3 @@
-//! §3.7: fuzzes `GET /e.gif`'s query-string parser (percent-decoding,
-//! `props.<key>=<value>` splitting) the same way `json_body.rs` fuzzes
-//! the JSON body parser — same fixed `RequestContext`, only the raw
-//! query string is attacker-controlled input here.
-
 #![no_main]
 
 use fossh_core::types::{Country, SiteId};

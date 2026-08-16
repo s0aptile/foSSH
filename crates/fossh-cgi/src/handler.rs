@@ -1,15 +1,3 @@
-//! Request-handling decision logic, kept separate from `main.rs`'s CGI
-//! env/stdin I/O glue so it's unit-testable without mocking a process
-//! environment. Never touches SQLite (§7.1) — site resolution reads
-//! `fossh_ingest::site_cache` instead; the spool write is the only
-//! filesystem mutation on this path.
-//!
-//! Auth, rate-limiting, and pipeline dispatch live in
-//! `fossh_ingest::ingest` (M7), shared with `fossh-fcgi` — this module
-//! is now just that shared decision plus the one thing genuinely
-//! specific to CGI: §7.1's spool-first write (a persistent FastCGI
-//! process writes straight to SQLite instead, per §7.2).
-
 use std::path::{Path, PathBuf};
 
 use fossh_core::types::SiteId;
@@ -17,19 +5,13 @@ use fossh_ingest::geoip::GeoipReader;
 use fossh_ingest::ingest::{self, IngestDecision};
 use fossh_ingest::spool;
 
-/// Same shape regardless of transport — see `ingest::IngestEnv`'s own
-/// docs. Kept under this name here since `CgiEnv` is what this crate's
-/// own code and tests have always called it.
 pub type CgiEnv = ingest::IngestEnv;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CgiResponse {
     pub status: u16,
     pub allow_origin: Option<String>,
-    /// §7.1: "If the spool is unwritable, drop the event and exit
-    /// non-zero — never block the request." The response is still built
-    /// normally; `main` reads this flag afterward to decide the process
-    /// exit code, separately from what was already sent to the client.
+
     pub spool_write_failed: bool,
 }
 
@@ -55,27 +37,18 @@ pub struct HandleParams<'a> {
     pub env: &'a CgiEnv,
     pub body: &'a [u8],
     pub data_dir: &'a Path,
-    /// One directory shared by every site (`Config.salt_dir`, §10) —
-    /// P2's hash formula already mixes `site_id` into `visitor_id`
-    /// itself, so sharing the salt does not make visitors linkable
-    /// across sites; see `fossh_ingest::ingest`'s module doc for the
-    /// rate-limit/nonce paths, which *are* per-site.
+
     pub salt_dir: &'a Path,
-    /// §3.8: the per-install data-encryption key spooled events are
-    /// sealed under before they touch disk (`fossh_admin::data_key`).
+
     pub data_key: &'a [u8; 32],
     pub rate_limit_per_sec: u32,
     pub rate_limit_burst: u32,
     pub respect_optout_signals: bool,
     pub now: i64,
-    /// Built once in `main.rs` from `Config.country_db` and reused
-    /// across requests (this is CGI: one process per request, but the
-    /// database is still opened only once for this run, not per lookup)
-    /// — see `fossh_ingest::geoip`.
+
     pub country_db: &'a GeoipReader,
 }
 
-/// `POST /e` and `GET /e.gif` — everything from auth through spooling.
 pub fn handle_ingest(params: &HandleParams) -> CgiResponse {
     let decision = ingest::decide(&ingest::DecideParams {
         env: params.env,
@@ -119,10 +92,6 @@ pub fn handle_ingest(params: &HandleParams) -> CgiResponse {
     }
 }
 
-/// `GET /healthz` — "204, no auth, no body, no info leak" (§7.1). No
-/// `data_dir` access at all, deliberately: nothing about this route
-/// should be able to fail in a way that reveals anything about site
-/// configuration or storage state.
 pub fn handle_healthz() -> CgiResponse {
     CgiResponse::plain(204)
 }
@@ -143,15 +112,6 @@ mod tests {
     use std::fs;
 
     const TEST_KEY: [u8; 32] = [0x42; 32];
-
-    // Auth, rate-limiting, and route-decision coverage (wrong/missing
-    // keys, signed-auth nonce replay/stale timestamps, disabled sites,
-    // unknown routes, public-site rate-limit halving) lives with that
-    // logic now, in `fossh_ingest::ingest`'s own tests — this module
-    // covers only what's actually specific to the CGI transport: the
-    // healthz route, and that a `Commit` decision really does get
-    // written to the spool (`ingest::decide`'s own tests stop at "the
-    // decision is `Commit`," they don't touch a filesystem).
 
     fn scratch_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

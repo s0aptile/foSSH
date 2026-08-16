@@ -40,7 +40,7 @@ The usual way to get basic site analytics is a hosted service that sees every vi
 
 ## Quick start — pick your path
 
-**On shared hosting (cPanel, FTP/File Manager only, no shell)?** Skip everything below. Grab [`docs/fossh-config.php`](docs/fossh-config.php), fill in the two blanks (a write key from someone/somewhere already running foSSH, and its address), upload it, add one `require_once` line to your site. No build, no Composer, no server access needed — the file's own header comment walks through the three steps. That's the whole install.
+**On shared hosting (cPanel, FTP/File Manager only, no shell)?** Skip everything below. Grab [`docs/fossh-config.php`](docs/fossh-config.php), fill in the two blanks (a write key from someone/somewhere already running foSSH, and its address), upload it, add one `require_once` line to your site. No build, no Composer, no server access needed — [`docs/SHARED-HOSTING.md`](docs/SHARED-HOSTING.md) walks through the three steps. That's the whole install.
 
 **Self-hosting foSSH itself** — your own server, one install that can hold as many sites as you want (each `site create` below is a separate site with its own write key and its own numbers; nothing about the install is per-site):
 

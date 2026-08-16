@@ -1,15 +1,3 @@
-(* §3.4: the real, wired-up path — a genuine QUIC/mTLS connection
-   carrying a genuine session-token-verified command that dispatches
-   to a genuine `Supervisor.t` tracking a genuine child process. Same
-   two-cert, real-openssl-subprocess setup as
-   watchdog/test/test_quic.ml, extended to drive
-   `Quic_command_server.handle_one_connection` itself rather than
-   stopping at "the transport works" — this is the one place that
-   actually proves a command sent over the wire ends in a real
-   process receiving a real signal, which neither `command_protocol`'s
-   own QUIC-independent tests nor `quic`'s own protocol-independent
-   tests could ever see on their own. *)
-
 open Fossh_watchdog_lib
 open Fossh_watchdog_quic
 open Test_helpers
@@ -45,11 +33,6 @@ let deadline_in (seconds : float) : float = Unix.gettimeofday () +. seconds
 let pid_is_alive (pid : int) : bool =
   match Unix.kill pid 0 with () -> true | exception Unix.Unix_error (Unix.ESRCH, _, _) -> false
 
-(* A `Quic_command_server.config` for tests that only ever send
-   `Restart`/`Reload` (never `Status`) — its tamper-check fields are
-   never read on that path, so a deliberately-nonexistent manifest
-   path is fine here rather than standing up a real signed one this
-   test has no other use for. *)
 let unused_status_config ~(listen_addr : Unix.sockaddr) : Quic_command_server.config =
   {
     tls_dir = "unused";
@@ -65,10 +48,6 @@ let write_file path content =
   output_string oc content;
   close_out oc
 
-(* A real, well-formed COMMAND round trip: watchdog receives it,
-   verifies it against the session it itself just issued, dispatches
-   it, and the real child process this test spawned actually receives
-   SIGTERM as a result. *)
 let a_verified_reload_command_actually_terminates_the_real_child () =
   let watchdog_cert = generate_self_signed_cert "fossh-watchdog-cmdtest" in
   let core_cert = generate_self_signed_cert "fossh-core-cmdtest" in
@@ -137,13 +116,6 @@ let a_verified_reload_command_actually_terminates_the_real_child () =
   rm_rf watchdog_cert.dir;
   rm_rf core_cert.dir
 
-(* The replay-protection property this whole layered design (mTLS +
-   per-connection session token) exists for: a command presenting a
-   token that is *not* the one this connection's own session issued
-   (a wrong/forged/replayed-from-elsewhere token, same shape but wrong
-   value) must be refused, and — the part a purely wire-level test of
-   `command_protocol` alone could never show — the real child must be
-   left completely untouched by a refused command. *)
 let a_command_with_the_wrong_token_is_refused_and_the_child_is_untouched () =
   let watchdog_cert = generate_self_signed_cert "fossh-watchdog-wrongtoken" in
   let core_cert = generate_self_signed_cert "fossh-core-wrongtoken" in
@@ -185,9 +157,7 @@ let a_command_with_the_wrong_token_is_refused_and_the_child_is_untouched () =
       (match Quic.recv_from_stream state ~stream_id:1L deadline with
       | Error e -> check ("recv session hello failed: " ^ Quic.describe_error e) false
       | Ok (_hello, _fin) ->
-          (* A syntactically valid but definitely-not-the-real-one
-             token — 64 lowercase hex chars, never issued by this
-             connection's own session. *)
+
           let wrong_token = String.make 64 'a' in
           let command_line = Command_protocol.encode_command wrong_token Command_protocol.Reload in
           (match Quic.send_on_stream state ~stream_id:4L ~data:command_line ~fin:true deadline with
@@ -204,10 +174,6 @@ let a_command_with_the_wrong_token_is_refused_and_the_child_is_untouched () =
 
   Thread.join server_thread;
 
-  (* Give a genuinely-delivered-but-shouldn't-have-been-sent signal a
-     moment to land before checking — this is checking the ABSENCE of
-     an effect, so a check that ran too early would pass for the
-     wrong reason. *)
   Unix.sleepf 0.1;
   check "the real supervised child was never sent SIGTERM by a refused command" (pid_is_alive pid);
 
@@ -216,11 +182,6 @@ let a_command_with_the_wrong_token_is_refused_and_the_child_is_untouched () =
   rm_rf watchdog_cert.dir;
   rm_rf core_cert.dir
 
-(* Client-side half of a real Status round trip: connect, read the
-   session hello, send a session-bound `status` command, decode
-   whatever comes back. Shared by the three Status tests below so each
-   only has to set up its own supervisor/manifest scenario and assert
-   on the result. *)
 let send_one_status_query ~(listen_addr : Unix.sockaddr) ~(client_tls : Quic.tls_paths) :
     (Command_protocol.response, string) result =
   let deadline = deadline_in 5.0 in
@@ -266,8 +227,6 @@ let start_status_server (listen_addr : Unix.sockaddr) (watchdog_cert : cert) (co
           Quic.close state)
     ()
 
-(* A real, running, untampered child: the manifest is signed with the
-   real key and lists /bin/sleep's own real, current hash. *)
 let a_status_query_reports_a_running_child_and_a_clean_tamper_check () =
   let watchdog_cert = generate_self_signed_cert "fossh-watchdog-status-clean" in
   let core_cert = generate_self_signed_cert "fossh-core-status-clean" in
@@ -321,10 +280,6 @@ let a_status_query_reports_a_running_child_and_a_clean_tamper_check () =
   rm_rf core_cert.dir;
   rm_rf dir
 
-(* No child ever spawned, and a manifest path that does not exist —
-   the "watchdog just started, nothing supervised yet, and this
-   deployment's manifest is misconfigured" shape. Must report
-   stopped/unknown, never a false clean and never a crash. *)
 let a_status_query_reports_a_stopped_child_and_an_unreadable_manifest_as_unknown () =
   let watchdog_cert = generate_self_signed_cert "fossh-watchdog-status-unknown" in
   let core_cert = generate_self_signed_cert "fossh-core-status-unknown" in
@@ -363,14 +318,6 @@ let a_status_query_reports_a_stopped_child_and_an_unreadable_manifest_as_unknown
   rm_rf watchdog_cert.dir;
   rm_rf core_cert.dir
 
-(* A validly-signed manifest that deliberately claims the wrong hash
-   for the real, unmodified /bin/sleep -- exercises the Hash_mismatch
-   path without mutating a real system binary the way
-   test_manifest.ml's own equivalent case mutates a throwaway file
-   (not an option here: /bin/sleep is a real shared system file). Also
-   proves a Status query is genuinely read-only: unlike a verified
-   Restart/Reload, reporting "tampered" must never itself terminate
-   the real supervised child. *)
 let a_status_query_reports_tampered_when_the_manifest_hash_does_not_match () =
   let watchdog_cert = generate_self_signed_cert "fossh-watchdog-status-tampered" in
   let core_cert = generate_self_signed_cert "fossh-core-status-tampered" in

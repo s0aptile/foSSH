@@ -1,17 +1,3 @@
-//! §10 configuration: search path, env var overrides, validation
-//! (including S7's "0.0.0.0 is rejected at parse time").
-//!
-//! This is the one place in `fossh-core` that touches the filesystem — see
-//! ADR-0004 in `DECISIONS.md`.
-//!
-//! Env-var overrides are applied through an injected lookup closure rather
-//! than calling `std::env::var_os` directly inside the merge logic. Two
-//! reasons: it keeps this testable without touching real process
-//! environment (env vars are global mutable state — `std::env::set_var` /
-//! `remove_var` are `unsafe fn` as of the toolchain this crate builds
-//! with, and this crate is `#![forbid(unsafe_code)]`), and it means
-//! `Config::load` is the only place that ever reads the real environment.
-
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -60,11 +46,7 @@ impl Serialize for CountryDb {
 }
 
 impl CountryDb {
-    /// `pub` (not just used by `Deserialize`) so `fossh-cgi`/`fossh-fcgi`
-    /// can parse `FOSSH_COUNTRY_DB` with the exact same rules `fossh.toml`
-    /// gets — those binaries deliberately don't call `Config::load` at
-    /// all (see their own `main.rs` doc comments) but must still agree
-    /// with it on what a given string means.
+
     pub fn from_str(s: &str) -> Self {
         match s {
             "builtin" => CountryDb::Builtin,
@@ -73,25 +55,6 @@ impl CountryDb {
         }
     }
 
-    /// The filesystem path this setting resolves to, or `None` when
-    /// there's nothing to open.
-    ///
-    /// `Custom(p)` is `Some(p)`, obviously. `None` is `None`, equally
-    /// obviously — `country_db = "none"` is an explicit, fully-supported
-    /// "don't do GeoIP resolution at all" (§10), not a placeholder.
-    ///
-    /// `Builtin` is *also* `None` as of this release: it names a future
-    /// package-bundled database (e.g. an RPM that ships one at a fixed
-    /// path), which does not exist yet — no offline country database is
-    /// vendored into this source tree or shipped in any release
-    /// artifact (see `NOTICE`). Until packaging actually bundles one and
-    /// this method is updated to point at it, `Builtin` degrades to
-    /// exactly the same "no database, every country resolves to
-    /// `ZZ`" behavior as `None`. This is why `Config::default()` using
-    /// `Builtin` as its default is safe on a fresh install with no
-    /// database configured: it's a no-op, not a hard requirement, and
-    /// `fossh init` additionally writes an explicit `"none"` into the
-    /// config it generates so this is never an accident.
     pub fn path(&self) -> Option<&Path> {
         match self {
             CountryDb::Builtin | CountryDb::None => None,
@@ -124,8 +87,6 @@ fn default_burst() -> u32 {
     600
 }
 
-/// Governs the optional loopback-only HTTP feature (S7). FastCGI's own
-/// unix-socket path (§7.2) is a separate config concern, added in M7.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ListenerConfig {
@@ -141,8 +102,7 @@ fn default_retention_days() -> u32 {
 fn default_k_anonymity() -> u32 {
     5
 }
-/// ~27 years. Not a privacy limit — a typo guard, so `retention_days =
-/// 36500` is caught rather than silently meaning "forever".
+
 pub const RETENTION_DAYS_MAX: u32 = 10_000;
 fn default_true() -> bool {
     true
@@ -225,17 +185,6 @@ pub enum ConfigError {
     },
 }
 
-/// The smallest group size that still hides anybody.
-///
-/// Below this the fold in `query_rollup` stops folding: at `k = 0` the
-/// test `uniques < k` is false for every `u64`, and at `k = 1` it is
-/// false for every group that exists at all, since a group with zero
-/// uniques is not in the result to begin with. Either value reports a
-/// lone visitor by exact path and exact hit count — the single outcome
-/// P6 exists to prevent — and it does so silently, because nothing
-/// about the output says the suppression was off.
-///
-/// 2 is the floor, not the recommendation. The default is 5.
 pub const K_ANONYMITY_MIN: u32 = 2;
 
 impl fmt::Display for ConfigError {
@@ -297,12 +246,7 @@ impl std::error::Error for ConfigError {
 }
 
 impl Config {
-    /// Searches `$FOSSH_CONFIG`, then `./fossh.toml`, then
-    /// `/etc/fossh/fossh.toml`; parses the first one found (built-in
-    /// defaults if none exist and `$FOSSH_CONFIG` wasn't set explicitly —
-    /// an explicit `$FOSSH_CONFIG` pointing at a missing file is an error,
-    /// not a silent fallback); then applies `FOSSH_*` env var overrides;
-    /// then validates (S7).
+
     pub fn load() -> Result<Self, ConfigError> {
         let explicit = std::env::var_os("FOSSH_CONFIG").map(PathBuf::from);
         let mut config = match &explicit {
@@ -335,8 +279,6 @@ impl Config {
         })
     }
 
-    /// Applies `FOSSH_*` overrides using an injected lookup function rather
-    /// than reading the environment directly — see the module doc comment.
     fn apply_env_overrides(
         &mut self,
         lookup: impl Fn(&str) -> Option<std::ffi::OsString>,
@@ -426,14 +368,6 @@ impl Config {
             }
         }
 
-        // Until this was added, `validate()` checked the bind address
-        // and nothing else — so the three settings that decide how much
-        // is retained, how much is disclosed, and how hard the ingest
-        // path can be hammered all accepted any u32 that parsed,
-        // including zero, from either the file or the environment. The
-        // k_anonymity case is the one that matters: it fails open and
-        // fails silently, since a report with the fold disabled looks
-        // exactly like a report where nothing needed folding.
         if self.k_anonymity < K_ANONYMITY_MIN {
             return Err(ConfigError::KAnonymityTooLow {
                 value: self.k_anonymity,
@@ -491,11 +425,6 @@ mod tests {
         move |key| map.get(key).map(|v| OsString::from(*v))
     }
 
-    /// The fold in `query_rollup` is `uniques < k_anonymity`. At k=0
-    /// that is false for every `u64`; at k=1 it is false for every group
-    /// that appears in a result at all. Both publish a lone visitor's
-    /// exact path and exact hit count, and both used to validate
-    /// cleanly from the file or from `FOSSH_K_ANONYMITY`.
     #[test]
     fn k_anonymity_below_the_floor_is_refused() {
         for k in [0, 1] {
@@ -522,12 +451,11 @@ mod tests {
 
     #[test]
     fn k_anonymity_floor_is_enforced_through_the_environment_too() {
-        // The env path is the one that slips past review, since it
-        // leaves no trace in any file anybody reads.
+
         for (value, ok) in [("0", false), ("1", false), ("2", true), ("5", true)] {
             let env = HashMap::from([("FOSSH_K_ANONYMITY", value)]);
             let mut config = Config::default();
-            // The same two steps `load()` performs, in the same order.
+
             config
                 .apply_env_overrides(lookup_from(&env))
                 .expect("the value parses; it is validate() that must judge it");
@@ -621,7 +549,7 @@ mod tests {
 
     #[test]
     fn unknown_key_is_a_fatal_parse_error() {
-        let toml_text = r#"retenton_days = 30"#; // typo, must not be silently ignored
+        let toml_text = r#"retenton_days = 30"#;
         let result: Result<Config, _> = toml::from_str(toml_text);
         assert!(
             result.is_err(),
@@ -642,8 +570,7 @@ mod tests {
     #[test]
     fn country_db_path_only_custom_resolves_to_something() {
         assert_eq!(CountryDb::None.path(), None);
-        // `Builtin` is `None` too as of this release — see `path()`'s
-        // own doc comment for why (no builtin database is bundled).
+
         assert_eq!(CountryDb::Builtin.path(), None);
         assert_eq!(
             CountryDb::Custom(PathBuf::from("/opt/geo/custom.table")).path(),
@@ -688,10 +615,7 @@ mod tests {
 
     #[test]
     fn env_overrides_applied_in_one_pass() {
-        // All env-touching assertions live in this single test function so
-        // there is no cross-test ordering/parallelism hazard around shared
-        // keys (see the module doc comment on why this is a fake lookup,
-        // not real process env, in the first place).
+
         let mut map = HashMap::new();
         map.insert("FOSSH_RETENTION_DAYS", "30");
         map.insert("FOSSH_K_ANONYMITY", "10");

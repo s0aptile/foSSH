@@ -1,41 +1,3 @@
-//! foSSH admin bridge — the local admin surfaces (§3.9's console,
-//! §3.11's setup wizard, §2.1's operator auth, §3.4's watchdog status)
-//! exposed as one JSON-lines protocol over this process's own stdin
-//! and stdout, for `fossh-console` to drive.
-//!
-//! Never *listens* on anything. The console spawns this as a child and
-//! holds both pipes; there is no socket, no port, and therefore nothing
-//! for a second process to connect to. Every network client reached
-//! from here — the watchdog's QUIC/mTLS channel
-//! (`watchdog_status.rs`), its `Operator_auth_server` Unix socket
-//! (`operator_auth_client.rs`), an operator-configured external
-//! service (`integrations_net.rs`) — is dialled *out*, on demand,
-//! from an explicit request.
-//!
-//! ## stdout belongs to the protocol
-//!
-//! Nothing in this binary may print to stdout except one complete
-//! response frame per request. A stray `println!` anywhere — a debug
-//! line, a library's own chatter — desynchronises the console's
-//! parser. Diagnostics go to stderr, which the console forwards to the
-//! journal and never parses.
-//!
-//! ## Framing
-//!
-//! One request object per line in, one response object per line out.
-//! `serde_json`'s compact output contains no raw newline and escapes
-//! every string it writes, so no field value can forge a frame
-//! boundary (pinned by a test in `protocol.rs`).
-//!
-//! Input lines are capped at `MAX_LINE_LEN`. Crossing it is fatal to
-//! the session rather than skipped: once a partial line has been read
-//! there is no way to know where the next frame starts, and a parser
-//! that tries to resynchronise on a stream it has lost track of is
-//! exactly where frame-confusion bugs live. This project has already
-//! paid once for an unbounded read loop that turned a large write into
-//! a 65-second CPU burn (ADR-0057), so the cap is enforced while
-//! reading rather than after.
-
 #![forbid(unsafe_code)]
 
 mod integrations_net;
@@ -53,30 +15,19 @@ use fossh_admin::integrations::{self, Auth, Integrations, Method};
 use protocol::{ErrorCode, MethodError, MethodResult, PROTOCOL_VERSION, Request, Response};
 use serde_json::{Value, json};
 
-/// Generous next to any real request (the largest is an armored public
-/// key, itself capped at 256 KiB by `setup::MAX_KEY_LEN`) and small
-/// enough that a runaway writer is bounded long before it matters.
 const MAX_LINE_LEN: usize = 1024 * 1024;
 
 fn main() -> std::process::ExitCode {
     let data_dir = std::env::var_os("FOSSH_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/var/lib/fossh"));
-    // The floor comes from `fossh_core::config` rather than being
-    // spelled here, because this guard used to say `k >= 1` and 1 is
-    // not safe: the fold is `uniques < k`, which at k=1 is false for
-    // every group that appears in a result at all, so a lone visitor is
-    // reported by exact path and exact hit count — the same outcome
-    // k=0 produces, which this guard was written to prevent. Two
-    // places deciding the same invariant is how one of them ends up
-    // wrong.
+
     let k_anonymity: u32 = std::env::var("FOSSH_K_ANONYMITY")
         .ok()
         .and_then(|s| s.parse().ok())
         .filter(|&k| k >= fossh_core::config::K_ANONYMITY_MIN)
         .unwrap_or(5);
-    // §2.6's fixed path; overridable so this can be exercised end to
-    // end without root in a development environment.
+
     let setup_token_path = std::env::var_os("FOSSH_SETUP_TOKEN_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/etc/fossh/setup-token"));
@@ -101,11 +52,7 @@ fn main() -> std::process::ExitCode {
                     continue;
                 }
                 let response = match serde_json::from_str::<Request>(&line) {
-                    // `0` is this protocol's reserved id for a frame
-                    // that could not be parsed, so a caller sending it
-                    // on a well-formed request would produce a success
-                    // frame indistinguishable from a parse failure.
-                    // Refused rather than answered.
+
                     Ok(req) if req.id == 0 => Response::failure(
                         0,
                         MethodError::bad_request(
@@ -120,18 +67,14 @@ fn main() -> std::process::ExitCode {
                             Err(e) => Response::failure(id, e),
                         }
                     }
-                    // No `id` to echo — the frame it would have come
-                    // from is the thing that failed to parse. `0` is
-                    // reserved for exactly this, and the console
-                    // treats an id it never sent as a protocol fault
-                    // rather than matching it to an outstanding call.
+
                     Err(e) => Response::failure(
                         0,
                         MethodError::bad_request(format!("could not parse that request: {e}")),
                     ),
                 };
                 if write_frame(&mut writer, &response).is_err() {
-                    // The console is gone. Nothing left to serve.
+
                     return std::process::ExitCode::SUCCESS;
                 }
             }
@@ -162,15 +105,6 @@ enum LineError {
     Io(std::io::Error),
 }
 
-/// Reads one `\n`-terminated line, refusing to buffer more than
-/// `MAX_LINE_LEN` bytes.
-///
-/// Byte-at-a-time on purpose. `BufRead::read_line` would grow its
-/// destination without limit, and the alternative — `take(cap)` — makes
-/// "the line ended" and "the cap was hit" indistinguishable, which is
-/// precisely the distinction that decides between answering and
-/// bailing out. The reader is a `StdinLock`, already buffered, so this
-/// is not a syscall per byte.
 fn read_line<R: Read>(reader: &mut R) -> Result<Option<String>, LineError> {
     let mut buf: Vec<u8> = Vec::with_capacity(256);
     let mut byte = [0u8; 1];
@@ -180,9 +114,7 @@ fn read_line<R: Read>(reader: &mut R) -> Result<Option<String>, LineError> {
                 if buf.is_empty() {
                     return Ok(None);
                 }
-                // A final line with no trailing newline is still a
-                // complete frame; the console closing its pipe right
-                // after a write is ordinary.
+
                 break;
             }
             Ok(_) => {
@@ -203,8 +135,7 @@ fn read_line<R: Read>(reader: &mut R) -> Result<Option<String>, LineError> {
 
 fn write_frame<W: Write>(writer: &mut W, response: &Response) -> std::io::Result<()> {
     let line = serde_json::to_string(response).unwrap_or_else(|_| {
-        // Unreachable for these types, and still not a reason to panic
-        // inside a protocol writer.
+
         format!(
             r#"{{"id":{},"ok":false,"error":{{"code":"internal","message":"response could not be serialised"}}}}"#,
             response.id
@@ -212,8 +143,7 @@ fn write_frame<W: Write>(writer: &mut W, response: &Response) -> std::io::Result
     });
     writer.write_all(line.as_bytes())?;
     writer.write_all(b"\n")?;
-    // Flushed per frame: the console is a synchronous reader waiting on
-    // this exact line, so a buffered response is a hang.
+
     writer.flush()
 }
 
@@ -221,13 +151,7 @@ struct Agent {
     data_dir: PathBuf,
     k_anonymity: u32,
     setup: setup::Setup,
-    /// Whether §2.1's challenge-response has succeeded in this session.
-    /// Advisory: it records that the operator proved key possession to
-    /// the watchdog, and the console uses it to gate its own
-    /// presentation. It is deliberately *not* an access-control
-    /// boundary for this process — everything reachable here is already
-    /// reachable to whoever can run this binary, and pretending
-    /// otherwise would be security theatre.
+
     authenticated: bool,
 }
 
@@ -238,8 +162,6 @@ fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
-/// Parameter accessors that fail with a message naming the field, so a
-/// console bug is legible in one line instead of "invalid params".
 fn str_param<'a>(params: &'a Value, key: &str) -> Result<&'a str, MethodError> {
     params.get(key).and_then(Value::as_str).ok_or_else(|| {
         MethodError::bad_request(format!("\"{key}\" is required and must be a string"))
@@ -296,10 +218,7 @@ impl Agent {
             "integrations.remove" => self.integrations_remove(p),
             "integrations.test" => self.integrations_test(p),
             other => {
-                // A method in a namespace no module claims is a
-                // different mistake from a typo'd verb, and saying so
-                // saves a developer writing a module the obvious
-                // first hour of confusion.
+
                 let Some(ns) = modules::namespace_of(other) else {
                     return Err(MethodError::bad_request(format!(
                         "no such method: \"{other}\""
@@ -307,19 +226,14 @@ impl Agent {
                 };
                 let (mods, _) = modules::load();
                 let Some(module) = mods.iter().find(|m| m.namespace == ns) else {
-                    // A method in a namespace no module claims is a
-                    // different mistake from a typo'd verb, and saying
-                    // so saves a developer writing a module the
-                    // obvious first hour of confusion.
+
                     return Err(MethodError::bad_request(format!(
                         "no module owns the namespace \"{ns}\" — install one that does, or \
                          check `modules.list`"
                     )));
                 };
                 if module.builtin {
-                    // A built-in namespace reaching here means the
-                    // verb does not exist, not that the module is
-                    // missing.
+
                     return Err(MethodError::bad_request(format!(
                         "no such method: \"{other}\""
                     )));
@@ -329,13 +243,6 @@ impl Agent {
         }
     }
 
-    /// Hands a request to the module that owns its namespace.
-    ///
-    /// The module's reply is re-parsed rather than forwarded verbatim:
-    /// a module must not be able to put arbitrary bytes on the agent's
-    /// stdout, which is the console's protocol stream. Whatever comes
-    /// back is unwrapped and re-emitted by the agent's own writer,
-    /// under the id the console actually sent.
     fn dispatch_to_module(&self, module: &modules::Manifest, req: &Request) -> MethodResult {
         let line = serde_json::to_string(&json!({
             "id": req.id,
@@ -366,9 +273,7 @@ impl Agent {
             .and_then(Value::as_str)
             .unwrap_or("the module reported a failure with no detail")
             .to_string();
-        // A module's error code is taken only if it is one of ours;
-        // anything else becomes `internal` rather than letting a
-        // module invent protocol vocabulary.
+
         let code = match error.and_then(|e| e.get("code")).and_then(Value::as_str) {
             Some("bad_request") => ErrorCode::BadRequest,
             Some("not_found") => ErrorCode::NotFound,
@@ -387,9 +292,7 @@ impl Agent {
             "data_dir": self.data_dir.to_string_lossy(),
             "k_anonymity": self.k_anonymity,
             "features": {
-                // The console renders the watchdog panel differently
-                // when this is false, rather than showing a permanent
-                // "unreachable" that is really "not compiled in".
+
                 "quic": cfg!(feature = "quic"),
             },
         }))
@@ -427,9 +330,7 @@ impl Agent {
         let group_by_raw = p.get("group_by").and_then(Value::as_array).ok_or_else(|| {
             MethodError::bad_request("\"group_by\" is required and must be an array")
         })?;
-        // Every dimension the store knows, at most once each — a
-        // repeated field would produce duplicated columns for no
-        // benefit and is far more likely a console bug than intent.
+
         if group_by_raw.len() > 7 {
             return Err(MethodError::bad_request(
                 "\"group_by\" lists more fields than exist".to_string(),
@@ -483,10 +384,7 @@ impl Agent {
                     fossh_admin::command_client::TamperState::Unknown => "unknown",
                 },
             })),
-            // A watchdog that isn't running is an ordinary state on
-            // EPEL/RHEL, where the subpackage doesn't exist at all —
-            // reported as `unavailable` so the console can say so
-            // calmly rather than as an error.
+
             Err(e) => Err(MethodError::unavailable(e)),
         }
     }
@@ -502,9 +400,7 @@ impl Agent {
 
     fn setup_generate_key(&self) -> MethodResult {
         let generated = self.setup.generate_key().map_err(MethodError::internal)?;
-        // The private half crosses to the console exactly once, so the
-        // operator can save it — §3.11's own wording. It is never
-        // written to disk by this process and never logged.
+
         Ok(json!({
             "fingerprint": generated.fingerprint,
             "public_key_armored": generated.public_key_armored,
@@ -535,10 +431,7 @@ impl Agent {
     fn operator_authenticate(&mut self) -> MethodResult {
         match operator_auth_client::authenticate() {
             Ok(_session_token) => {
-                // The session token stays here. The console has no use
-                // for it — nothing it can call takes one — and every
-                // extra place a live credential exists is a place it
-                // can leak from.
+
                 self.authenticated = true;
                 Ok(json!({ "authenticated": true }))
             }
@@ -563,21 +456,13 @@ impl Agent {
                         Auth::Header { name } => json!({"placement": "header", "name": name}),
                     },
                     "created_at": i.created_at,
-                    // Never the key itself — at most its last four
-                    // characters, and only when it is long enough for
-                    // that to be a hint rather than most of it.
+
                     "key_hint": i.key_hint(),
                 }))
                 .collect::<Vec<_>>(),
         }))
     }
 
-    /// Every module on this install, built-in and external alike.
-    ///
-    /// The console renders this rather than a hardcoded page list, so
-    /// a module a developer dropped in appears without the console
-    /// knowing anything about it. Telemetry appears here too: it is
-    /// the flagship, not a special case.
     fn modules_list(&self) -> MethodResult {
         let (mods, problems) = modules::load();
         Ok(json!({
@@ -595,12 +480,6 @@ impl Agent {
         }))
     }
 
-    /// The provider templates the console offers as starting points.
-    ///
-    /// Read-only, and read fresh on every call rather than cached at
-    /// startup: an operator who drops a definition into
-    /// `providers.d/` should see it by reopening the dialog, not by
-    /// restarting the console.
     fn providers_list(&self) -> MethodResult {
         let (providers, problems) = fossh_admin::providers::load();
         Ok(json!({
@@ -625,10 +504,7 @@ impl Agent {
                     })).collect::<Vec<_>>(),
                 }))
                 .collect::<Vec<_>>(),
-            // Reported rather than swallowed: a definition an operator
-            // added and that did not load is exactly the thing they
-            // need told, and the console shows it as a note under the
-            // list.
+
             "problems": problems.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
         }))
     }
@@ -762,8 +638,7 @@ mod tests {
 
     #[test]
     fn a_final_line_without_a_trailing_newline_is_still_delivered() {
-        // The console closing its pipe immediately after a write is
-        // ordinary; dropping that last frame would lose a real request.
+
         let got = read_all("only");
         assert_eq!(got[0].as_ref().unwrap().as_deref(), Some("only"));
         assert_eq!(got[1].as_ref().unwrap().as_deref(), None);
@@ -777,9 +652,7 @@ mod tests {
 
     #[test]
     fn a_line_past_the_cap_is_fatal_rather_than_silently_truncated() {
-        // Truncating would hand a *valid-looking* prefix to the JSON
-        // parser and leave the remainder to be read as the next frame
-        // — the frame-confusion case this cap exists to prevent.
+
         let huge = format!("{}\n", "a".repeat(MAX_LINE_LEN + 10));
         let got = read_all(&huge);
         assert_eq!(got[0], Err("too long"));
@@ -787,8 +660,7 @@ mod tests {
 
     #[test]
     fn a_line_exactly_at_the_cap_is_still_accepted() {
-        // Off-by-one on a limit that terminates the session is worth
-        // pinning in both directions.
+
         let exact = format!("{}\n", "a".repeat(MAX_LINE_LEN));
         let got = read_all(&exact);
         assert_eq!(
@@ -799,19 +671,11 @@ mod tests {
 
     #[test]
     fn invalid_utf8_is_replaced_rather_than_killing_the_session() {
-        // It will fail JSON parsing and come back as `bad_request`,
-        // which is the right outcome — but it must not take the
-        // process down on the way there.
+
         let mut cursor = std::io::Cursor::new(vec![0xff, 0xfe, b'\n']);
         assert!(read_line(&mut cursor).unwrap().is_some());
     }
 
-    /// Each caller gets its own directory. These tests run in
-    /// parallel by default, and an earlier revision shared one path
-    /// derived from the pid alone — which meant one test's
-    /// `remove_dir_all` deleted another's `.data_key` mid-write, and
-    /// the resulting "could not be decrypted" looked exactly like a
-    /// real sealing bug.
     fn agent_for_tests(name: &str) -> Agent {
         let dir = std::env::temp_dir().join(format!(
             "fossh-agent-dispatch-{name}-{}",
@@ -853,9 +717,7 @@ mod tests {
 
     #[test]
     fn setup_state_never_includes_the_token_value() {
-        // The single most important property of this split. Asserted
-        // against the serialised frame, not the struct, because the
-        // frame is what actually leaves the process.
+
         let path = std::env::temp_dir().join(format!("fossh-agent-tok-{}", std::process::id()));
         std::fs::write(&path, "SUPERSECRETTOKEN").unwrap();
         let mut agent = agent_for_tests("setup-state");
@@ -987,9 +849,7 @@ mod tests {
 
     #[test]
     fn adding_a_duplicate_integration_reports_conflict_specifically() {
-        // The console shows a different message for "that name is
-        // taken" than for "that request was malformed", so the codes
-        // have to actually differ.
+
         let mut agent = agent_for_tests("duplicate");
         let params = json!({
             "name": "alerts",
@@ -1020,8 +880,7 @@ mod tests {
 
     #[test]
     fn an_api_key_with_a_line_break_is_refused_at_the_protocol_boundary_too() {
-        // `fossh-admin` rejects it, and this pins that the agent
-        // surfaces that rejection rather than swallowing it.
+
         let mut agent = agent_for_tests("crlf-key");
         let err = call(
             &mut agent,

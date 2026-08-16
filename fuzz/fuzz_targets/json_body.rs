@@ -1,13 +1,3 @@
-//! §3.7: fuzzes `POST /e`'s JSON body parser. The trust boundary here is
-//! the raw body bytes only — everything else about the request
-//! (site allowlist, client IP, UA, salt) is attacker-*influenced* in
-//! production but not attacker-*chosen* independently of an already
-//! authenticated site, so it's held fixed here. A small, non-empty
-//! allowlist (rather than an empty one) matters: an empty allowlist
-//! would make every event fail the very first check in
-//! `assemble_event`, and the fuzzer would never explore anything past
-//! it — see DECISIONS.md on fuzzing the inner layer, not the outer one.
-
 #![no_main]
 
 use fossh_core::types::{Country, SiteId};

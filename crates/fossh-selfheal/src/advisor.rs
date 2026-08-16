@@ -1,115 +1,29 @@
-//! The optional local model, and the fence around it.
-//!
-//! Runs `lfm2.5-thinking:1.2b` under Ollama, on this machine, and lets
-//! it write one thing: the `advice` field of a `Finding` that
-//! `engine.rs` already produced. It cannot create a finding, cannot
-//! change a severity, cannot alter a remedy, and cannot cause anything
-//! to be executed. `attach_advice` enforces all four by construction —
-//! it matches replies to findings by id and copies exactly one string.
-//!
-//! ## Why the fence is this tight
-//!
-//! An operator installs foSSH for a set of privacy invariants. A
-//! component able to author remedies could talk someone out of the one
-//! they came for — "your k-anonymity threshold looks high, try
-//! lowering it" is a fluent, plausible, and completely wrong sentence
-//! that a 1.2B model will happily produce. Keeping the model on the
-//! explaining side of the line means its worst failure is unhelpful
-//! prose, not a changed setting.
-//!
-//! ## Reaching it
-//!
-//! Ollama binds loopback and is not exposed; Apache sits in front on
-//! `127.0.0.1` and is what actually enforces access, gated on a
-//! per-install OpenPGP key generated at setup (see
-//! `packaging/apache/fossh-model.conf` and `keylock.rs`). The end user
-//! of the site being measured has no route to any of it — different
-//! machine, different network, and nothing in the ingest path even
-//! links this crate.
-//!
-//! Transport is the project's existing BoringSSL/QUIC channel where a
-//! watchdog is present, and plain loopback HTTP where one is not:
-//! `fossh-ipc`'s mTLS pins exactly one peer certificate pair, so a
-//! third party to that channel needs its own pinning step, which is a
-//! larger change than this feature justifies. Loopback-only, behind
-//! Apache, key-gated, is the boundary that actually holds here — the
-//! QUIC leg protects the watchdog↔core hop, not this one, and saying
-//! otherwise would be security theatre. See ADR-0065.
-//!
-//! ## Nothing about a visitor is ever sent
-//!
-//! The prompt is built from `Finding` ids, titles, and details — all
-//! of them strings this codebase wrote. No event, no path, no country,
-//! no aggregate, and no configuration value beyond what a finding
-//! already names. `redact_prompt_inputs` is the check, and it is
-//! asserted rather than assumed.
-
 use crate::capability::{Capability, Tier};
 use crate::engine::Finding;
 
-/// The base model this subsystem is built on.
 pub const BASE_MODEL: &str = "lfm2.5-thinking";
 
-/// What is actually invoked: a derived model built from `BASE_MODEL`
-/// by `packaging/model/Modelfile`.
-///
-/// Deriving rather than calling the base directly is deliberate. The
-/// rule that this model must never propose a fix is a security
-/// property of this subsystem, and a `SYSTEM` message baked into the
-/// artifact survives a caller that forgets to send it — a per-request
-/// instruction does not. The sampling parameters for "restate a known
-/// fact accurately" are also nothing like the defaults for open-ended
-/// chat, and getting them from the model means every caller gets them.
-///
-/// Versioned with the release so a mismatch is visible rather than
-/// silent: an install running 0.0.2.1 against a tag built from an older
-/// Modelfile would otherwise differ in behaviour with nothing to
-/// point at.
 pub const MODEL: &str = "fossh-advisor:0.0.2.2";
 
-/// Where Apache publishes it. Loopback by construction — a non-local
-/// address here would be a bug, and `validate_endpoint` refuses one.
 pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:11434";
 
-/// The floor a timed probe has to clear, in tokens per second.
-///
-/// Below this the advisory layer is not "slow", it is a background
-/// process competing with the thing the server is actually for.
-///
-/// Measured rather than guessed: 76.5 tokens/second on a Ryzen 5
-/// 8400F with four threads, entirely on CPU and with no GPU involved,
-/// against this floor of 38.5 — roughly twice the required margin.
-/// A machine that cannot reach half of that is one where the model
-/// would be taking cores the server needs.
 pub const MIN_TOKENS_PER_SECOND: f64 = 38.5;
 
-/// The other half of the gate: how long the first token may take.
-///
-/// A background advisor that makes an operator wait has already cost
-/// more than it is worth. Measured on a Ryzen 5 8400F, CPU only, four
-/// threads: **1.626 s cold, 0.097 s warm** — seventeen times apart,
-/// and the cold figure clears this ceiling by seventy milliseconds,
-/// which is not a margin to build on. That measurement is the reason
-/// the model is kept resident and the probe runs on the warm path.
 pub const MAX_TTFT_SECONDS: f64 = 1.7;
 
-/// The longest a single advisory generation may take before it is
-/// abandoned. Self-healing advice that arrives after the operator has
-/// stopped looking is worth nothing, and the finding is already
-/// complete without it.
 pub const GENERATION_TIMEOUT_SECS: u32 = 20;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Availability {
-    /// The model may be used.
+
     Ready { tier: Tier, tokens_per_second: f64 },
-    /// Hardware ruled it out before anything was timed.
+
     UnsupportedHardware { reason: String },
-    /// Hardware was fine; the measurement was not.
+
     TooSlow { measured: f64 },
-    /// Ollama is not installed, not running, or not reachable.
+
     NotInstalled { reason: String },
-    /// Deliberately switched off by the operator.
+
     Disabled,
 }
 
@@ -118,7 +32,6 @@ impl Availability {
         matches!(self, Availability::Ready { .. })
     }
 
-    /// One sentence for `fossh doctor` and the console.
     pub fn explain(&self) -> String {
         match self {
             Availability::Ready {
@@ -151,8 +64,6 @@ impl Availability {
     }
 }
 
-/// The static half of the gate. Cheap, and enough to rule most
-/// machines out before anything is started.
 pub fn assess_hardware(capability: &Capability) -> Result<Tier, Availability> {
     let tier = capability.static_tier();
     if !tier.model_allowed() {
@@ -163,18 +74,10 @@ pub fn assess_hardware(capability: &Capability) -> Result<Tier, Availability> {
     Ok(tier)
 }
 
-/// The measured half. `measured_tokens_per_second` comes from a real
-/// generation — see `probe`.
 pub fn assess_measurement(tier: Tier, measured_tokens_per_second: f64) -> Availability {
     assess_measured(tier, 0.0, measured_tokens_per_second)
 }
 
-/// Both halves of the measured gate.
-///
-/// Either failing switches the layer off for the session. They are
-/// separate because they fail for different reasons: a slow first
-/// token usually means the model was not resident, while a low rate
-/// means the machine cannot keep up at all.
 pub fn assess_measured(
     tier: Tier,
     ttft_seconds: f64,
@@ -196,13 +99,6 @@ pub fn assess_measured(
     }
 }
 
-/// Refuses an endpoint that is not loopback.
-///
-/// The model endpoint is an internal detail behind Apache; pointing it
-/// at another host would send this install's findings — which name its
-/// paths and its configuration — to a machine the operator may not
-/// control, over plain HTTP. There is no legitimate reason to, so it
-/// is refused rather than warned about.
 pub fn validate_endpoint(endpoint: &str) -> Result<(), String> {
     let rest = endpoint
         .strip_prefix("http://")
@@ -237,12 +133,6 @@ pub fn validate_endpoint(endpoint: &str) -> Result<(), String> {
     }
 }
 
-/// The prompt for one finding.
-///
-/// Deliberately built from fixed text plus three fields this codebase
-/// itself wrote. Nothing derived from a visitor, an event, or a
-/// measurement can reach it, which is what makes the privacy claim
-/// checkable rather than a promise.
 pub fn build_prompt(finding: &Finding) -> String {
     format!(
         "You are explaining one diagnostic from foSSH, a self-hosted, privacy-preserving \
@@ -260,13 +150,6 @@ pub fn build_prompt(finding: &Finding) -> String {
     )
 }
 
-/// Copies model output onto findings, and nothing else.
-///
-/// `replies` is `(finding id, advice)`. An id that does not match a
-/// real finding is dropped — that is the model trying to talk about
-/// something that was never diagnosed, and there is no version of that
-/// which should reach a screen. Advice is trimmed and capped; a
-/// runaway generation is a display problem, not a licence to scroll.
 pub fn attach_advice(findings: &mut [Finding], replies: &[(String, String)]) {
     const MAX_ADVICE_CHARS: usize = 600;
 
@@ -293,7 +176,7 @@ mod tests {
             physical_cores: cores,
             logical_cores: cores * 2,
             ram_bytes: 16 * 1024 * 1024 * 1024,
-            // Every chip with AVX2 has AVX; the fixture reflects that.
+
             avx: avx2 || avx512,
             avx2,
             avx512,
@@ -341,9 +224,7 @@ mod tests {
 
     #[test]
     fn passing_the_static_gate_is_not_enough_on_its_own() {
-        // The point of measuring: CPUID can advertise AVX-512 that a
-        // hypervisor emulates at a fraction of the speed, and no
-        // amount of static detection sees that.
+
         let slow = assess_measurement(Tier::Preferred, MIN_TOKENS_PER_SECOND - 0.1);
         assert!(matches!(slow, Availability::TooSlow { .. }));
         assert!(!slow.model_running());
@@ -359,8 +240,7 @@ mod tests {
 
     #[test]
     fn every_unavailable_state_says_the_deterministic_rules_still_run() {
-        // The message that stops "the model is off" from reading as
-        // "the feature is broken". It is the same feature either way.
+
         for state in [
             Availability::UnsupportedHardware {
                 reason: "x".to_string(),
@@ -386,7 +266,7 @@ mod tests {
         assert!(validate_endpoint("http://[::1]:11434").is_ok());
         assert!(validate_endpoint("http://10.0.0.5:11434").is_err());
         assert!(validate_endpoint("http://models.example.com").is_err());
-        // The same substring traps `integrations` had to handle.
+
         assert!(validate_endpoint("http://127.0.0.1.evil.example/").is_err());
         assert!(validate_endpoint("http://evil.example/?h=127.0.0.1").is_err());
         assert!(validate_endpoint("http://evil.example#@localhost/").is_err());
@@ -395,15 +275,13 @@ mod tests {
 
     #[test]
     fn the_prompt_carries_only_strings_this_codebase_wrote() {
-        // The privacy claim, as a test. If a future edit widened the
-        // prompt to include, say, a site slug or an event name, this
-        // is what would catch it.
+
         let f = finding("k_anonymity_low");
         let prompt = build_prompt(&f);
         assert!(prompt.contains(&f.title));
         assert!(prompt.contains(&f.detail));
         assert!(prompt.contains("warning"));
-        // The id is internal and has no business in a prompt.
+
         assert!(!prompt.contains("k_anonymity_low"));
     }
 
@@ -415,9 +293,7 @@ mod tests {
 
     #[test]
     fn advice_lands_only_on_a_finding_that_already_exists() {
-        // The fence. A model that answers about something never
-        // diagnosed is not adding information, it is hallucinating a
-        // diagnosis, and there is no display for that.
+
         let mut findings = vec![finding("real_one")];
         attach_advice(
             &mut findings,
@@ -439,8 +315,7 @@ mod tests {
 
     #[test]
     fn advice_can_never_change_a_severity_or_a_remedy() {
-        // Asserted directly rather than left to inspection: this is
-        // the property the whole design rests on.
+
         let mut findings = vec![Finding {
             severity: Severity::Critical,
             remedy: Remedy::Operator {
@@ -483,9 +358,7 @@ mod tests {
 
     #[test]
     fn the_derived_model_is_what_gets_invoked_not_the_base() {
-        // Calling the base directly would silently drop the SYSTEM
-        // message that carries the "never propose a fix" rule, and
-        // leave only the per-request prompt enforcing it.
+
         assert_eq!(MODEL, "fossh-advisor:0.0.2.2");
         assert_eq!(BASE_MODEL, "lfm2.5-thinking");
         assert_ne!(MODEL, BASE_MODEL);
@@ -493,11 +366,7 @@ mod tests {
 
     #[test]
     fn the_shipped_modelfile_builds_the_model_this_code_asks_for() {
-        // The two are edited in different files and would drift
-        // apart silently: `ollama run` against a tag that was never
-        // created fails at request time, on an operator's machine,
-        // with a message about a missing model rather than about a
-        // packaging mistake.
+
         let modelfile = include_str!("../../../packaging/model/Modelfile");
         assert!(
             modelfile.contains(&format!("FROM {BASE_MODEL}")),
@@ -507,7 +376,7 @@ mod tests {
             modelfile.contains(&format!("ollama create {MODEL}")),
             "the Modelfile's own build command does not produce {MODEL}"
         );
-        // The fence has to be in the artifact, not only in the prompt.
+
         assert!(modelfile.contains("SYSTEM"));
         assert!(
             modelfile.contains("must not"),

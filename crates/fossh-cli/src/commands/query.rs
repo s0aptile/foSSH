@@ -1,5 +1,3 @@
-//! `fossh query --site <slug> --from DATE --to DATE --group-by ... --metric ... --format ...` (§9).
-
 use fossh_store::GroupByField;
 
 use crate::args::{comma_list, flag_value, wants_help};
@@ -104,18 +102,11 @@ section for what this means for a low-traffic site.",
     match format {
         "json" => print_json(&rows, &metrics),
         "csv" => print_csv(&rows, &group_by, &metrics),
-        _ => print_table(&rows, &group_by, &metrics), // "table", and the default for anything unrecognized
+        _ => print_table(&rows, &group_by, &metrics),
     }
     0
 }
 
-/// True when the whole result is the single k-anonymity "(other)" fold —
-/// i.e. every real group the query would otherwise have shown was below
-/// the k-anonymity threshold, and there's nothing left to break down by.
-/// Only meaningful with a non-empty `group_by`: with none, a single row's
-/// dims are always empty regardless of whether it was folded, since a
-/// bare total's value doesn't change from folding (P6, `fossh-store`'s
-/// `rollup.rs`).
 fn folded_entirely_into_other(rows: &[fossh_store::GroupRow], group_by: &[GroupByField]) -> bool {
     !group_by.is_empty() && rows.len() == 1 && rows[0].dims.iter().all(|(_, v)| v == "(other)")
 }
@@ -166,9 +157,7 @@ fn print_csv(rows: &[fossh_store::GroupRow], group_by: &[GroupByField], metrics:
 }
 
 fn print_json(rows: &[fossh_store::GroupRow], metrics: &[String]) {
-    // Unlike the table/CSV formatters, JSON needs no separate header row
-    // built from `group_by` — each object's keys (from `row.dims`) are
-    // already self-describing.
+
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
         let mut obj = serde_json::Map::new();
@@ -244,9 +233,7 @@ mod tests {
 
     #[test]
     fn empty_group_by_is_never_flagged() {
-        // With no --group-by, a single total row's dims are always empty
-        // whether or not it was folded (folding a bare total doesn't
-        // change its hits/uniques) — nothing to warn about here.
+
         let rows = vec![fossh_store::GroupRow {
             dims: vec![],
             hits: 3,

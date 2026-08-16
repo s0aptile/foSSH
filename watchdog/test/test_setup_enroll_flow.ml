@@ -1,10 +1,3 @@
-(* End-to-end tests for §2.6/§3.11's first-run setup flow, driven over
-   a real Operator_auth_server socket exactly the way a real client
-   (eventually the TUI) would -- not by calling Setup_token/Operator_key
-   directly. Complements test_setup_token.ml (module-level) and
-   test_operator_auth_server.ml (the pre-existing challenge-response
-   flow, unchanged by this addition). *)
-
 open Fossh_watchdog_lib
 open Test_helpers
 
@@ -36,9 +29,7 @@ let start_server ~(socket_path : string) ~(operator_key_dir : string) : unit =
   wait_for_socket 200
 
 let () =
-  (* Scenario 1: the real happy path, driven entirely over the socket
-     -- submit the token, then paste a fresh key, get ENROLLED back,
-     and confirm the token file is actually gone afterward. *)
+
   let key_dir = mkdtemp () in
   let token_dir = mkdtemp () in
   let socket_dir = mkdtemp () in
@@ -76,10 +67,6 @@ let () =
       check "Operator_key reflects the real enrollment"
         (Operator_key.enrolled_fingerprint ~dir:key_dir = Ok (Some operator.fingerprint));
 
-      (* Replay: once enrolled, the setup flow is not reachable at all
-         any more -- a fresh connection gets the challenge-response
-         NONCE, never NOT_ENROLLED, so there is no SETUP command to
-         even send the old token to. *)
       let sock2, ic2, _oc2 = connect socket_path in
       let first_line = input_line ic2 in
       check "after enrollment, a fresh connection gets NONCE, not NOT_ENROLLED (setup is unreachable)"
@@ -88,9 +75,6 @@ let () =
 
       cleanup operator);
 
-  (* Scenario 2: a wrong token is denied, and does NOT disturb the
-     real, still-valid token -- a legitimate follow-up attempt with
-     the correct token must still succeed afterward. *)
   let key_dir2 = mkdtemp () in
   let token_dir2 = mkdtemp () in
   let socket_dir2 = mkdtemp () in
@@ -133,9 +117,6 @@ let () =
       Unix.close sock2;
       cleanup operator);
 
-  (* Scenario 3: correct token, but garbage key material -- must be
-     ENROLL_FAILED, and must NOT burn the token, so the operator can
-     retry with the real key material over a fresh connection. *)
   let key_dir3 = mkdtemp () in
   let token_dir3 = mkdtemp () in
   let socket_dir3 = mkdtemp () in
@@ -182,24 +163,6 @@ let () =
       Unix.close sock2;
       cleanup operator);
 
-  (* Scenario 4: several real clients submit the same valid token with
-     distinct keys via genuinely concurrent connection attempts.
-     Adversarial review correctly noted this does NOT exercise real
-     concurrent execution of handle_setup_flow itself -- accept_loop
-     is single-threaded and fully serial, so at most one connection's
-     SETUP/ENROLL logic ever actually runs at a time; what this
-     scenario verifies is that concurrently-arriving clients each get
-     one, and only one, definitive and correct outcome once the server
-     works through its queue -- exactly one ENROLLED, everyone else
-     explicitly refused (never dropped, never duplicated), and the
-     token left burned afterward. See test_setup_token.ml's own
-     "Scenario H" for a test that forces genuinely overlapping
-     execution of verify/enroll/burn directly (bypassing this server's
-     current single-threaded accept loop via an explicit barrier), the
-     thing this scenario's name previously implied it was covering but
-     wasn't. Keys are generated up front (slow, real gpg keygen) so
-     the race itself is only socket I/O, not confounded by keygen
-     time. *)
   let key_dir4 = mkdtemp () in
   let token_dir4 = mkdtemp () in
   let socket_dir4 = mkdtemp () in
@@ -231,14 +194,7 @@ let () =
                 try
                   let sock, ic, oc = connect socket_path in
                   let first_line = input_line ic in
-                  (* A connection only accepted after the winner has
-                     already finished gets NONCE, not NOT_ENROLLED --
-                     the setup flow is genuinely unreachable for it,
-                     matching the single-connection replay test above.
-                     A real client with no enrolled key can't answer a
-                     NONCE challenge; record that distinctly instead of
-                     blindly sending a SETUP line into a NONCE-shaped
-                     connection and waiting out the read deadline. *)
+
                   if first_line = "NOT_ENROLLED" then (
                     output_string oc (Printf.sprintf "SETUP %s\n" token);
                     flush oc;
@@ -259,21 +215,7 @@ let () =
       let enrolled_replies =
         Array.to_list replies |> List.filter (fun r -> String.length r > 9 && String.sub r 0 9 = "ENROLLED ")
       in
-      (* A loser can be refused in one of three places, all correct,
-         depending on exactly when the single-threaded accept loop got
-         around to it relative to the winner: still in the enrollment
-         race itself (ENROLL_FAILED already_enrolled, from
-         Operator_key.enroll's own exclusivity) if its connection
-         reached SETUP_OK before the winner finished; SETUP_DENIED if
-         its connection was accepted (still NOT_ENROLLED) but its
-         SETUP command wasn't read until after the winner had already
-         burned the token; or ALREADY_ENROLLED_BEFORE_ACCEPT if it
-         wasn't even accepted until after the winner's enrollment was
-         already visible, so it got NONCE instead of NOT_ENROLLED and
-         the setup flow was never reachable at all. Either way, "not
-         silently dropped or duplicated" is what matters -- every
-         non-winner must be a real, explicit refusal, never empty,
-         never a second ENROLLED. *)
+
       let refused_replies =
         Array.to_list replies
         |> List.filter (fun r ->

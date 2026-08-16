@@ -40,16 +40,12 @@ let () =
               ~expected_key_fingerprint:k.fingerprint ~data:nonce
               ~signature_binary:"not a real signature at all"));
 
-      (* Pinning: k.gnupghome has ONLY k's key, so a good signature
-         checked against the wrong expected fingerprint must fail even
-         though the crypto itself checks out. *)
       check "a real good signature checked against the wrong pinned fingerprint fails"
         (not
            (Auth.verify_signature ~gnupghome:k.gnupghome
               ~expected_key_fingerprint:other.fingerprint ~data:nonce
               ~signature_binary:sig_bytes));
 
-      (* A verifier homedir that never saw k's key at all. *)
       let empty_homedir = mkdtemp () in
       Fun.protect
         ~finally:(fun () -> rm_rf empty_homedir)
@@ -60,12 +56,6 @@ let () =
                   ~expected_key_fingerprint:k.fingerprint ~data:nonce
                   ~signature_binary:sig_bytes)));
 
-      (* Revocation: sign while the key is still usable, revoke it,
-         then verify from a fresh homedir that only ever imports the
-         already-revoked public key — this is what a real client
-         re-fetching an enrolled key after it was revoked would see.
-         gpgv (the original implementation) was found to accept this;
-         see ADR-0041. *)
       let revoke_target = generate_key ~uid:"revme <revme@example.invalid>" () in
       Fun.protect
         ~finally:(fun () -> cleanup revoke_target)
@@ -84,18 +74,6 @@ let () =
                       ~expected_key_fingerprint:revoke_target.fingerprint
                       ~data:revoked_nonce ~signature_binary:revoked_sig))));
 
-      (* Regression test for a real, fresh-sweep finding: verify_signature's
-         three nested Tempfile.with_contents calls plus the
-         Fileutil.read_all_bytes of status_path were unguarded Stdlib
-         channel ops (raise Sys_error, not Unix.Unix_error) — the same
-         bug class Manifest.verify_and_extract had (see that module's own
-         test for the full history and why real fd exhaustion, not a
-         mid-process TMPDIR change, is what actually reproduces it). Not
-         process-crashing here even before the fix (the one real caller
-         already runs inside accept_loop's own connection-level
-         catch-all), but this function's whole contract is "return a
-         bool, never raise" — confirmed it now holds under the identical
-         real fault. *)
       let exhausted = exhaust_fds () in
       Fun.protect
         ~finally:(fun () -> release_exhausted_fds exhausted)

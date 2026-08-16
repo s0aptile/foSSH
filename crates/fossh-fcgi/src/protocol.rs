@@ -1,32 +1,7 @@
-//! Hand-rolled FastCGI record framing (the wire protocol originally
-//! defined by Open Market's FastCGI spec, still what nginx/every real
-//! webserver speaks) — pure, `#![forbid(unsafe_code)]`, no I/O of its
-//! own beyond generic `Read`/`Write` bounds, so every byte-parsing path
-//! is unit-testable and fuzzable without a real socket. Hand-rolled
-//! rather than pulling a `fastcgi` crate for the same reason this
-//! project already hand-rolls CRC-32/base32/HLL: the wire format is
-//! small (an 8-byte header plus two simple sub-encodings), and parsing
-//! untrusted bytes from a socket is exactly the kind of narrow,
-//! security-relevant surface this project prefers to own and review
-//! directly rather than trust to an unaudited third-party crate.
-//!
-//! Deliberately implements only what this application's single
-//! `RESPONDER`-role, request/response-only use actually needs: no
-//! `FCGI_AUTHORIZER`/`FCGI_FILTER` roles, no `FCGI_DATA` stream, no
-//! request multiplexing beyond rejecting anything that would need it.
-//! Values not recognized (an unknown record type, a non-`RESPONDER`
-//! role) are refused explicitly rather than guessed at — S2's "fail
-//! closed" applies to wire parsing exactly as it does to the request
-//! pipeline above it.
-
 use std::io::{self, Read, Write};
 
 pub const VERSION_1: u8 = 1;
 
-/// Every record this application either reads or writes. `Other(u8)`
-/// exists so a genuinely unrecognized type byte on the wire can be
-/// represented and rejected explicitly, never silently reinterpreted
-/// as one of the known variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecordType {
     BeginRequest,
@@ -90,8 +65,6 @@ pub struct Header {
 
 pub const HEADER_LEN: usize = 8;
 
-/// Role carried in an `FCGI_BEGIN_REQUEST` body. Only `Responder` is
-/// ever accepted — see the module doc comment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     Responder,
@@ -120,13 +93,6 @@ pub struct BeginRequestBody {
 pub const BEGIN_REQUEST_BODY_LEN: usize = 8;
 const FCGI_KEEP_CONN: u8 = 1;
 
-/// `FCGI_UNKNOWN_TYPE`'s `Overloaded` protocol status exists in the
-/// wire spec but has no variant here: emitting it needs a real
-/// overload signal (a bounded queue rejecting work, specifically) that
-/// this application doesn't implement — its connection/event channels
-/// are deliberately unbounded, backpressure via blocking rather than
-/// rejection (see `main.rs`). Not worth a status this app can never
-/// actually produce; add it back if that changes.
 #[derive(Debug, Clone, Copy)]
 pub enum ProtocolStatus {
     RequestComplete,
@@ -146,13 +112,9 @@ impl ProtocolStatus {
 
 #[derive(Debug)]
 pub enum ProtocolError {
-    /// A length-prefixed name/value pair's encoded length pointed
-    /// past the end of the record's own content — either a
-    /// misbehaving client or a deliberately malformed stream.
+
     Truncated,
-    /// Decoded name/value content exceeded `MAX_PARAMS_BYTES` before
-    /// finishing — S4's "bounded everything" applied to this stream
-    /// specifically, since nothing upstream caps it otherwise.
+
     ParamsTooLarge,
 }
 
@@ -176,7 +138,7 @@ pub fn read_header<R: Read>(r: &mut R) -> io::Result<Header> {
         request_id: u16::from_be_bytes([buf[2], buf[3]]),
         content_length: u16::from_be_bytes([buf[4], buf[5]]),
         padding_length: buf[6],
-        // buf[7] ("reserved") is intentionally ignored, per spec.
+
     })
 }
 
@@ -196,15 +158,11 @@ pub fn write_header<W: Write>(w: &mut W, h: &Header) -> io::Result<()> {
     w.write_all(&buf)
 }
 
-/// Reads exactly one record's content (after its header) plus its
-/// trailing padding, discarding the padding. Bounds the read to
-/// `content_length` — never more, regardless of what a caller's
-/// buffer capacity might otherwise allow.
 pub fn read_record_body<R: Read>(r: &mut R, header: &Header) -> io::Result<Vec<u8>> {
     let mut content = vec![0u8; header.content_length as usize];
     r.read_exact(&mut content)?;
     if header.padding_length > 0 {
-        let mut pad = [0u8; 255]; // padding_length is a u8, so this always fits
+        let mut pad = [0u8; 255];
         r.read_exact(&mut pad[..header.padding_length as usize])?;
     }
     Ok(content)
@@ -219,13 +177,6 @@ pub fn parse_begin_request_body(content: &[u8]) -> Option<BeginRequestBody> {
     Some(BeginRequestBody { role, keep_conn })
 }
 
-/// Total decoded name+value bytes a single PARAMS stream may carry —
-/// generous for real CGI meta-variables (which this application's own
-/// wire protocol already bounds far more tightly per S4: 4 KiB per env
-/// var value) but still a hard, finite ceiling rather than "whatever
-/// fits in memory," so a misbehaving or malicious client can't grow
-/// this stream unboundedly before this application ever gets a chance
-/// to validate anything about the request.
 pub const MAX_PARAMS_BYTES: usize = 64 * 1024;
 
 fn decode_length(bytes: &[u8], pos: &mut usize) -> Option<u32> {
@@ -240,20 +191,8 @@ fn decode_length(bytes: &[u8], pos: &mut usize) -> Option<u32> {
     }
 }
 
-/// A decoded FastCGI name/value stream: raw bytes, not yet interpreted
-/// as UTF-8 — `connection::build_env` does that lossily, matching how
-/// CGI meta-variables have always been treated on the `fossh-cgi` side.
 pub type NameValuePairs = Vec<(Vec<u8>, Vec<u8>)>;
 
-/// Decodes one FastCGI name-value pair stream (the encoding
-/// `FCGI_PARAMS` and `FCGI_GET_VALUES`/`_RESULT` all share): each
-/// name/value length is either one byte (high bit clear, value
-/// `0..=127`) or four bytes big-endian with the first byte's high bit
-/// set and cleared before use. Content may span multiple concatenated
-/// `FCGI_PARAMS` records — callers accumulate all of them into one
-/// buffer (see `connection.rs`) before calling this once on the whole
-/// thing, since a name/value pair is permitted to straddle a record
-/// boundary.
 pub fn decode_name_value_pairs(bytes: &[u8]) -> Result<NameValuePairs, ProtocolError> {
     let mut out = Vec::new();
     let mut pos = 0usize;
@@ -288,30 +227,13 @@ pub fn decode_name_value_pairs(bytes: &[u8]) -> Result<NameValuePairs, ProtocolE
     Ok(out)
 }
 
-/// Writes `content` as one or more `FCGI_STDOUT` records (a single
-/// record's content is capped at 65535 bytes by the header's own
-/// `u16` field — chunking is what the spec expects for anything
-/// larger, though in practice this application's responses are always
-/// small fixed headers), followed by the empty-content record that
-/// signals end-of-stream, then `FCGI_END_REQUEST`. One call covers the
-/// whole response — there is no partial-write API here on purpose,
-/// mirroring `fossh-cgi::main`'s own single buffered write and the same
-/// reasoning: nothing should be able to leave a response half-sent.
 pub fn write_response<W: Write>(
     w: &mut W,
     request_id: u16,
     content: &[u8],
     app_status: u32,
 ) -> io::Result<()> {
-    // `[].chunks(n)` yields zero chunks for empty content — correct on
-    // its own, no special-casing needed: the unconditional terminator
-    // record below is *always* the one and only empty marker, for
-    // both empty and non-empty content. (An earlier draft added a
-    // `.chain()` here to "handle" the empty case explicitly, which
-    // actually caused a *second* empty record to be written before
-    // `EndRequest` — caught by this function's own
-    // `..._still_emits_exactly_one_stdout_terminator` test actually
-    // failing, not by inspection.)
+
     for chunk in content.chunks(u16::MAX as usize) {
         write_header(
             w,
@@ -325,7 +247,7 @@ pub fn write_response<W: Write>(
         )?;
         w.write_all(chunk)?;
     }
-    // Empty-content STDOUT record: end-of-stream marker.
+
     write_header(
         w,
         &Header {
@@ -353,9 +275,6 @@ pub fn write_response<W: Write>(
     w.write_all(&body)
 }
 
-/// A minimal `FCGI_END_REQUEST` with no `FCGI_STDOUT` at all — used to
-/// refuse a request outright (wrong role, unsupported record) without
-/// ever having produced a meaningful response body.
 pub fn write_end_request_only<W: Write>(
     w: &mut W,
     request_id: u16,
@@ -419,9 +338,9 @@ mod tests {
 
     #[test]
     fn read_record_body_reads_content_and_discards_padding() {
-        let mut data = b"hello!!!".to_vec(); // 8 bytes content
-        data.extend_from_slice(&[0u8; 5]); // 5 bytes padding
-        data.extend_from_slice(b"NEXT"); // what follows must be untouched
+        let mut data = b"hello!!!".to_vec();
+        data.extend_from_slice(&[0u8; 5]);
+        data.extend_from_slice(b"NEXT");
         let header = Header {
             version: VERSION_1,
             kind: RecordType::Stdin,
@@ -440,7 +359,7 @@ mod tests {
 
     #[test]
     fn begin_request_body_parses_role_and_keep_conn() {
-        let content = [0x00, 0x01, 0x01, 0, 0, 0, 0, 0]; // role=Responder(1), keep_conn set
+        let content = [0x00, 0x01, 0x01, 0, 0, 0, 0, 0];
         let parsed = parse_begin_request_body(&content).unwrap();
         assert_eq!(parsed.role, Role::Responder);
         assert!(parsed.keep_conn);
@@ -448,7 +367,7 @@ mod tests {
 
     #[test]
     fn begin_request_body_without_keep_conn_flag() {
-        let content = [0x00, 0x02, 0x00, 0, 0, 0, 0, 0]; // role=Authorizer(2), no keep_conn
+        let content = [0x00, 0x02, 0x00, 0, 0, 0, 0, 0];
         let parsed = parse_begin_request_body(&content).unwrap();
         assert_eq!(parsed.role, Role::Authorizer);
         assert!(!parsed.keep_conn);
@@ -462,7 +381,7 @@ mod tests {
 
     #[test]
     fn name_value_short_form_round_trips() {
-        // name="REQUEST_METHOD" (14 bytes), value="POST" (4 bytes), both < 128.
+
         let mut bytes = vec![14u8, 4u8];
         bytes.extend_from_slice(b"REQUEST_METHOD");
         bytes.extend_from_slice(b"POST");
@@ -474,12 +393,12 @@ mod tests {
 
     #[test]
     fn name_value_long_form_length_is_used_when_high_bit_set() {
-        // A 200-byte value needs the 4-byte long form (200 > 127).
+
         let name = b"X";
         let value = vec![b'v'; 200];
-        let mut bytes = vec![1u8]; // name length: short form, 1
+        let mut bytes = vec![1u8];
         let len_bytes = (200u32 | 0x8000_0000).to_be_bytes();
-        bytes.extend_from_slice(&len_bytes); // value length: long form
+        bytes.extend_from_slice(&len_bytes);
         bytes.extend_from_slice(name);
         bytes.extend_from_slice(&value);
 
@@ -511,7 +430,7 @@ mod tests {
 
     #[test]
     fn name_value_truncated_length_prefix_is_an_error_not_a_panic() {
-        // Claims a 4-byte long-form length but supplies only 2 more bytes.
+
         let bytes = vec![0x80, 0x00];
         assert!(matches!(
             decode_name_value_pairs(&bytes),
@@ -521,7 +440,7 @@ mod tests {
 
     #[test]
     fn name_value_length_claims_more_content_than_is_actually_present() {
-        let bytes = vec![200u8, 0u8, b'x']; // claims a 200-byte name, gives 1 byte
+        let bytes = vec![200u8, 0u8, b'x'];
         assert!(matches!(
             decode_name_value_pairs(&bytes),
             Err(ProtocolError::Truncated)
@@ -530,14 +449,13 @@ mod tests {
 
     #[test]
     fn name_value_stream_over_the_bound_is_rejected() {
-        // One pair whose declared lengths alone exceed MAX_PARAMS_BYTES.
+
         let over = (MAX_PARAMS_BYTES + 1) as u32;
-        let mut bytes = vec![0x80, 0x00, 0x00, 0x00]; // name length: long form
+        let mut bytes = vec![0x80, 0x00, 0x00, 0x00];
         bytes.extend_from_slice(&over.to_be_bytes());
         bytes[0..4].copy_from_slice(&(over | 0x8000_0000).to_be_bytes());
-        bytes.push(0); // value length: 0, short form
-        // Content is never actually supplied — the bound must be caught
-        // from the declared lengths alone, before any content read.
+        bytes.push(0);
+
         assert!(matches!(
             decode_name_value_pairs(&bytes),
             Err(ProtocolError::ParamsTooLarge)
@@ -585,8 +503,7 @@ mod tests {
 
         let h2 = read_header(&mut cursor).unwrap();
         assert_eq!(h2.kind, RecordType::EndRequest);
-        // Confirms exactly one STDOUT record was written for empty
-        // content, not zero (missing the terminator) or two.
+
     }
 
     #[test]

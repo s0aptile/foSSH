@@ -1,6 +1,3 @@
-//! `fossh {init,site,query,maintain,export,doctor}` (§9). Hand-rolled
-//! argument parsing (ADR-0003) — each subcommand parses its own flags.
-
 #![forbid(unsafe_code)]
 
 mod args;

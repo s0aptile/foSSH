@@ -1,29 +1,5 @@
-//! Pure parsing/comparison for the glibc-floor gate (Fedora-native
-//! deployment chapter, §2.5/§3.1). This module does no I/O at all —
-//! it neither spawns `ldd` nor reads the running host's actual glibc
-//! version. The caller (`fossh-cli`'s `doctor` and `glibc-check`
-//! subcommands, and — later — an `ExecStartPre=` hook in the systemd
-//! unit) is responsible for actually invoking `ldd --version` and
-//! handing its stdout to `parse_ldd_version`.
-//!
-//! Deliberately not wired into `fossh-cgi`'s per-request path: that
-//! binary is re-exec'd by the webserver (or `fcgiwrap`) on every single
-//! request, and the host's glibc version cannot change between one
-//! request and the next — spawning a subprocess to re-check it on every
-//! invocation would burn real budget against §7.1's sub-5ms p99 target
-//! for nothing. See DECISIONS.md's ADR on this.
-
-/// The locked-in floor (§2.5's "candidate: 2.17, matching the
-/// RHEL7/CentOS7 era"), finalized here as the actual comparison value.
 pub const RECOMMENDED_FLOOR: (u32, u32) = (2, 17);
 
-/// Parses the `(major, minor)` glibc version out of `ldd --version`'s
-/// stdout. Takes the last whitespace-separated token on the first
-/// line — every glibc distro variant this was checked against (`ldd
-/// (GNU libc) 2.43` on Fedora, `ldd (Ubuntu GLIBC 2.31-0ubuntu9.9)
-/// 2.31`, `ldd (Debian GLIBC 2.36-9+deb12u4) 2.36`) ends that line with
-/// a bare `MAJOR.MINOR`, even when an earlier parenthetical carries a
-/// distro-patched suffix.
 pub fn parse_ldd_version(stdout: &str) -> Option<(u32, u32)> {
     let first_line = stdout.lines().next()?;
     let last_token = first_line.split_whitespace().last()?;
@@ -34,8 +10,6 @@ pub fn parse_ldd_version(stdout: &str) -> Option<(u32, u32)> {
     Some((major, minor))
 }
 
-/// `true` if `version` meets or exceeds `floor` (major first, then
-/// minor within the same major).
 pub fn meets_floor(version: (u32, u32), floor: (u32, u32)) -> bool {
     version >= floor
 }

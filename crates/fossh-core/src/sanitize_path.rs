@@ -1,14 +1,3 @@
-//! P9 — path sanitization: strip query/fragment, then replace high-entropy
-//! path segments (UUID, ULID, ≥16-char hex runs, ≥8-digit numeric runs,
-//! email-shaped segments) with `:id` / `:email` placeholders.
-//!
-//! Operates on the path exactly as given — it does not percent-decode.
-//! Decoding would add an ambiguity surface (double-encoding, mixed partial
-//! encodings) for a threat this function isn't trying to cover; the risk
-//! `sanitize_path` defends against is *incidental* PII in plain segments
-//! (`/users/123456789`, `/reset/9f86d081...`), not adversarial obfuscation.
-//! Noted as a limitation in `docs/THREAT_MODEL.md`.
-
 const ID_PLACEHOLDER: &str = ":id";
 const EMAIL_PLACEHOLDER: &str = ":email";
 
@@ -17,15 +6,8 @@ const DIGIT_RUN_MIN: usize = 8;
 const UUID_LEN: usize = 36;
 const ULID_LEN: usize = 26;
 
-/// Crockford base32: no I, L, O, U (avoids confusion with 1, 1, 0, V).
 const CROCKFORD_ALPHABET: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
-/// Strips the query string and fragment, then replaces each high-entropy
-/// path segment with a placeholder. Always returns a string starting with
-/// `/` (an empty, or query/fragment-only, input sanitizes to `/`). A path
-/// with no leading slash is treated as rooted anyway — every caller (CGI
-/// `PATH_INFO`, the embedded FFI) hands foSSH a path that is conceptually
-/// absolute.
 pub fn sanitize_path(raw: &str) -> String {
     let path_only = strip_query_and_fragment(raw);
     let path_only = if path_only.is_empty() { "/" } else { path_only };
@@ -153,18 +135,10 @@ fn looks_like_email(seg: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// Representative, hand-typed cases where exact string lengths don't
-    /// matter — structural stripping, plain text that must survive
-    /// untouched, and mixed multi-substitution paths. Exact boundary
-    /// conditions (off-by-one on the 8/16/26/36-char thresholds) are
-    /// covered separately below by programmatically-constructed strings,
-    /// since hand-counting characters in a literal is exactly the kind of
-    /// thing that silently produces a wrong expectation instead of a wrong
-    /// implementation.
     #[test]
     fn table() {
         let cases: &[(&str, &str)] = &[
-            // -- structural --
+
             ("", "/"),
             ("/", "/"),
             ("//", "//"),
@@ -177,7 +151,7 @@ mod tests {
             ("/a//b", "/a//b"),
             ("/a/b/c/d/e", "/a/b/c/d/e"),
             ("a/b", "/a/b"),
-            // -- query / fragment stripping --
+
             ("/a?x=1", "/a"),
             ("/a#frag", "/a"),
             ("/a?x=1#frag", "/a"),
@@ -190,21 +164,21 @@ mod tests {
             ("/search?q=jane.doe@example.com", "/search"),
             ("/a?", "/a"),
             ("/a#", "/a"),
-            // -- numeric runs --
+
             ("/1234567", "/1234567"),
             ("/12345678", "/:id"),
             ("/123456789", "/:id"),
             ("/users/12345678/edit", "/users/:id/edit"),
             ("/users/1234567/edit", "/users/1234567/edit"),
             ("/order/000000012", "/order/:id"),
-            // -- hex runs --
+
             ("/abcdef0123456", "/abcdef0123456"),
             ("/deadbeefdeadbeef", "/:id"),
             (
                 "/sessions/9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
                 "/sessions/:id",
             ),
-            // -- UUID --
+
             ("/550e8400-e29b-41d4-a716-446655440000", "/:id"),
             ("/550E8400-E29B-41D4-A716-446655440000", "/:id"),
             (
@@ -215,14 +189,14 @@ mod tests {
                 "/550e8400xe29bx41d4xa716x446655440000",
                 "/550e8400xe29bx41d4xa716x446655440000",
             ),
-            // -- ULID --
+
             ("/01ARZ3NDEKTSV4RRFFQ69G5FAV", "/:id"),
             ("/01arz3ndektsv4rrffq69g5fav", "/:id"),
             (
                 "/orders/01ARZ3NDEKTSV4RRFFQ69G5FAV/items",
                 "/orders/:id/items",
             ),
-            // -- email --
+
             ("/jane.doe@example.com", "/:email"),
             ("/contact/jane.doe@example.com", "/contact/:email"),
             ("/jane@x.co", "/:email"),
@@ -232,7 +206,7 @@ mod tests {
             ("/jane@localhost", "/jane@localhost"),
             ("/jane@example.c", "/jane@example.c"),
             ("/jane_doe+tag@example.co.uk", "/:email"),
-            // -- plain text untouched --
+
             ("/about", "/about"),
             (
                 "/blog/2026/how-we-built-fossh",
@@ -245,7 +219,7 @@ mod tests {
             ("/日本語", "/日本語"),
             ("/a-b_c.d:e", "/a-b_c.d:e"),
             ("/v1.2.3", "/v1.2.3"),
-            // -- mixed --
+
             (
                 "/users/12345678/posts/550e8400-e29b-41d4-a716-446655440000/comments/deadbeefdeadbeef",
                 "/users/:id/posts/:id/comments/:id",
@@ -286,9 +260,7 @@ mod tests {
         assert_eq!(sanitize_path(&format!("/{}", "a".repeat(16))), "/:id");
         assert_eq!(sanitize_path(&format!("/{}", "F".repeat(16))), "/:id");
         assert_eq!(sanitize_path(&format!("/{}", "b".repeat(100))), "/:id");
-        // A hex-looking run that's shorter than the digit threshold's non-hex
-        // sibling case: letters-only hex below 16 must NOT match via the
-        // digit rule either (digit rule requires ascii_digit, letters fail it).
+
         assert_eq!(
             sanitize_path(&format!("/{}", "f".repeat(7))),
             format!("/{}", "f".repeat(7))
@@ -327,8 +299,7 @@ mod tests {
             sanitize_path(&format!("/{too_long}")),
             format!("/{too_long}")
         );
-        // Crockford excludes I, L, O, U — a same-length run using one of
-        // those must NOT be treated as a ULID.
+
         let with_forbidden = format!("{}I", &ulid[..ulid.len() - 1]);
         assert_eq!(with_forbidden.len(), ULID_LEN);
         assert_eq!(
@@ -339,8 +310,7 @@ mod tests {
 
     #[test]
     fn never_panics_on_arbitrary_bytes() {
-        // Property-adjacent smoke test without pulling proptest in for this
-        // one file: a grab-bag of adversarial inputs that must not panic.
+
         let inputs = [
             "/",
             "",

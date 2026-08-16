@@ -1,16 +1,3 @@
-# frozen_string_literal: true
-
-# Exercises the accept/reject/rate-limit/wrong-key paths end to end
-# against a real database, using the `fossh` CLI (assumed built and on
-# $PATH, or reachable via $FOSSH_CLI_BIN) to `init`/`site create` a
-# throwaway environment — the same pattern bindings/go/fossh_test.go
-# uses, just driven from Ruby.
-#
-# Requires `libfossh.so` findable via `$FOSSH_LIB_PATH` (or already on
-# the loader's default search path) — not runnable in an environment
-# without a Ruby interpreter, which is the state this was authored in;
-# see DECISIONS.md for that limitation.
-
 require "minitest/autorun"
 require "English"
 require "fileutils"
@@ -32,7 +19,7 @@ class FosshIntegrationTest < Minitest::Test
     dir = Dir.mktmpdir("fossh-ruby-test")
     data_dir = File.join(dir, "data")
 
-    init_out = `#{bin} init --dir #{data_dir} 2>&1`
+    init_out = `#{bin} init --dir
     raise "fossh init failed:\n#{init_out}" unless $CHILD_STATUS.success?
 
     config_path = File.join(dir, "fossh.toml")
@@ -78,7 +65,6 @@ class FosshIntegrationTest < Minitest::Test
     config_path, key = setup_site(allow: %w[pageview])
     client = FoSSH::Client.new(config: config_path, key: key)
 
-    # burst = 2 (patched into the config in setup_site).
     assert client.event("pageview", value: 1)
     assert client.event("pageview", value: 1)
 
@@ -92,10 +78,6 @@ class FosshIntegrationTest < Minitest::Test
     config_path, = setup_site(allow: %w[pageview])
     wrong_key = "fossh_testsite_#{"A" * 52}"
 
-    # fossh_set_key failing during construction surfaces as FoSSH::Error
-    # (a real, loaded fossh_ctx that rejected the key) — distinct from
-    # FoSSH::LoadError, which is specifically "the library/context
-    # itself never came up at all."
     err = assert_raises(FoSSH::Error) do
       FoSSH::Client.new(config: config_path, key: wrong_key)
     end

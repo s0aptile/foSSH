@@ -1,14 +1,3 @@
-//! Raw event storage. `Store::record_event` is the only way in for a
-//! single event: it interns name/path/referrer, inserts the raw row +
-//! its props, and folds the event into its hourly rollup bucket, all
-//! inside one transaction — matching the compactor's job of turning
-//! one drained spool frame into both a durable raw row and an
-//! up-to-date aggregate. `record_events_batch` (M7) does the same
-//! per-event work but shares *one* transaction across the whole slice
-//! — §7.2's "batched transaction" for `fossh-fcgi`'s direct-write
-//! mode, where committing after every single event would give up
-//! exactly the throughput a persistent, batching writer exists for.
-
 use rusqlite::{Connection, params};
 
 use fossh_core::types::{Event, SiteId};
@@ -19,20 +8,8 @@ use crate::intern::{intern_name, intern_path, intern_ref};
 use crate::rollup::upsert_rollup;
 use crate::{Store, StoreError};
 
-/// `rollup_hourly.path_id` is part of a `WITHOUT ROWID` primary key, so
-/// SQLite implicitly forbids `NULL` there (unlike `events.path_id`, an
-/// ordinary nullable column). `0` is reserved as "no path" — `paths.id` is
-/// an `INTEGER PRIMARY KEY` (rowid alias) that SQLite starts allocating
-/// from `1`, so `0` is never assigned to a real interned path.
 pub(crate) const NO_PATH_SENTINEL: i64 = 0;
 
-/// The actual insert-plus-rollup-fold work for one event, against
-/// anything connection-like the caller already owns (a bare
-/// `Connection`, a `Transaction`, or a `Savepoint` — the latter two
-/// both `Deref<Target = Connection>`) — shared by `record_event` (one
-/// event, one transaction) and `record_events_batch` (many events, one
-/// shared transaction, one savepoint per event within it). Validates
-/// `event` first, same as `record_event` always has.
 fn insert_one(conn: &Connection, event: &Event) -> Result<i64, StoreError> {
     event.validate().map_err(StoreError::Validation)?;
 
@@ -81,9 +58,7 @@ fn insert_one(conn: &Connection, event: &Event) -> Result<i64, StoreError> {
 }
 
 impl Store {
-    /// Records one event: interns name/path/referrer, inserts the raw row
-    /// and its properties, and folds it into the matching hourly rollup —
-    /// all atomically. Returns the new `events.id`.
+
     pub fn record_event(&mut self, event: &Event) -> Result<i64, StoreError> {
         let tx = self.conn.transaction()?;
         let event_id = insert_one(&tx, event)?;
@@ -91,22 +66,6 @@ impl Store {
         Ok(event_id)
     }
 
-    /// Records every event in `events` inside one shared transaction —
-    /// `fossh-fcgi`'s batched-flush write path (§7.2), so a persistent
-    /// writer flushing 100 events at once commits once, not 100 times.
-    /// S2 still applies per event, not to the batch as a whole: each
-    /// event gets its own `SAVEPOINT` nested inside the shared
-    /// transaction, so one event failing validation (or any other
-    /// per-event `StoreError`) rolls back *only that event's* partial
-    /// writes — via the savepoint's own `Drop`, never committed — while
-    /// every already-committed savepoint before it, and every one
-    /// after it, is unaffected. Sharing one bare transaction across the
-    /// whole slice without this would have been wrong: a mid-event
-    /// failure (e.g. after the raw row insert but before the rollup
-    /// fold) would otherwise leave that one event's partial writes
-    /// sitting uncommitted-but-not-rolled-back inside the outer
-    /// transaction, to be silently committed anyway at the end. Returns
-    /// the number actually recorded.
     pub fn record_events_batch(&mut self, events: &[Event]) -> Result<u64, StoreError> {
         if events.is_empty() {
             return Ok(0);
@@ -119,16 +78,12 @@ impl Store {
                 sp.commit()?;
                 recorded += 1;
             }
-            // else: `sp` drops here uncommitted, rolling back only
-            // this event's partial writes (default `DropBehavior` is
-            // `Rollback` — see rusqlite's `Savepoint`).
+
         }
         tx.commit()?;
         Ok(recorded)
     }
 
-    /// Raw row count for a site — test/debug helper, also handy for
-    /// `fossh doctor`-style sanity checks later.
     pub fn count_events(&self, site_id: SiteId) -> Result<u64, StoreError> {
         let n: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM events WHERE site_id = ?1",
@@ -219,10 +174,7 @@ mod tests {
             .conn
             .query_row("SELECT COUNT(*) FROM names", [], |r| r.get(0))
             .unwrap();
-        // `sample_event` uses the event name "pageview" and the prop key
-        // "plan" (props keys intern into the same `names` table) — two
-        // distinct strings, each interned twice, must still leave exactly
-        // two rows, not four.
+
         assert_eq!(
             names, 2,
             "each distinct interned string (name + prop key) must reuse one row across both events"
@@ -231,10 +183,7 @@ mod tests {
 
     #[test]
     fn stored_browser_os_device_codes_match_fossh_core_encoding() {
-        // The u8/from_u8 roundtrip itself is covered in fossh-core's own
-        // tests; this just checks the stored integer actually is what
-        // `as_u8()` produces, i.e. that `record_event` didn't invent its
-        // own encoding somewhere along the way.
+
         let mut store = Store::open_in_memory().unwrap();
         let mut ev = sample_event(1, 1_700_000_000, "pageview");
         ev.browser = BrowserFamily::Edge;
@@ -305,10 +254,7 @@ mod tests {
 
     #[test]
     fn record_events_batch_one_invalid_event_is_skipped_without_affecting_the_others() {
-        // The middle event fails validation (too many props, same
-        // trigger `record_event_rejects_too_many_props` uses) — its own
-        // savepoint must roll back without taking the whole shared
-        // transaction, and therefore the other two events, down with it.
+
         let mut store = Store::open_in_memory().unwrap();
         let mut invalid = sample_event(1, 1_700_000_100, "pageview");
         invalid.props = (0..17)

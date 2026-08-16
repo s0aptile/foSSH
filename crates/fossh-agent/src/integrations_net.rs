@@ -1,85 +1,28 @@
-//! The only outbound request anything in foSSH ever makes.
-//!
-//! Deliberately confined to this binary. `fossh-admin::integrations`
-//! (storage, validation, redaction) is reachable from `fossh-cgi` and
-//! `fossh-fcgi` because they need `data_key` from the same crate; this
-//! module is not reachable from either, which is what keeps the ingest
-//! path's "zero outbound network access" property true by construction
-//! rather than by promise. See ADR-0062.
-//!
-//! ## Why `curl` rather than an HTTP crate
-//!
-//! Adding `ureq`/`rustls` for one operator-triggered request would put
-//! roughly eighty crates through this project's §3.10 supply-chain gate
-//! to do what a tool already installed on every RHEL-family system
-//! does. This codebase already shells out to `gpg`, `openssl`, and
-//! `sha256sum` for exactly this reasoning. See ADR-0063.
-//!
-//! ## How the credential is kept out of everything that leaks
-//!
-//! On Linux `/proc/<pid>/cmdline` is world-readable, so an API key
-//! passed as a command-line argument is readable by every local user
-//! for the lifetime of the process. `/proc/<pid>/environ` is
-//! owner-only, so an environment variable is better — but still
-//! visible to anything running as the same user, and inherited by any
-//! child. Neither is used here. The key reaches `curl` only through a
-//! configuration file fed on **stdin** (`--config -`), which lives in a
-//! pipe, is never named in the filesystem, and is never visible in any
-//! process listing.
-//!
-//! Three further flags are load-bearing rather than decorative:
-//!
-//! - `-q` **must be the first argument** — it is what stops `curl` from
-//!   reading `~/.curlrc`, where a `--location` or `--proxy` line the
-//!   operator forgot about would silently change where this credential
-//!   goes.
-//! - redirects are **not** followed. `curl` does not follow them
-//!   unless asked, and this deliberately never asks: following a
-//!   redirect re-sends the `Authorization` header, and a `302` to an
-//!   attacker's host is the standard way to turn a webhook into a
-//!   credential exfiltration primitive.
-//! - `--proto` / `--proto-redir` pin the set of schemes `curl` will
-//!   accept, so a URL that got past validation cannot be turned into a
-//!   `file://` or `scp://` fetch by anything downstream.
-//! - `tlsv1.2` sets the floor, not the target. The handshake
-//!   negotiates the highest version both sides support, so a modern
-//!   endpoint gets TLS 1.3 and one that has not moved yet still gets
-//!   1.2 rather than a failed request. Everything below 1.2 is
-//!   refused outright.
-
 use std::io::Write;
 use std::process::{Command, Stdio};
 
 use fossh_admin::integrations::{Integration, Method, TEST_BODY};
 use zeroize::Zeroizing;
 
-/// Wall-clock ceiling on the whole request. Also the real bound on how
-/// much a hostile endpoint can send: `--max-filesize` only fires when a
-/// `Content-Length` is present, so a chunked response that never ends
-/// is stopped by this and not by that.
 const MAX_TIME_SECS: u32 = 10;
 const CONNECT_TIMEOUT_SECS: u32 = 5;
 const MAX_RESPONSE_BYTES: u64 = 65_536;
-/// How much of the response body is handed back for display. Enough for
-/// a real API error message, far short of anything worth scrolling.
+
 const MAX_BODY_SNIPPET: usize = 2_000;
 
 #[derive(Debug)]
 pub struct TestOutcome {
     pub status: u16,
-    /// `curl`'s own view of whether the transfer happened at all —
-    /// distinct from whether the service liked the credential.
+
     pub transport_ok: bool,
     pub body_snippet: String,
 }
 
 #[derive(Debug)]
 pub enum NetError {
-    /// No `curl` on `PATH`.
+
     CurlMissing,
-    /// `curl` ran and failed: DNS, TLS, connection refused, timeout.
-    /// Carries `curl`'s own message, which is consistently better than
-    /// anything this module could synthesise.
+
     Transport(String),
     Internal(String),
 }
@@ -98,16 +41,6 @@ impl std::fmt::Display for NetError {
     }
 }
 
-/// Escapes a value for `curl`'s own configuration-file grammar, in
-/// which a double-quoted value understands `\\` and `\"` escapes.
-///
-/// `fossh_admin::integrations` has already rejected every control
-/// character before anything gets stored, so a newline cannot reach
-/// this function through a stored integration — but this function does
-/// not depend on that being true elsewhere. A newline here would end
-/// the config line and let the rest be read as further `curl`
-/// directives, which is the same injection shape as CRLF in a header,
-/// one layer down.
 fn quote_config_value(value: &str) -> Zeroizing<String> {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
@@ -115,9 +48,7 @@ fn quote_config_value(value: &str) -> Zeroizing<String> {
         match c {
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
-            // Unreachable through a stored integration; encoded rather
-            // than passed through so that stays true if this is ever
-            // called from somewhere that validates less.
+
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
@@ -128,8 +59,6 @@ fn quote_config_value(value: &str) -> Zeroizing<String> {
     Zeroizing::new(out)
 }
 
-/// The config file handed to `curl` on stdin. `Zeroizing` because the
-/// credential is in it.
 fn build_config(integration: &Integration, body_path: &str) -> Zeroizing<String> {
     let (header_name, header_value) = integration.auth.header(integration.api_key());
     let header_line = format!("{header_name}: {}", header_value.as_str());
@@ -168,38 +97,16 @@ fn build_config(integration: &Integration, body_path: &str) -> Zeroizing<String>
     cfg.push_str(&format!("max-filesize = {MAX_RESPONSE_BYTES}\n"));
     cfg.push_str("proto = \"=http,https\"\n");
     cfg.push_str("proto-redir = \"=https\"\n");
-    // TLS 1.2 is the floor and 1.3 is what actually gets used
-    // wherever the far side supports it: `tlsv1.2` sets a MINIMUM,
-    // and the handshake then negotiates the highest version both
-    // sides have. Setting a minimum rather than pinning 1.3 outright
-    // is deliberate — pinning would refuse services that have not
-    // moved yet, and refusing to send at all is not more secure than
-    // sending over 1.2, it is just broken.
-    //
-    // Everything below 1.2 is off. SSLv3, TLS 1.0 and 1.1 are all
-    // deprecated and all have practical attacks; a credential must
-    // never travel over one.
+
     cfg.push_str("tlsv1.2\n");
-    // Certificate and hostname verification stay on. Named rather
-    // than merely not-disabled, because `--insecure` is the first
-    // thing anyone reaches for when a request fails and this is where
-    // a reader will look for whether that is sanctioned. It is not.
+
     cfg.push_str("ssl-reqd\n");
     cfg.push_str("silent\n");
     cfg.push_str("show-error\n");
-    // No `location`: see this module's own doc comment. Spelled out
-    // rather than merely omitted so that a later "why doesn't this
-    // follow redirects?" lands on the reason instead of on an
-    // apparent oversight.
+
     Zeroizing::new(cfg)
 }
 
-/// Replaces any occurrence of the credential in text that is about to
-/// be shown to a human.
-///
-/// Some APIs echo the offending request header back in their own error
-/// body. That is their choice; putting the operator's live credential
-/// on screen because of it is not.
 fn redact(text: &str, secret: &str) -> String {
     if secret.is_empty() {
         return text.to_string();
@@ -208,9 +115,7 @@ fn redact(text: &str, secret: &str) -> String {
 }
 
 pub fn test(integration: &Integration) -> Result<TestOutcome, NetError> {
-    // A private temp file for the response body. Created by
-    // `mkstemp`-equivalent semantics (`create_new`, 0600) so nothing
-    // else can read the response, and removed on every path out.
+
     let body_path = std::env::temp_dir().join(format!(
         "fossh-agent-probe-{}-{}",
         std::process::id(),
@@ -221,7 +126,6 @@ pub fn test(integration: &Integration) -> Result<TestOutcome, NetError> {
 
     let config = build_config(integration, &body_path_str);
 
-    // `-q` first, always: it is what makes ~/.curlrc irrelevant.
     let mut child = match Command::new("curl")
         .arg("-q")
         .arg("--config")
@@ -241,10 +145,7 @@ pub fn test(integration: &Integration) -> Result<TestOutcome, NetError> {
             .stdin
             .take()
             .ok_or_else(|| NetError::Internal("curl's stdin was not available".to_string()))?;
-        // A write failure here is normal if curl already exited (a
-        // rejected config, for instance) — the exit status and stderr
-        // below are what actually report the problem, so this is not
-        // escalated into a separate error.
+
         let _ = stdin.write_all(config.as_bytes());
     }
 
@@ -275,10 +176,7 @@ pub fn test(integration: &Integration) -> Result<TestOutcome, NetError> {
     })?;
 
     Ok(TestOutcome {
-        // 2xx and 3xx both mean the request was accepted and the
-        // credential was not rejected. A 3xx specifically means the
-        // endpoint wants to redirect, which this deliberately does not
-        // follow — reported honestly rather than chased.
+
         transport_ok: (200..400).contains(&status),
         status,
         body_snippet,
@@ -324,8 +222,7 @@ mod tests {
 
     #[test]
     fn a_newline_can_never_end_a_config_line_early() {
-        // The injection this escaping exists to stop: a value that
-        // closes its own line and opens a new curl directive.
+
         let escaped = quote_config_value("v\nproxy = \"http://evil.example\"");
         assert!(
             !escaped.contains('\n'),
@@ -367,8 +264,7 @@ mod tests {
         let cfg = build_config(&integration, "/tmp/body");
         assert!(cfg.contains("proto = \"=http,https\""));
         assert!(cfg.contains("proto-redir = \"=https\""));
-        // The absence is the security property, so it is asserted
-        // rather than left to be noticed.
+
         assert!(
             !cfg.lines().any(|l| l.trim() == "location"),
             "following redirects would re-send the Authorization header to a host the operator \
@@ -414,8 +310,7 @@ mod tests {
 
     #[test]
     fn redacting_against_an_empty_secret_does_not_replace_everything() {
-        // `str::replace` with an empty pattern inserts the replacement
-        // between every character. Guarded, and pinned here.
+
         assert_eq!(redact("hello", ""), "hello");
     }
 
@@ -439,11 +334,7 @@ mod tests {
 
     #[test]
     fn a_real_request_to_a_closed_loopback_port_fails_as_transport_not_as_a_status() {
-        // A genuine end-to-end exercise of the curl invocation itself
-        // — config generation, stdin handoff, exit-status handling —
-        // against a port nothing is listening on. Skipped rather than
-        // failed if curl is absent, since that is an environment fact
-        // and not a defect in this code.
+
         let integration = one(
             "http://127.0.0.1:9/ping",
             Auth::Bearer,

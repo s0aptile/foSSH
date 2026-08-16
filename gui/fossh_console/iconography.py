@@ -43,22 +43,14 @@ import functools
 
 import gi
 
-# Declared before the import: PyGObject warns (and, on a machine with
-# GTK3 also installed, can load the wrong one) when a typelib is
-# imported without a version. `app.py` declares these too, but this
-# module is imported directly by tests that never go through it.
 gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk", "4.0")
 
-from gi.repository import Gdk, Gtk, Pango, PangoCairo  # noqa: E402
+from gi.repository import Gdk, Gtk, Pango, PangoCairo
 
-#: Preference order. Symbols first: it is the current set, so anyone
-#: who has deliberately installed one has probably installed that one.
 SYMBOLS_FAMILIES = ["Material Symbols Outlined", "Material Symbols Rounded"]
 CLASSIC_FAMILIES = ["Material Icons Outlined", "Material Icons"]
 
-#: key -> (Material Symbols name, classic Material Icons name,
-#:         freedesktop symbolic name)
 ICONS = {
     "overview": ("space_dashboard", "dashboard", "go-home-symbolic"),
     "telemetry": ("query_stats", "insert_chart", "utilities-system-monitor-symbolic"),
@@ -81,14 +73,12 @@ ICONS = {
 
 LAST_RESORT = "application-x-executable-symbolic"
 
-
 @functools.lru_cache(maxsize=1)
 def _installed_families() -> set[str]:
     font_map = PangoCairo.FontMap.get_default()
     if font_map is None:
         return set()
     return {family.get_name().lower() for family in font_map.list_families()}
-
 
 @functools.lru_cache(maxsize=1)
 def icon_font() -> tuple[str, int] | None:
@@ -104,7 +94,6 @@ def icon_font() -> tuple[str, int] | None:
         if name.lower() in installed:
             return (name, 1)
     return None
-
 
 @functools.lru_cache(maxsize=256)
 def _resolves(family: str, ligature: str) -> bool:
@@ -129,19 +118,14 @@ def _resolves(family: str, ligature: str) -> bool:
     width, _height = layout.get_pixel_size()
     if width <= 0:
         return False
-    # A 16pt glyph lays out near 16-24px wide once hinting and side
-    # bearings are counted. Two ems is generous for a real glyph and
-    # far below even the shortest unresolved name ("add" as letters is
-    # already wider than one em, but "content_copy" is enormous).
-    return width <= 40
 
+    return width <= 40
 
 def _pango_attributes(family: str, size_pt: float) -> Pango.AttrList:
     attrs = Pango.AttrList()
     attrs.insert(Pango.attr_family_new(family))
     attrs.insert(Pango.attr_size_new(int(size_pt * Pango.SCALE)))
     return attrs
-
 
 def symbolic_name(key: str) -> str:
     """The freedesktop name, for APIs that accept only a name
@@ -154,7 +138,6 @@ def symbolic_name(key: str) -> str:
         if not theme.has_icon(symbolic):
             return LAST_RESORT
     return symbolic
-
 
 def icon(key: str, *, size_pt: float = 16.0) -> Gtk.Widget:
     """A widget showing `key`, marked decorative."""
@@ -169,21 +152,17 @@ def icon(key: str, *, size_pt: float = 16.0) -> Gtk.Widget:
         if _resolves(family, ligature):
             label = Gtk.Label(label=ligature)
             label.add_css_class("material-icon")
-            # Set per widget, not in CSS: the family is only known at
-            # runtime, and a CSS rule naming an absent font does
-            # nothing at all, silently.
+
             label.set_attributes(_pango_attributes(family, size_pt))
             label.set_accessible_role(Gtk.AccessibleRole.PRESENTATION)
             return label
 
     return _symbolic_image(symbolic_name(key))
 
-
 def _symbolic_image(name: str) -> Gtk.Image:
     image = Gtk.Image.new_from_icon_name(name)
     image.set_accessible_role(Gtk.AccessibleRole.PRESENTATION)
     return image
-
 
 def labelled_button(key: str, label: str) -> Gtk.Button:
     """A button with both an icon and a word.
@@ -200,16 +179,12 @@ def labelled_button(key: str, label: str) -> Gtk.Button:
     btn.set_child(content)
     return btn
 
-
 def icon_button(key: str, accessible_label: str) -> Gtk.Button:
     """An icon-only button, which therefore must be named explicitly."""
     btn = Gtk.Button()
     btn.set_child(icon(key))
     btn.set_tooltip_text(accessible_label)
     btn.update_property([Gtk.AccessibleProperty.LABEL], [accessible_label])
-    # WCAG 2.2 §2.5.8 Target Size (Minimum) is 24x24 CSS px. GTK's
-    # default button clears that, but a `.flat` icon button in a header
-    # bar can be shrunk by a theme, so the floor is stated rather than
-    # assumed.
+
     btn.set_size_request(32, 32)
     return btn

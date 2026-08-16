@@ -1,19 +1,3 @@
-//! §7.1: "Do not open SQLite on the CGI hot path." That constraint isn't
-//! just about the spool write — resolving *which site* a request belongs
-//! to (its write key hash, allowlist, `disabled`/`public` flags) would
-//! otherwise mean a SQLite query on every single request, which is
-//! exactly the cost §7.1 is telling us to avoid.
-//!
-//! This module is the fix: a small JSON file per site at
-//! `data_dir/sites/<slug>.json`, holding exactly what the hot path needs
-//! to authenticate and validate a request without touching the database.
-//! `fossh-store` remains the single source of truth — this is a derived,
-//! disposable cache. Whatever calls `Store::create_site` /
-//! `disable_site` / `rotate_site_key` (`fossh-cli`, M4) is responsible
-//! for calling the matching function here in the same operation, so the
-//! cache never drifts from the database it mirrors. `fossh doctor` (M4)
-//! should check the two agree.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -58,29 +42,12 @@ impl CachedSite {
         <[u8; 32]>::try_from(bytes).ok()
     }
 
-    /// Signed-mode verifying key, if this site has one — sites migrated
-    /// from before the Ed25519 fix (see `auth.rs`'s module doc comment)
-    /// have `None` here until an operator runs `fossh site
-    /// rotate-signing-key`, which is why signed-mode auth for them is
-    /// refused, not silently downgraded to some other check.
     pub fn sign_pubkey(&self) -> Option<[u8; 32]> {
         let bytes = base32::decode(self.sign_pubkey_b32.as_deref()?)?;
         <[u8; 32]>::try_from(bytes).ok()
     }
 }
 
-/// `slug` reaches this module straight from attacker-controlled input on
-/// the hot path — `read` is called from `fossh_ingest::ingest::authenticate`
-/// with `HTTP_X_FOSSH_KEY_ID` (signed mode) or the `fossh_<slug>_<base32>`
-/// bearer-token's own slug segment (bearer mode), in both cases *before*
-/// any signature/key check runs. Nothing upstream constrains its charset —
-/// there is no documented slug grammar and `Store::create_site` accepts any
-/// `&str`. Rejecting anything that could act as a path component (a `/` or
-/// `\` separator, a NUL byte, or the `.`/`..` special segments) before ever
-/// joining it onto `data_dir` closes a real path-traversal hole: without
-/// this, a request header like `X-FoSSH-Key-Id: ../../../../etc/passwd`
-/// would make this module attempt to read a file outside `data_dir/sites/`
-/// entirely, pre-authentication, on every request.
 fn is_safe_slug(slug: &str) -> bool {
     !slug.is_empty()
         && slug != "."
@@ -97,8 +64,6 @@ fn cache_path(data_dir: &Path, slug: &str) -> Option<PathBuf> {
     Some(data_dir.join("sites").join(format!("{slug}.json")))
 }
 
-/// Writes (or overwrites) a site's cache entry. Called by whatever
-/// mutates the site in `fossh-store` — see the module doc comment.
 pub fn write(data_dir: &Path, site: &fossh_store::Site) -> Result<(), IngestError> {
     let dir = data_dir.join("sites");
     fs::create_dir_all(&dir)?;
@@ -107,22 +72,13 @@ pub fn write(data_dir: &Path, site: &fossh_store::Site) -> Result<(), IngestErro
     let Some(path) = cache_path(data_dir, &site.slug) else {
         return Err(IngestError::InvalidSlug);
     };
-    // Write-then-rename: a reader (the CGI hot path) must never observe a
-    // half-written file, even though updates here are rare (site
-    // create/disable/rotate) compared to reads (every request).
+
     let tmp_path = path.with_extension("json.tmp");
     fs::write(&tmp_path, json)?;
     fs::rename(&tmp_path, &path)?;
     Ok(())
 }
 
-/// Reads a site's cache entry by slug. `Ok(None)` means no such site (or
-/// no cache yet built for it) — callers treat that the same as "unknown
-/// site", not as an error. A slug that isn't safe to use as a path
-/// component (see `is_safe_slug`) is folded into this same "unknown site"
-/// case rather than ever touching the filesystem with it — it can never
-/// have been a real site's slug in the first place, since `write` refuses
-/// to create a cache entry under one.
 pub fn read(data_dir: &Path, slug: &str) -> Result<Option<CachedSite>, IngestError> {
     let Some(path) = cache_path(data_dir, slug) else {
         return Ok(None);
@@ -134,16 +90,10 @@ pub fn read(data_dir: &Path, slug: &str) -> Result<Option<CachedSite>, IngestErr
     }
 }
 
-/// Removes a site's cache entry (used when a site is disabled hard enough
-/// to be pulled from the fast path entirely, or in tests). Not currently
-/// called by any production path — `disabled` is tracked as a field, not
-/// by cache absence, so a disabled site still resolves (to a `401`)
-/// instead of falling through to "unknown site" with a less specific
-/// response.
 #[allow(dead_code)]
 pub fn remove(data_dir: &Path, slug: &str) -> Result<(), IngestError> {
     let Some(path) = cache_path(data_dir, slug) else {
-        return Ok(()); // never a real cache entry — nothing to remove
+        return Ok(());
     };
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -271,24 +221,14 @@ mod tests {
         assert!(!is_safe_slug("a\0b"));
         assert!(is_safe_slug("blog"));
         assert!(is_safe_slug("my-site_2"));
-        assert!(is_safe_slug(".hidden")); // odd, but not path-traversing
+        assert!(is_safe_slug(".hidden"));
     }
 
-    /// The regression this whole module exists to prevent: `read` is
-    /// called pre-authentication with attacker-controlled input (see the
-    /// module doc comment on `is_safe_slug`) — a traversal-shaped slug
-    /// must never let a file outside `data_dir/sites/` be read back as a
-    /// `CachedSite`, even when a real, validly-shaped JSON file happens to
-    /// sit exactly where the traversal points.
     #[test]
     fn read_never_escapes_the_sites_directory_via_path_traversal() {
         let dir = scratch_dir("traversal-read");
         fs::create_dir_all(&dir).unwrap();
 
-        // A decoy file one level above `sites/`, at exactly the path
-        // `sites/../decoy.json` (== `dir/decoy.json`) would resolve to —
-        // valid `CachedSite` JSON, so a successful traversal would report
-        // a real (if fake) site rather than merely erroring.
         let decoy = CachedSite {
             id: 999,
             slug: "decoy".to_string(),
@@ -331,8 +271,7 @@ mod tests {
     #[test]
     fn remove_with_an_unsafe_slug_is_a_harmless_no_op() {
         let dir = scratch_dir("traversal-remove");
-        // Must not error and, more importantly, must not touch anything
-        // outside `data_dir/sites/`.
+
         remove(&dir, "../whatever").unwrap();
     }
 }

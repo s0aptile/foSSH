@@ -1,22 +1,5 @@
 <?php
 
-/**
- * Regression tests for the PHP binding. Run with:
- *
- *     php bindings/php/tests/client_test.php
- *
- * Plain PHP, no PHPUnit. The point of this binding is that it works on
- * hosting where you cannot install anything, so its tests do not
- * require installing anything either — and the project's supply-chain
- * gate applies to dev dependencies too.
- *
- * Every case here is a bug that was actually present and shipped, not a
- * hypothetical. The three that matter most all end the same way: the
- * site's write key on the wire in cleartext, or every event silently
- * dropped forever. Both are invisible from the outside, which is why
- * they survived to be found by review rather than by anyone noticing.
- */
-
 declare(strict_types=1);
 
 require __DIR__ . '/../src/Client.php';
@@ -53,7 +36,6 @@ final class T
     }
 }
 
-// ---------------------------------------------------------------------
 T::section('Endpoint vetting — the write key is a Bearer token on every request');
 
 $vet = static function (?string $url): ?string {
@@ -79,9 +61,7 @@ foreach ([
     'http://analytics.example.com' => 'plain http to a remote host',
     'HTTP://Analytics.Example.com' => 'scheme case does not evade the check',
     'http://evil.tld/?x=127.0.0.1' => 'a loopback address in the query is not the host',
-    // The reason isLoopback() parses an IP rather than matching a
-    // prefix. This is a registrable name whose owner picks where it
-    // resolves, and `str_starts_with($host, '127.')` accepts it.
+
     'http://127.0.0.1.evil.tld'    => 'a hostname that merely starts with 127.',
     'http://127.0.0.1.evil.tld:80' => 'the same, with a port',
     'http://0x7f000001'            => 'hex-encoded loopback is not an IP literal',
@@ -95,14 +75,8 @@ foreach ([
 }
 T::is($vet(null), null, 'no endpoint configured stays null');
 
-// ---------------------------------------------------------------------
 T::section('Key resolution — FOSSH_KEY must reach the FFI context');
 
-// Without ext-ffi the FFI branch cannot be entered at all, so assert on
-// the field the branch reads. Before the fix it read the constructor
-// parameter, so an install configured the documented way (env var) built
-// a keyless context, marked itself usable, and dropped every event for
-// the life of the process with no fallback.
 putenv('FOSSH_KEY=from-the-environment');
 $c = new Client(null, null, null, null);
 $k = new ReflectionProperty(Client::class, 'key');
@@ -113,15 +87,8 @@ $c = new Client(null, 'explicit', null, null);
 T::is($k->getValue($c), 'explicit', 'an explicit key still wins over the environment');
 putenv('FOSSH_KEY');
 
-// ---------------------------------------------------------------------
 T::section('CGI fallback stays bounded');
 
-// A short, fixed basename, because the survivor check below matches on
-// the process *name* (capped at 15 chars by the kernel) rather than on
-// the command line. Matching the command line would be simpler and is
-// wrong: `pgrep -f <pattern>` also matches the shell that exec() runs
-// pgrep in, whose own command line contains the pattern, so the test
-// reports its own invocation as a survivor and fails every time.
 $dir = sys_get_temp_dir() . '/fossh-phptest-' . getmypid();
 @mkdir($dir, 0700, true);
 $hang = "$dir/fosshhang.c";
@@ -142,8 +109,6 @@ if ($rc !== 0) {
     T::is($got, false, 'a subprocess that never exits reports failure rather than hanging');
     T::is($elapsed < 5.0, true, sprintf('returned in %.2fs, under the 5s ceiling', $elapsed));
 
-    // proc_open's array form is what makes this true: through `/bin/sh -c`
-    // the terminate would kill the shell and leave this running.
     exec('pgrep -x ' . escapeshellarg(basename($bin)) . ' 2>/dev/null', $alive);
     T::is($alive, [], 'the subprocess itself was killed, not just a shell wrapping it');
     @unlink($bin);
@@ -151,7 +116,6 @@ if ($rc !== 0) {
 @unlink($hang);
 @rmdir($dir);
 
-// ---------------------------------------------------------------------
 T::section('Redirects are not followed (a 302 to http:// must not resend the key)');
 
 $key = 'WRITE-KEY-SECRET-' . bin2hex(random_bytes(4));
@@ -162,7 +126,7 @@ file_put_contents($router, <<<'ROUTER'
 $log = getenv('FOSSH_TEST_LOG');
 $auth = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
 if (($_SERVER['SERVER_PORT'] ?? '') === getenv('FOSSH_TEST_HOP')) {
-    // The cleartext hop. Anything arriving here with a credential is the leak.
+
     file_put_contents($log, "LEAKED:$auth\n", FILE_APPEND);
     http_response_code(204);
     return true;
@@ -179,8 +143,6 @@ $s2 = proc_open("$env php -S 127.0.0.1:$hop " . escapeshellarg($router),
     [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $p2);
 usleep(400000);
 
-// 127.0.0.1 over http is a legitimate endpoint (it never leaves the
-// machine); the redirect is what must not be followed off it.
 $c = new Client(null, $key, null, 'http://127.0.0.1:8787');
 $c->pageview();
 
@@ -198,6 +160,5 @@ foreach ([[$s1, $p1], [$s2, $p2]] as [$s, $_p]) {
 @unlink($log);
 @unlink($router);
 
-// ---------------------------------------------------------------------
 printf("\n%d passed, %d failed\n", T::$pass, T::$fail);
 exit(T::$fail === 0 ? 0 : 1);

@@ -1,14 +1,3 @@
-//! The direct-to-SQLite batched writer (§7.2): a single dedicated
-//! thread owns the one `Store` handle this process ever touches,
-//! receiving accepted events from every connection-handling thread
-//! over an `mpsc` channel (multi-producer, single-consumer — exactly
-//! `mpsc`'s own intended shape) and flushing them in one shared
-//! transaction per batch, every 100 events or 500 ms, whichever comes
-//! first. Funneling all writes through one thread is also what makes
-//! this safe without any locking around `Store` itself: rusqlite's
-//! `Connection` is `Send` but not `Sync`, and nothing here ever needs
-//! it to be `Sync`, since only this one thread ever touches it.
-
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
@@ -18,20 +7,9 @@ use fossh_store::Store;
 const FLUSH_MAX_EVENTS: usize = 100;
 const FLUSH_MAX_INTERVAL: Duration = Duration::from_millis(500);
 
-/// Runs until `rx`'s senders are all dropped (process shutdown),
-/// flushing whatever remains buffered on the way out. Blocking,
-/// meant to be the body of its own dedicated thread.
 pub fn run(mut store: Store, rx: Receiver<Event>) {
     let mut batch = Vec::with_capacity(FLUSH_MAX_EVENTS);
-    // A fixed point in time, not "500ms since the last message": if
-    // events trickle in slower than the interval but never stop
-    // entirely, a naive `recv_timeout(FLUSH_MAX_INTERVAL)` on every
-    // loop iteration would keep resetting its own clock on every
-    // arrival and could let a batch sit well past 500ms without ever
-    // actually hitting a timeout. Anchoring `deadline` to the last
-    // flush (not the last message) and always waiting only the
-    // *remaining* time until it is what actually bounds staleness
-    // regardless of arrival pattern.
+
     let mut deadline = Instant::now() + FLUSH_MAX_INTERVAL;
 
     loop {
@@ -61,9 +39,7 @@ pub fn run(mut store: Store, rx: Receiver<Event>) {
 }
 
 fn flush(store: &mut Store, batch: &mut Vec<Event>) {
-    // S2, fail closed: a batch write failure drops this batch (logged,
-    // not retried forever, not fatal to the process) rather than
-    // blocking every future request behind a wedged writer thread.
+
     match store.record_events_batch(batch) {
         Ok(n) if n as usize == batch.len() => {}
         Ok(n) => eprintln!(
@@ -121,9 +97,9 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         tx.send(sample_event(1)).unwrap();
         tx.send(sample_event(2)).unwrap();
-        drop(tx); // triggers Disconnected on the next recv
+        drop(tx);
 
-        run(store, rx); // returns once the channel is drained and closed
+        run(store, rx);
 
         let readback = Store::open(&path).unwrap();
         assert_eq!(
@@ -137,10 +113,7 @@ mod tests {
 
     #[test]
     fn a_real_threaded_run_flushes_a_full_batch_at_the_size_threshold() {
-        // End to end, through the real `run()` loop in its own thread —
-        // not just a direct `flush()` call — so this actually exercises
-        // the `batch.len() >= FLUSH_MAX_EVENTS` trigger inside the loop,
-        // not only the primitives it calls.
+
         let path = scratch_db_path("size-threshold");
         let store = Store::open(&path).unwrap();
         let (tx, rx) = mpsc::channel();
@@ -149,7 +122,7 @@ mod tests {
         for i in 0..FLUSH_MAX_EVENTS {
             tx.send(sample_event(1_700_000_000 + i as i64)).unwrap();
         }
-        drop(tx); // lets `run` return once its (by-now-empty) batch has nothing left to flush
+        drop(tx);
         handle.join().unwrap();
 
         let readback = Store::open(&path).unwrap();

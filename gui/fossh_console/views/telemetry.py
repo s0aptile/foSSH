@@ -19,8 +19,6 @@ from gi.repository import Adw, GLib, Gtk
 from ..agent import AgentError
 from ..iconography import symbolic_name
 
-#: Every dimension the store can group by, with a label that says what
-#: it is rather than repeating the field name.
 GROUP_FIELDS = [
     ("path", "Page"),
     ("kind", "Event kind"),
@@ -38,7 +36,6 @@ RANGES = [
     ("Last 90 days", 90),
 ]
 
-
 class TelemetryView(Gtk.Box):
     def __init__(self, agent) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
@@ -55,11 +52,7 @@ class TelemetryView(Gtk.Box):
 
         self._site_dropdown = Gtk.DropDown.new_from_strings(["—"])
         self._site_dropdown.set_tooltip_text("Which site to report on")
-        # Bound to the method rather than a lambda specifically so
-        # `_on_sites` can block it while it swaps the model — a lambda
-        # cannot be named to `handler_block_by_func`, and without the
-        # block, rebuilding the list on every refresh fires a query
-        # against whatever site happens to land at index 0.
+
         self._site_dropdown.connect("notify::selected", self._on_site_changed)
 
         self._range_dropdown = Gtk.DropDown.new_from_strings([label for label, _ in RANGES])
@@ -118,8 +111,6 @@ class TelemetryView(Gtk.Box):
 
         VerifyDialog().present(self)
 
-    # -- data --------------------------------------------------------
-
     def refresh(self) -> None:
         self._agent.call(
             "telemetry.summary",
@@ -141,9 +132,7 @@ class TelemetryView(Gtk.Box):
         if sites != self._sites:
             self._sites = sites
             model = Gtk.StringList.new(sites)
-            # Rebuilding the model resets the selection, which would
-            # otherwise fire a query for the wrong site on every
-            # refresh.
+
             self._site_dropdown.handler_block_by_func(self._on_site_changed)
             self._site_dropdown.set_model(model)
             self._site_dropdown.set_selected(0)
@@ -257,9 +246,6 @@ class TelemetryView(Gtk.Box):
                 column.append(caption_label)
                 figures.append(column)
 
-            # A share bar, sized against the largest row rather than
-            # the total: with one dominant row every other bar would be
-            # a hairline and convey nothing.
             share = Gtk.ProgressBar()
             share.set_valign(Gtk.Align.CENTER)
             share.set_size_request(120, -1)

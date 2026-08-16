@@ -13,7 +13,6 @@ from gi.repository import Gdk, Gtk
 
 from .motion import Duration, animate, count_to, format_count
 
-
 def _accent_rgba(widget: Gtk.Widget) -> Gdk.RGBA:
     """The accent colour libadwaita is currently using.
 
@@ -28,7 +27,6 @@ def _accent_rgba(widget: Gtk.Widget) -> Gdk.RGBA:
     fallback.parse("#3584e4")
     return fallback
 
-
 def _foreground_rgba(widget: Gtk.Widget) -> Gdk.RGBA:
     found, rgba = widget.get_style_context().lookup_color("window_fg_color")
     if found:
@@ -36,7 +34,6 @@ def _foreground_rgba(widget: Gtk.Widget) -> Gdk.RGBA:
     fallback = Gdk.RGBA()
     fallback.parse("#000000")
     return fallback
-
 
 class Sparkline(Gtk.DrawingArea):
     """A small shape-over-time plot: line, soft fill, marked last point.
@@ -53,9 +50,7 @@ class Sparkline(Gtk.DrawingArea):
         self.set_content_height(44)
         self.set_hexpand(True)
         self._values: list[float] = []
-        #: Animated 0→1 on every new data set, so the line draws itself
-        #: in rather than appearing. Set straight to 1 when animations
-        #: are off (see `motion.animate`).
+
         self._reveal = 1.0
         self.set_draw_func(self._draw)
 
@@ -75,8 +70,7 @@ class Sparkline(Gtk.DrawingArea):
             return
 
         accent = _accent_rgba(self)
-        # Inset by the stroke's own half-width plus the last point's
-        # marker radius, so neither is clipped by the widget edge.
+
         pad = 4.0
         plot_w = max(1.0, width - pad * 2)
         plot_h = max(1.0, height - pad * 2)
@@ -85,9 +79,7 @@ class Sparkline(Gtk.DrawingArea):
         high = max(values)
         span = high - low
         if span <= 0:
-            # A flat series is real data, not an empty one — draw it as
-            # a line through the middle rather than dividing by zero or
-            # collapsing it onto the floor.
+
             span = 1.0
             low = low - 0.5
 
@@ -96,11 +88,9 @@ class Sparkline(Gtk.DrawingArea):
             y = pad + plot_h - ((values[index] - low) / span) * plot_h
             return x, y
 
-        # How much of the series the reveal animation has reached.
         visible = max(2, int(math.ceil(len(values) * self._reveal)))
         pts = [point(i) for i in range(visible)]
 
-        # Fill first, under the line.
         cr.save()
         gradient_top = pts[0][1]
         for x, y in pts:
@@ -114,12 +104,10 @@ class Sparkline(Gtk.DrawingArea):
         cr.fill()
         cr.restore()
 
-        # The line itself: round caps and joins, so short series and
-        # sharp changes don't produce visible mitre spikes.
         cr.save()
         cr.set_line_width(2.0)
-        cr.set_line_cap(1)  # cairo.LINE_CAP_ROUND
-        cr.set_line_join(1)  # cairo.LINE_JOIN_ROUND
+        cr.set_line_cap(1)
+        cr.set_line_join(1)
         cr.set_source_rgba(accent.red, accent.green, accent.blue, 1.0)
         cr.move_to(*pts[0])
         for x, y in pts[1:]:
@@ -127,9 +115,6 @@ class Sparkline(Gtk.DrawingArea):
         cr.stroke()
         cr.restore()
 
-        # The most recent point, marked. A filled dot with a ring in
-        # the window's own background colour, so it reads as sitting on
-        # top of the line rather than being a bump in it.
         cr.save()
         last_x, last_y = pts[-1]
         found, bg = self.get_style_context().lookup_color("card_bg_color")
@@ -141,7 +126,6 @@ class Sparkline(Gtk.DrawingArea):
         cr.arc(last_x, last_y, 2.5, 0, 2 * math.pi)
         cr.fill()
         cr.restore()
-
 
 class StatTile(Gtk.Box):
     """One headline figure with its label, and an optional sparkline.
@@ -202,7 +186,6 @@ class StatTile(Gtk.Box):
         self._sparkline.set_visible(True)
         self._sparkline.set_values(values)
 
-
 class StatusRow(Gtk.Box):
     """A dot, a name, and a state word.
 
@@ -240,7 +223,6 @@ class StatusRow(Gtk.Box):
         self._dot.add_css_class(self.STATES.get(state, "idle"))
         self._state.set_text(text)
 
-
 def pad(widget: Gtk.Widget, *, top=0, bottom=0, start=0, end=0, all=None) -> Gtk.Widget:
     """Sets margins on the 4px grid, in one call.
 
@@ -256,7 +238,6 @@ def pad(widget: Gtk.Widget, *, top=0, bottom=0, start=0, end=0, all=None) -> Gtk
     widget.set_margin_start(start)
     widget.set_margin_end(end)
     return widget
-
 
 def section(title: str, subtitle: str | None = None) -> Gtk.Box:
     """A titled block, spaced on the same grid as everything else."""

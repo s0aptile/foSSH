@@ -19,7 +19,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fossh_console.palette import (  # noqa: E402
+from fossh_console.palette import (
     ADW_SLOTS,
     DARK,
     LIGHT,
@@ -29,7 +29,6 @@ from fossh_console.palette import (  # noqa: E402
     relative_luminance,
     scheme,
 )
-
 
 class TestContrastMaths:
     """The calculator itself, against values with known answers."""
@@ -48,9 +47,8 @@ class TestContrastMaths:
     def test_luminance_matches_the_wcag_reference_values(self):
         assert relative_luminance("#FFFFFF") == pytest.approx(1.0, abs=0.001)
         assert relative_luminance("#000000") == pytest.approx(0.0, abs=0.001)
-        # Mid grey, which the spec's own worked example puts here.
-        assert relative_luminance("#808080") == pytest.approx(0.2159, abs=0.001)
 
+        assert relative_luminance("#808080") == pytest.approx(0.2159, abs=0.001)
 
 class TestPaletteMeetsWCAG:
     @pytest.mark.parametrize("dark", [True, False], ids=["dark", "light"])
@@ -68,9 +66,7 @@ class TestPaletteMeetsWCAG:
         )
 
     def test_both_schemes_define_exactly_the_same_names(self):
-        # A name present in one scheme and not the other renders as
-        # nothing at all in GTK, silently, in whichever scheme is
-        # missing it.
+
         assert set(DARK) == set(LIGHT)
 
     def test_the_two_schemes_are_actually_different(self):
@@ -81,9 +77,7 @@ class TestPaletteMeetsWCAG:
         assert relative_luminance(LIGHT["brand_bg"]) > 0.7
 
     def test_the_dark_scheme_still_holds_the_tui_identity_colours_exactly(self):
-        # The point of the palette. If someone "tidies" one of these,
-        # the brand quietly stops matching the product people used
-        # before, and this says so.
+
         assert DARK["brand_bg"] == "#1C1C1E", "theme.rs GRAPHITE"
         assert DARK["brand_fg"] == "#D8D2C8", "theme.rs FOREGROUND"
         assert DARK["brand_accent"] == "#E0AF68", "theme.rs AMBER"
@@ -91,11 +85,7 @@ class TestPaletteMeetsWCAG:
         assert DARK["brand_error"] == "#D67659", "theme.rs TERRACOTTA"
 
     def test_muted_is_the_one_deliberate_deviation_and_stays_close(self):
-        # `theme.rs` MUTED (#91877A) fails 4.5:1 on the card surface,
-        # which is why it moved — see `palette.py`. The replacement
-        # still has to look like the same colour, so the deviation is
-        # bounded here rather than left to drift further on the next
-        # contrast complaint.
+
         original = "#91877A"
         assert DARK["brand_muted"] != original
         moved = abs(relative_luminance(DARK["brand_muted"]) - relative_luminance(original))
@@ -103,7 +93,6 @@ class TestPaletteMeetsWCAG:
             f"brand_muted has drifted {moved:.3f} in luminance from the TUI's MUTED; "
             "that is further than a contrast fix needs and the brand will show it"
         )
-
 
 class TestGeneratedCSS:
     @pytest.mark.parametrize("dark", [True, False], ids=["dark", "light"])
@@ -114,8 +103,7 @@ class TestGeneratedCSS:
 
     @pytest.mark.parametrize("dark", [True, False], ids=["dark", "light"])
     def test_libadwaita_semantic_names_are_redefined_too(self, dark):
-        # Without these, stock widgets stay GNOME blue and the window
-        # ends up two-toned.
+
         css = define_colors_css(dark)
         for name in (
             "accent_color",
@@ -129,8 +117,7 @@ class TestGeneratedCSS:
 
     @pytest.mark.parametrize("dark", [True, False], ids=["dark", "light"])
     def test_every_declaration_is_complete(self, dark):
-        # A missing semicolon makes GTK discard the rest of the block,
-        # which shows up as a partly-themed window rather than an error.
+
         for line in define_colors_css(dark).splitlines():
             stripped = line.strip()
             if stripped in (":root {", "}"):
@@ -140,11 +127,7 @@ class TestGeneratedCSS:
 
     @pytest.mark.parametrize("dark", [True, False], ids=["dark", "light"])
     def test_both_spellings_are_emitted_for_every_slot(self, dark):
-        # libadwaita 1.8 replaced named colours with CSS variables, so
-        # a build newer than that reads `--accent-bg-color` and
-        # anything older reads `@define-color accent_bg_color`. A
-        # package built here can be installed against either, and
-        # emitting one spelling leaves the other half-themed.
+
         css = define_colors_css(dark)
         for slot, _brand in ADW_SLOTS:
             assert f"@define-color {slot} " in css, slot
@@ -156,9 +139,7 @@ class TestGeneratedCSS:
         assert css.count("{") == css.count("}") == 1
 
     def test_the_button_label_pairing_is_checked_in_the_right_direction(self):
-        # `accent_fg_color` is what sits *on* the accent, so it is the
-        # background that is the accent here. Getting this backwards
-        # would pass the assertion while shipping unreadable buttons.
+
         for dark in (True, False):
             colours = scheme(dark)
             assert (

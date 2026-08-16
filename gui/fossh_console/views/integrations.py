@@ -31,7 +31,6 @@ PLACEMENTS = [
 
 METHODS = [("GET", "GET"), ("POST", "POST")]
 
-
 class IntegrationsView(Gtk.Box):
     def __init__(self, agent, toaster: Adw.ToastOverlay) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
@@ -87,8 +86,6 @@ class IntegrationsView(Gtk.Box):
         self._error = Adw.StatusPage(icon_name=symbolic_name("warning"))
         self._stack.add_named(self._error, "error")
         self._stack.set_visible_child_name("loading")
-
-    # -- data --------------------------------------------------------
 
     def refresh(self) -> None:
         self._agent.call("integrations.list", on_ok=self._on_list, on_err=self._on_error)
@@ -159,8 +156,6 @@ class IntegrationsView(Gtk.Box):
         row.add_suffix(buttons)
         return row
 
-    # -- actions -----------------------------------------------------
-
     def _test(self, name: str) -> None:
         self._toast(f"Testing {name}…")
 
@@ -221,7 +216,6 @@ class IntegrationsView(Gtk.Box):
         self._error.set_title("Could not read the integrations file")
         self._error.set_description(error.message)
         self._stack.set_visible_child_name("error")
-
 
 class AddIntegrationDialog(AsyncDialog):
     """Collects one service. Validates locally for immediate feedback,
@@ -284,10 +278,6 @@ class AddIntegrationDialog(AsyncDialog):
         self._header_name.connect("changed", lambda *_: self._validate())
         group.add(self._header_name)
 
-        # Masked by default with a reveal toggle, which is what
-        # `PasswordEntryRow` already is — worth using rather than
-        # rebuilding, because it also gets the "don't put this in the
-        # clipboard history" and screen-reader behaviours right.
         self._key = Adw.PasswordEntryRow(title="API key")
         self._key.connect("changed", lambda *_: self._validate())
         group.add(self._key)
@@ -325,7 +315,7 @@ class AddIntegrationDialog(AsyncDialog):
 
         problem = None
         if not name:
-            problem = None  # nothing typed yet is not a complaint
+            problem = None
         elif not all(c.islower() or c.isdigit() or c in "-_" for c in name):
             problem = "A name may only contain lowercase letters, digits, “-” and “_”."
         elif endpoint and not endpoint.startswith(("https://", "http://")):
@@ -365,17 +355,11 @@ class AddIntegrationDialog(AsyncDialog):
         self._save.set_sensitive(False)
 
         def ok(_result: dict) -> None:
-            # Clear the field before the dialog goes away, so the
-            # credential is not sitting in a widget that outlives the
-            # interaction in some reference cycle.
+
             self._key.set_text("")
-            # `close_once`, not `close`: if the operator already
-            # pressed Cancel while this call was in flight, a second
-            # close produces an Adwaita-CRITICAL, which aborts outright
-            # under G_DEBUG=fatal-criticals. Reproduced every time.
+
             self.close_once()
-            # The integration really was added, so the list still needs
-            # refreshing even though the dialog is gone.
+
             self._on_added(name)
 
         def err(error: AgentError) -> None:
@@ -383,8 +367,4 @@ class AddIntegrationDialog(AsyncDialog):
             self._problem.set_visible(True)
             self._save.set_sensitive(True)
 
-        # `err` is guarded because it only touches this dialog's own
-        # widgets; `ok` is not, because its last act is refreshing the
-        # list behind it, which must happen whether or not the operator
-        # is still looking at the dialog.
         self._agent.call("integrations.add", params, on_ok=ok, on_err=self.guard(err))

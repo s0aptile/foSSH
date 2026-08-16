@@ -5,7 +5,7 @@ let scratch_token_path (name : string) : string =
   Filename.concat (mkdtemp ()) (Printf.sprintf "setup-token-%s" name)
 
 let () =
-  (* Scenario A: fresh generation -- no file, nothing enrolled. *)
+
   let dir_a = mkdtemp () in
   let token_path_a = scratch_token_path "a" in
   Fun.protect
@@ -25,9 +25,6 @@ let () =
       check "the generated token verifies" (Setup_token.verify plaintext);
       check "a wrong token does not verify" (not (Setup_token.verify "definitely-not-the-token"));
 
-      (* Scenario B: idempotent -- a second ensure() call does not
-         regenerate (would silently invalidate a token an operator
-         might already be holding). *)
       (match Setup_token.ensure ~token_path:token_path_a ~operator_key_dir:dir_a with
       | Ok () -> ()
       | Error e -> failwith (Setup_token.describe_error e));
@@ -35,10 +32,6 @@ let () =
       check "a second ensure() call does not regenerate the token file" (plaintext = plaintext_again);
       check "the original token still verifies after a second ensure() call" (Setup_token.verify plaintext));
 
-  (* Scenario C: recovery from a token file written by "another
-     process" (simulating a watchdog restart between generation and
-     verification) -- ensure() must recover the hash from the file's
-     actual content, not assume it only ever ran in this process. *)
   let dir_c = mkdtemp () in
   let token_path_c = scratch_token_path "c" in
   Fun.protect
@@ -59,11 +52,6 @@ let () =
       check "the recovered token verifies" (Setup_token.verify "a-token-written-by-someone-else");
       check "a different token does not verify against a recovered file" (not (Setup_token.verify "something-else")));
 
-  (* Scenario D: a key is already enrolled -- ensure() must not
-     generate a token file at all (nothing left to legitimately set
-     up), and must leave nothing live to verify against even if a
-     stale file happened to be sitting there from an earlier,
-     incomplete burn. *)
   let dir_d = mkdtemp () in
   let token_path_d = scratch_token_path "d" in
   Fun.protect
@@ -83,17 +71,11 @@ let () =
         (not (Sys.file_exists token_path_d));
       check "nothing verifies once a key is already enrolled" (not (Setup_token.verify ""));
 
-      (* Scenario E: burn() with nothing live (this exact state, right
-         now) is a no-op success, not an error -- a retry after a
-         partial earlier failure must not itself fail. *)
       (match Setup_token.burn () with
       | Ok () -> check "burn() with nothing live is a no-op success" true
       | Error e -> failwith ("burn() with nothing live should succeed: " ^ Setup_token.describe_error e));
       cleanup operator);
 
-  (* Scenario F: the real burn lifecycle -- generate, verify, burn,
-     confirm the file is gone and the token no longer verifies, then
-     confirm a second burn() is still a harmless no-op. *)
   let dir_f = mkdtemp () in
   let token_path_f = scratch_token_path "f" in
   Fun.protect
@@ -116,15 +98,6 @@ let () =
       | Ok () -> check "a second burn() call is still a harmless no-op" true
       | Error e -> failwith ("a second burn() call should still succeed: " ^ Setup_token.describe_error e)));
 
-  (* Scenario G: genuine concurrency -- many threads racing burn() on
-     the same live token. This module's own state (a single Mutex-
-     guarded ref) is the thing actually being tested here, independent
-     of Operator_auth_server's own single-threaded accept loop (which
-     serializes real connections today, but this module must not rely
-     on that to be correct -- matching this project's own established
-     habit, after Operator_key/Tls_identity/data_key, of actually
-     racing a shared-mutable-state module rather than reasoning about
-     it only from the outside). *)
   let dir_g = mkdtemp () in
   let token_path_g = scratch_token_path "g" in
   Fun.protect
@@ -156,21 +129,6 @@ let () =
       check "the token file is gone after the race" (not (Sys.file_exists token_path_g));
       check "the token no longer verifies after the race" (not (Setup_token.verify plaintext)));
 
-  (* Scenario H: real, forced overlap of the exact three-step sequence
-     handle_setup_flow uses (Setup_token.verify, then
-     Operator_key.enroll, then Setup_token.burn), driven directly at
-     the module level rather than through Operator_auth_server's own
-     single-threaded, fully-serial accept loop -- adversarial review
-     correctly pointed out that test_setup_enroll_flow.ml's own
-     multi-client scenario, going through that socket layer, never
-     actually exercises two of these sequences running at the same
-     time, only sequential processing of concurrently-*arriving*
-     connections. This scenario forces real overlap with a countdown
-     latch (arrive_and_wait) rather than hoping for it, so if
-     Operator_auth_server's accept loop is ever made concurrent in the
-     future, this test -- not just the socket-level one -- is the one
-     that would actually catch a regression in the underlying
-     verify/enroll/burn sequence's own race-safety. *)
   let dir_h = mkdtemp () in
   let token_path_h = scratch_token_path "h" in
   Fun.protect
@@ -197,12 +155,7 @@ let () =
           (fun i pubkey ->
             Thread.create
               (fun () ->
-                (* Every thread does the real read (verify) before any
-                   of them proceed to the real write (enroll), then all
-                   released at once -- the exact shape needed to
-                   actually exercise Operator_key.enroll's own
-                   exclusivity under simultaneous callers, not just
-                   Setup_token's burn (already covered by Scenario G). *)
+
                 let token_is_valid = Setup_token.verify plaintext in
                 arrive_and_wait latch contestant_count;
                 if not token_is_valid then outcomes.(i) <- `Verify_failed

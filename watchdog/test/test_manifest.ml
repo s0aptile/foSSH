@@ -21,7 +21,6 @@ let () =
       write_file file_a "core binary contents (stand-in)";
       write_file file_b "config contents (stand-in)";
 
-      (* hash_all / render / parse round trip *)
       let entries =
         match Manifest.hash_all [ file_a; file_b ] with
         | Ok e -> e
@@ -54,7 +53,6 @@ let () =
          in
          match Manifest.parse bad with Error _ -> true | Ok _ -> false);
 
-      (* sign / verify_and_extract round trip *)
       let signed =
         match Manifest.sign ~gnupghome:k.gnupghome ~key_id:k.fingerprint ~passphrase:k.passphrase rendered with
         | Ok s -> s
@@ -84,11 +82,6 @@ let () =
         | Error _ -> true
         | Ok _ -> false);
 
-      (* the end-to-end `check` gate Supervisor actually calls — must
-         cover the exact program path, per ADR-0041 (adversarial
-         review found an earlier version let any validly-signed
-         manifest pass regardless of whether it mentioned the program
-         actually being executed at all). *)
       (match
          Manifest.check ~gnupghome:k.gnupghome ~expected_key_fingerprint:k.fingerprint
            ~program:file_a ~clearsigned_manifest:signed
@@ -127,13 +120,9 @@ let () =
           check "check() catches a modified watched file" (path = file_a)
       | _ -> check "check() catches a modified watched file" false);
       write_file file_a "core binary contents (stand-in)";
-      (* restore, so later checks start from a known-good state *)
 
       let hand_edited_manifest =
-        (* An attacker who can write the manifest file but does not
-           have the watchdog's private key: same clearsign envelope
-           shape, different (attacker-chosen, unsigned-by-the-real-key)
-           content underneath. *)
+
         match Manifest.sign ~gnupghome:other.gnupghome ~key_id:other.fingerprint ~passphrase:other.passphrase rendered with
         | Ok s -> s
         | Error msg -> failwith ("sign (other key) failed: " ^ msg)
@@ -170,18 +159,6 @@ let () =
       | Io_error _ -> check "check() reports Io_error for a missing watched file" true
       | _ -> check "check() reports Io_error for a missing watched file" false);
 
-      (* Regression test for a real, reproduced hang (ADR-0041,
-         finding #4): a much earlier version of Subprocess.run wrote
-         all of stdin before reading any output, which deadlocked
-         against `gpg --decrypt` once a clearsigned manifest got large
-         enough (~a few hundred KB — not contrived; a deployment
-         watching several thousand files reaches this) because gpg
-         starts producing output before it has drained stdin. This
-         signs and verifies a genuinely large (~600KB) manifest for
-         real, through the same code path `check` uses, with no
-         timeout wrapper needed — if the deadlock were still present,
-         this call simply would never return and the whole test
-         binary would hang instead of reaching `summarize ()` below. *)
       let many_entries =
         List.init 6000 (fun i ->
             {
@@ -205,37 +182,6 @@ let () =
         | Ok body -> body = big_rendered
         | Error _ -> false);
 
-      (* Regression test for a real bug found by a fresh adversarial
-         sweep (the fifth instance of this codebase's own recurring
-         "Stdlib channel op raises Sys_error, not Unix.Unix_error, and
-         escapes as an uncaught exception" bug class — see bootstrap.ml,
-         core_pin.ml, main.ml's cert-path read, and Setup_token's
-         hashing path for the first four): verify_and_extract's
-         Tempfile.with_contents "" (creating status_path) and the later
-         Fileutil.read_all_bytes status_path were both unguarded.
-         Reachable via Manifest.check, which Supervisor.tamper_check
-         runs on EVERY spawn and EVERY restart — and every one of
-         main.ml's call sites around that path only catches
-         Unix.Unix_error, not Sys_error, so an uncaught Sys_error here
-         would have crashed the entire watchdog process, not just
-         refused one restart.
-
-         Reproduced with real fd exhaustion (Test_helpers.exhaust_fds),
-         the same trigger this project already used once for a related
-         Sys_error escape (Nonce.generate's own open_in_bin
-         "/dev/urandom" — DECISIONS.md: "reproduced directly under a
-         real ulimit -n 256"). A [TMPDIR]-pointed-at-a-missing-directory
-         approach was tried first and abandoned: confirmed directly
-         against the stdlib that [Filename.get_temp_dir_name] caches the
-         environment once at process start rather than re-reading it, so
-         a mid-process [Unix.putenv "TMPDIR" ...] has no effect and
-         cannot reproduce this bug from inside an already-running test
-         binary — [exhaust_fds] doesn't have that problem, since it acts
-         on the process's live fd table directly. Under real exhaustion,
-         [Tempfile.with_contents]'s own [open_out_bin] for [status_path]
-         is the very first Stdlib channel op in the whole call chain
-         (before [Subprocess.run]'s own pipes are ever created), so this
-         exercises exactly the guard this fix added. *)
       let exhausted = exhaust_fds () in
       Fun.protect
         ~finally:(fun () -> release_exhausted_fds exhausted)
@@ -252,7 +198,7 @@ let () =
                Manifest.check ~gnupghome:k.gnupghome ~expected_key_fingerprint:k.fingerprint
                  ~program:file_a ~clearsigned_manifest:signed
              with
-            | Ok_manifest _ -> false (* must not silently pass under fd exhaustion *)
+            | Ok_manifest _ -> false
             | Signature_invalid _ | Hash_mismatch _ | Program_not_covered _ | Io_error _
             | Program_replaced _ ->
                 true));
@@ -264,12 +210,6 @@ let () =
         | Ok_manifest e -> e = entries
         | _ -> false);
 
-      (* generate_and_sign: the composed hash_all/render/sign operation
-         `fossh-watchdog generate-manifest` actually calls. Its output
-         must be exactly what check() accepts as valid for the paths it
-         covered — proves the CLI subcommand and the supervision loop's
-         own verification agree on the same manifest shape, not just
-         that each half works in isolation. *)
       let generated =
         match
           Manifest.generate_and_sign ~gnupghome:k.gnupghome ~key_id:k.fingerprint

@@ -1,14 +1,9 @@
-//! P7: raw event rows are hard-deleted after `retention_days`; rollups are
-//! untouched (they hold aggregates/sketches, never visitor-level rows, so
-//! there's nothing in them retention needs to remove).
-
 use rusqlite::params;
 
 use crate::{Store, StoreError};
 
 impl Store {
-    /// Hard-deletes `events` (and their `props`) with `ts` older than
-    /// `now_ts - retention_days`. Returns the number of event rows removed.
+
     pub fn enforce_retention(
         &mut self,
         retention_days: u32,
@@ -25,12 +20,6 @@ impl Store {
         Ok(deleted as u64)
     }
 
-    /// `VACUUM`s the database file. §7.1/P7 describe this running "on
-    /// ingest with probability 1/1000, and on `fossh maintain`" — the
-    /// probability roll needs a source of randomness that has no business
-    /// living in the storage layer, so that decision is the caller's job
-    /// (`fossh-ingest`/`fossh-cli`, M3/M4); this method just does the work
-    /// unconditionally when called.
     pub fn vacuum(&self) -> Result<(), StoreError> {
         self.conn.execute_batch("VACUUM;")?;
         Ok(())
@@ -68,8 +57,8 @@ mod tests {
     fn deletes_only_events_older_than_the_cutoff() {
         let mut store = Store::open_in_memory().unwrap();
         let now = 1_700_000_000i64;
-        store.record_event(&event_at(now - 100 * DAY)).unwrap(); // old, must go
-        store.record_event(&event_at(now - DAY)).unwrap(); // recent, must stay
+        store.record_event(&event_at(now - 100 * DAY)).unwrap();
+        store.record_event(&event_at(now - DAY)).unwrap();
 
         let deleted = store.enforce_retention(90, now).unwrap();
         assert_eq!(deleted, 1);

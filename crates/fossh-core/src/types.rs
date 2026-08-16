@@ -1,20 +1,6 @@
-//! Core domain types shared across foSSH: the `Event` wire/internal
-//! representation and its constituent fields (§6).
-//!
-//! `Event` deliberately has no `serde::Deserialize` impl. It is a
-//! server-constructed type: `site_id` comes from the authenticated write
-//! key, `ts` is the server clock, `country`/`browser`/`os`/`device` are
-//! derived by GeoIP + UA bucketing, and `visitor` is a hash the client
-//! cannot supply. A client-submitted JSON body deserializes into a much
-//! smaller wire type in `fossh-ingest`, which then *builds* an `Event` by
-//! combining that wire data with server-derived fields — never the other
-//! way around. Do not add `Deserialize` here; that would reopen exactly
-//! the "client sets its own visitor id / site_id" hole this split closes.
-
 use crate::ua::{BrowserFamily, DeviceClass, OsFamily};
 use crate::validate::{Key, Name, Val};
 
-/// Identifies a site by its authenticated write key (§8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SiteId(u32);
 
@@ -28,12 +14,6 @@ impl SiteId {
     }
 }
 
-/// ISO 3166-1 alpha-2 country code, or the `"ZZ"` sentinel for "unknown"
-/// (P3). This type validates *shape* only (two uppercase ASCII letters) —
-/// it does not check membership in the real ISO-3166 list. GeoIP
-/// resolution (§10) is responsible for only ever producing real codes or
-/// the `ZZ` sentinel; this type just prevents anything else (e.g. a raw
-/// city name) from ending up in the `country` field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Country([u8; 2]);
 
@@ -66,9 +46,6 @@ impl std::fmt::Display for Country {
     }
 }
 
-/// A path that has been through [`crate::sanitize_path::sanitize_path`].
-/// The only public constructor goes through sanitization, so a live
-/// `Path` value is always safe to store (P9).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Path(String);
 
@@ -82,14 +59,6 @@ impl Path {
     }
 }
 
-/// A small, hand-maintained set of common multi-label public suffixes.
-/// Not a full Public Suffix List (that's ~250 KB and would need periodic
-/// updates from an external source — out of scope for this alpha; see
-/// DECISIONS.md). Anything not in this set falls back to "last two
-/// labels", which is correct for ordinary TLDs (`.com`, `.org`, `.dev`,
-/// ...) and only wrong for less-common multi-part TLDs not listed here.
-/// Under-splitting here is a referrer-attribution *accuracy* issue, not a
-/// privacy issue — `Host` never identifies a visitor.
 const KNOWN_MULTI_LABEL_SUFFIXES: &[&str] = &[
     "co.uk", "org.uk", "net.uk", "ac.uk", "gov.uk", "sch.uk", "com.tr", "gov.tr", "edu.tr",
     "org.tr", "net.tr", "co.jp", "or.jp", "ne.jp", "ac.jp", "go.jp", "com.au", "net.au", "org.au",
@@ -99,8 +68,6 @@ const KNOWN_MULTI_LABEL_SUFFIXES: &[&str] = &[
     "com.hk",
 ];
 
-/// A referrer, reduced to a coarse registrable domain — never a full URL
-/// (§6: "registrable domain only, never full URL").
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Host(String);
 
@@ -109,26 +76,17 @@ impl Host {
         &self.0
     }
 
-    /// Reconstructs a `Host` from a string that was already reduced by
-    /// `from_referrer_url` at some earlier point (e.g. decoding a spool
-    /// frame or a DB row) — wraps it directly rather than re-deriving it
-    /// through URL parsing again. Deliberately takes an owned `String`
-    /// with no validation: callers are expected to only ever pass back a
-    /// value that came from `as_str()` on a `Host` this crate produced.
     pub fn from_trusted(s: String) -> Self {
         Self(s)
     }
 
-    /// Extracts a coarse registrable domain from a full referrer URL.
-    /// Returns `None` if nothing host-shaped can be recovered, rather than
-    /// ever falling back to storing the raw input.
     pub fn from_referrer_url(url: &str) -> Option<Self> {
         let without_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
         let authority = without_scheme.split(['/', '?', '#']).next().unwrap_or("");
         let host_and_port = authority.rsplit('@').next().unwrap_or(authority);
 
         let host = if let Some(rest) = host_and_port.strip_prefix('[') {
-            // IPv6 literal, e.g. [::1]:8080 — keep the bracketed form, drop the port.
+
             rest.split(']')
                 .next()
                 .map(|h| format!("[{h}]"))
@@ -159,7 +117,7 @@ fn looks_like_host(h: &str) -> bool {
 
 fn registrable_domain(host: &str) -> String {
     if host.starts_with('[') {
-        return host.to_string(); // IPv6 literal — not label-reducible.
+        return host.to_string();
     }
     let labels: Vec<&str> = host.split('.').collect();
     if labels.len() <= 2 {
@@ -173,7 +131,6 @@ fn registrable_domain(host: &str) -> String {
     }
 }
 
-/// §6: `Pageview | Action | Timing | Error`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum EventKind {
@@ -199,13 +156,10 @@ impl EventKind {
     }
 }
 
-/// The internal event representation (§6). Server-constructed only — see
-/// the module doc comment for why this type has no `Deserialize` impl.
 #[derive(Debug, Clone)]
 pub struct Event {
     pub site_id: SiteId,
-    /// Server-assigned unix seconds. Any client-supplied timestamp is
-    /// ignored — this field must only ever be set from the server clock.
+
     pub ts: i64,
     pub kind: EventKind,
     pub name: Name,
@@ -215,17 +169,15 @@ pub struct Event {
     pub browser: BrowserFamily,
     pub os: OsFamily,
     pub device: DeviceClass,
-    /// Day-scoped rotating-salt hash (P2). `None` when the visitor's own
-    /// opt-out signal or config suppressed uniqueness tracking for this event.
+
     pub visitor: Option<u64>,
-    /// Timing: milliseconds. Action: an integer count/amount.
+
     pub value: Option<i64>,
     pub props: Vec<(Key, Val)>,
 }
 
 impl Event {
-    /// The one whole-event invariant not already guaranteed by its fields'
-    /// own constructors: the S4 property-count bound.
+
     pub fn validate(&self) -> Result<(), crate::validate::ValidationError> {
         crate::validate::validate_prop_count(&self.props)
     }
@@ -310,7 +262,7 @@ mod tests {
         assert!(Host::from_referrer_url("not a url").is_none());
         assert!(Host::from_referrer_url("").is_none());
         assert!(Host::from_referrer_url("https://").is_none());
-        assert!(Host::from_referrer_url("localhost").is_none()); // no dot — not host-shaped enough
+        assert!(Host::from_referrer_url("localhost").is_none());
     }
 
     #[test]

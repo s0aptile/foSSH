@@ -1,7 +1,3 @@
-//! `fossh export --site <slug> --format ndjson|csv` (§9): aggregates only,
-//! never raw rows — trivially true here, since the rollup table this
-//! reads from structurally cannot hold a raw per-visitor row (P1/ADR-0009).
-
 use fossh_store::GroupByField;
 
 use crate::args::{flag_value, wants_help};
@@ -11,9 +7,6 @@ use crate::date::parse_date;
 const USAGE: &str = "usage: fossh export --site <slug> --format ndjson|csv \
 [--from YYYY-MM-DD] [--to YYYY-MM-DD]";
 
-/// Full granularity — every dimension the rollup table has — since export
-/// has no `--group-by` of its own; k-anonymity (P6) still applies at
-/// this, the finest, level.
 const ALL_DIMS: &[GroupByField] = &[
     GroupByField::Kind,
     GroupByField::Name,
@@ -203,10 +196,7 @@ mod tests {
 
     #[test]
     fn csv_row_folds_other_bucket_the_same_as_any_other_row() {
-        // The k-anonymity "(other)" fold (fossh-store's rollup.rs) is just
-        // another GroupRow by the time it reaches this formatter — export
-        // has no special-case path that could accidentally skip or
-        // mis-render it.
+
         let rows = vec![row(
             &[
                 (GroupByField::Kind, "(other)"),

@@ -1,40 +1,23 @@
-//! Allowlist grammar and bounded-size validation shared by event names,
-//! property keys, and property values (P8, S4).
-//!
-//! The per-site *allowlist membership* check (is this name/key permitted for
-//! this site) needs the site's config and therefore lives in `fossh-ingest`;
-//! this module only enforces the context-free grammar and length bounds.
-//! P8 states property values are `[a-z0-9_.:-]{1,64}`-shaped like names and
-//! keys, but S4 caps values at a different length (256 B vs 64 B) — read
-//! literally that's a contradiction, so the grammar (charset) is treated as
-//! shared and the length cap is taken from S4 per field. See DECISIONS.md.
-
 use std::fmt;
 
-/// `[a-z0-9_.:-]`
 fn is_grammar_byte(b: u8) -> bool {
     matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.' | b':' | b'-')
 }
 
-/// S4: event name cap, in bytes.
 pub const NAME_MAX: usize = 64;
-/// S4: property key cap, in bytes.
+
 pub const KEY_MAX: usize = 64;
-/// S4: property value cap, in bytes.
+
 pub const VALUE_MAX: usize = 256;
-/// S4: properties per event.
+
 pub const MAX_PROPS: usize = 16;
-/// S4: request body cap, in bytes.
+
 pub const BODY_MAX: usize = 8 * 1024;
-/// S4: environment variable value cap, in bytes.
+
 pub const ENV_VALUE_MAX: usize = 4 * 1024;
-/// S4: batch size cap, in events.
+
 pub const BATCH_MAX: usize = 64;
 
-/// A grammar or bound violation on a name/key/value/prop-count. Never
-/// carries the offending input itself — P10 forbids user input from ever
-/// reaching a place it could be logged verbatim, and an error type that
-/// stores the bad string is exactly that kind of place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValidationError {
     Empty,
@@ -86,8 +69,7 @@ macro_rules! grammar_newtype {
         pub struct $name(String);
 
         impl $name {
-            /// Length cap in bytes for this type (grammar + length are
-            /// enforced at construction, so every live value is valid).
+
             pub const MAX_LEN: usize = $max;
 
             pub fn parse(s: impl Into<String>) -> Result<Self, ValidationError> {
@@ -141,9 +123,6 @@ grammar_newtype!(
     "A bounded property value: `[a-z0-9_.:-]{1,256}`."
 );
 
-/// Bounds-checks a batch of `(Key, Val)` pairs against S4's per-event
-/// property-count cap. `Key`/`Val` are already grammar- and length-valid by
-/// construction, so this is the one remaining whole-event check.
 pub fn validate_prop_count(props: &[(Key, Val)]) -> Result<(), ValidationError> {
     if props.len() > MAX_PROPS {
         return Err(ValidationError::TooMany {
@@ -254,9 +233,7 @@ mod tests {
 
     #[test]
     fn no_upper_bound_type_confusion() {
-        // A Val exceeding NAME_MAX (64) but within VALUE_MAX (256) must be
-        // accepted — regressions here would mean the macro is accidentally
-        // sharing one constant across all three newtypes.
+
         let s = "a".repeat(100);
         assert!(Val::parse(s).is_ok());
     }

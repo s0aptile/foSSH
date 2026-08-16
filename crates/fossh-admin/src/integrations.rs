@@ -1,41 +1,3 @@
-//! Operator-added external services, authenticated by an API key the
-//! operator supplies. Storage, validation, and redaction only — this
-//! module contains no network code whatsoever, and that is structural
-//! rather than incidental.
-//!
-//! ## Why the network half deliberately isn't here
-//!
-//! `fossh-cgi` and `fossh-fcgi` both depend on this crate (for
-//! `data_key`), so anything in `fossh-admin` is by construction in the
-//! ingest path's dependency tree. The ingest path's "zero outbound
-//! network access" property (`THREAT_MODEL.md`, `PRIVACY.md`) is worth
-//! more than the convenience of keeping delivery next to storage, so
-//! the actual outbound request lives in `fossh-agent`
-//! (`integrations_net.rs`) — a binary no ingest component depends on,
-//! links against, or can reach. Check it with
-//! `cargo tree -p fossh-cgi | grep fossh-agent`: nothing. See
-//! ADR-0062.
-//!
-//! ## What an integration is allowed to be
-//!
-//! An operator-named endpoint plus a credential. foSSH does not ship
-//! per-vendor integrations and does not pretend to: rather than a
-//! closed list of service names this project has never tested against,
-//! the model is the one thing every HTTP API actually differs on,
-//! which is *where the key goes* — `Authorization: Bearer <key>`, or a
-//! named header of the operator's choosing. That covers essentially
-//! every real API without ever claiming support for a specific one.
-//!
-//! ## At rest
-//!
-//! The whole record set — names, endpoints, and keys alike — is sealed
-//! as a single ChaCha20-Poly1305 blob under the per-install data key
-//! (`data_key.rs`), reusing `fossh_ingest::crypto`'s already-reviewed
-//! `seal`/`open` rather than a second construction. Endpoints are
-//! sealed too, not just credentials: an internal hostname is itself
-//! something an operator may reasonably not want readable by anything
-//! that can read the file.
-
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -44,24 +6,16 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-/// Bounds every operator-supplied string this module accepts. None of
-/// these are protocol limits — they exist so a mistaken paste (a whole
-/// file into the key field) fails immediately and legibly instead of
-/// being sealed, written, and then rejected much later by something
-/// downstream.
 const MAX_NAME_LEN: usize = 64;
 const MAX_ENDPOINT_LEN: usize = 2048;
 const MAX_HEADER_NAME_LEN: usize = 128;
 const MAX_API_KEY_LEN: usize = 8192;
-/// A ceiling on the sealed file this module will even attempt to open,
-/// so a corrupt or hostile file can't be turned into an unbounded
-/// allocation by the act of reading it.
+
 const MAX_FILE_LEN: u64 = 1024 * 1024;
 const MAX_INTEGRATIONS: usize = 64;
 
 pub const FILE_NAME: &str = "integrations.enc";
-/// Advisory lock held across a whole read-modify-write cycle. See
-/// `modify`.
+
 pub const LOCK_FILE_NAME: &str = "integrations.lock";
 
 pub fn store_path(data_dir: &Path) -> PathBuf {
@@ -72,26 +26,6 @@ pub fn lock_path(data_dir: &Path) -> PathBuf {
     data_dir.join(LOCK_FILE_NAME)
 }
 
-/// Runs a read-modify-write cycle under an exclusive advisory lock.
-///
-/// `save` replaces the file atomically, so the file itself was never
-/// at risk of corruption — but atomicity of the *write* does not make
-/// the *cycle* atomic. Two processes that both `load` before either
-/// `save`s each write a complete replacement, and the later `rename`
-/// silently discards the earlier one's change while that caller has
-/// already been told it succeeded.
-///
-/// Measured, not theorised: sixteen agents released simultaneously,
-/// each adding a uniquely-named integration, produced sixteen `ok`
-/// responses and thirteen surviving entries. The same race also
-/// resurrects deletions — a stale writer puts back something another
-/// process removed. Losing a credential silently while reporting
-/// success is the part that matters.
-///
-/// `flock` on a separate lock file rather than on the data file
-/// itself: the data file is replaced by `rename` on every save, so a
-/// lock held on it would be a lock on an unlinked inode the moment
-/// anyone wrote, which is no lock at all.
 pub fn modify<T>(
     data_dir: &Path,
     key: &[u8; 32],
@@ -110,11 +44,6 @@ pub fn modify<T>(
         .open(&path)
         .map_err(|e| IntegrationError::Io(format!("{}: {e}", path.display())))?;
 
-    // Blocking, deliberately. The critical section is one small file
-    // read, an in-memory edit and one write; a caller that waits a few
-    // milliseconds behind another is doing the right thing, whereas a
-    // caller told "busy, try later" would have to invent a retry
-    // policy for a conflict that resolves itself instantly.
     let _guard = Flock::lock(file, FlockArg::LockExclusive)
         .map_err(|(_f, e)| IntegrationError::Io(format!("locking {}: {e}", path.display())))?;
 
@@ -127,17 +56,14 @@ pub fn modify<T>(
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "placement", rename_all = "snake_case")]
 pub enum Auth {
-    /// `Authorization: Bearer <key>`.
+
     Bearer,
-    /// `<name>: <key>` — for the many APIs that use their own header
-    /// (`X-Api-Key`, `Api-Key`, `Private-Token`, …).
+
     Header { name: String },
 }
 
 impl Auth {
-    /// The header this integration will actually send, as a
-    /// `(name, value)` pair. Returned in a `Zeroizing` wrapper because
-    /// the value contains the credential in full.
+
     pub fn header(&self, api_key: &str) -> (String, Zeroizing<String>) {
         match self {
             Auth::Bearer => (
@@ -149,21 +75,13 @@ impl Auth {
     }
 }
 
-/// The two verbs that actually matter for reaching an API with a
-/// credential. Deliberately not the full set: `PUT`/`PATCH`/`DELETE`
-/// are all state-changing verbs that a *connectivity test* has no
-/// business sending at an operator's live service, and nothing else in
-/// foSSH needs them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Method {
-    /// The default, and the right one for anything that will be read
-    /// from. Safe to send at an unknown endpoint.
+
     #[default]
     Get,
-    /// What most webhook-shaped endpoints require. A connectivity test
-    /// against one of these really does deliver a request, so the body
-    /// says so in as many words — see `TEST_BODY`.
+
     Post,
 }
 
@@ -176,32 +94,20 @@ impl Method {
     }
 }
 
-/// The body a `POST` connectivity test sends. Self-describing on
-/// purpose: whoever is on the receiving end, possibly months later
-/// reading a log, should be able to tell what this was without having
-/// to ask.
 pub const TEST_BODY: &str = r#"{"source":"fossh","event":"connectivity-test","note":"sent by an operator from the foSSH console to verify this integration's endpoint and credential; carries no telemetry"}"#;
 
-/// One configured service. `api_key` is deliberately not `pub`: every
-/// path that reads it has to go through `api_key()`, which makes the
-/// handful of places that legitimately need the plaintext greppable in
-/// one search rather than scattered across field accesses.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Integration {
     pub name: String,
     pub endpoint: String,
     pub auth: Auth,
-    /// `#[serde(default)]` so a file written before this field existed
-    /// still loads, as a `GET`, instead of failing shut as `Corrupt`.
+
     #[serde(default)]
     pub method: Method,
     pub created_at: i64,
     api_key: String,
 }
 
-/// Hand-written specifically so no `{:?}` anywhere — a log line, a
-/// panic message, an `assert_eq!` failure in a test — can ever print a
-/// credential. The derived impl would have.
 impl std::fmt::Debug for Integration {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Integration")
@@ -219,14 +125,6 @@ impl Integration {
         &self.api_key
     }
 
-    /// The only representation of a key that may leave this process.
-    ///
-    /// Last four characters, and only when the key is long enough that
-    /// four characters is a small fraction of it. A short key gets no
-    /// hint at all rather than a proportionally large one — showing
-    /// four of six characters is not a hint, it is most of the secret.
-    /// Counted in `char`s, not bytes, so a multi-byte key can't be
-    /// sliced mid-codepoint.
     pub fn key_hint(&self) -> Option<String> {
         let chars: Vec<char> = self.api_key.chars().collect();
         if chars.len() < 12 {
@@ -238,19 +136,15 @@ impl Integration {
 
 #[derive(Debug)]
 pub enum IntegrationError {
-    /// The operator supplied something this module refuses to store.
-    /// Carries a message written to be shown directly in the console.
+
     Invalid(String),
-    /// A name that is already taken.
+
     Duplicate(String),
     NotFound(String),
-    /// More integrations than `MAX_INTEGRATIONS`.
+
     TooMany,
     Io(String),
-    /// The file exists but did not decrypt or did not parse. Wrong key
-    /// and deliberate tampering are indistinguishable from here and
-    /// are reported identically, the same way `fossh_ingest::crypto`'s
-    /// own `open` already treats them (S2).
+
     Corrupt,
 }
 
@@ -278,11 +172,6 @@ impl std::fmt::Display for IntegrationError {
 
 impl std::error::Error for IntegrationError {}
 
-/// A name is used as a stable identifier in the console, in CLI
-/// arguments, and as a lookup key — so it is restricted to something
-/// that can't be confused with anything else, can't need quoting, and
-/// can't contain a character that would change the meaning of a line
-/// it gets printed on.
 pub fn validate_name(name: &str) -> Result<(), IntegrationError> {
     if name.is_empty() {
         return Err(IntegrationError::Invalid(
@@ -306,24 +195,13 @@ pub fn validate_name(name: &str) -> Result<(), IntegrationError> {
     Ok(())
 }
 
-/// HTTPS is required, with one carve-out.
-///
-/// Sending a bearer credential over cleartext HTTP hands it to anything
-/// on the path, so `http://` is refused rather than warned about. The
-/// carve-out is loopback: an operator testing an integration against
-/// something running on the same machine has no network to be exposed
-/// on, and refusing that case would push people toward disabling the
-/// check entirely, which is worse. Loopback is matched on the parsed
-/// host, not by substring — `https://127.0.0.1.evil.example` must not
-/// pass, and neither must `http://evil.example/?x=127.0.0.1`.
 pub fn validate_endpoint(endpoint: &str) -> Result<(), IntegrationError> {
     if endpoint.len() > MAX_ENDPOINT_LEN {
         return Err(IntegrationError::Invalid(format!(
             "an endpoint URL is limited to {MAX_ENDPOINT_LEN} characters"
         )));
     }
-    // Control characters in a URL would be smuggled straight into the
-    // request line by anything that builds one by concatenation.
+
     if endpoint.chars().any(|c| c.is_control() || c == ' ') {
         return Err(IntegrationError::Invalid(
             "an endpoint URL may not contain spaces or control characters".to_string(),
@@ -362,20 +240,13 @@ fn validate_host_present(rest: &str) -> Result<(), IntegrationError> {
     Ok(())
 }
 
-/// The authority component, minus any `userinfo@` prefix and minus any
-/// `:port`. Splitting on every delimiter that can end an authority
-/// (`/`, `?`, `#`) matters: `https://127.0.0.1#@evil.example` and
-/// `https://127.0.0.1?@evil.example` both have to resolve to the same
-/// host a real URL parser would find, not to whatever a naive
-/// last-`@`-wins split returns.
 fn host_of(rest: &str) -> &str {
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     let after_userinfo = match authority.rsplit_once('@') {
         Some((_, h)) => h,
         None => authority,
     };
-    // An IPv6 literal is bracketed and contains colons of its own, so
-    // the port split has to happen after the bracket, not before it.
+
     if let Some(close) = after_userinfo.find(']') {
         return &after_userinfo[..=close];
     }
@@ -389,16 +260,13 @@ fn is_loopback(host: &str) -> bool {
     if host.eq_ignore_ascii_case("localhost") || host == "[::1]" {
         return true;
     }
-    // The whole 127.0.0.0/8 block, not just 127.0.0.1.
+
     match host.parse::<std::net::Ipv4Addr>() {
         Ok(addr) => addr.is_loopback(),
         Err(_) => false,
     }
 }
 
-/// A header name goes into the request verbatim, so it is restricted to
-/// exactly RFC 9110's `token` production. Anything looser lets a name
-/// containing `:` or CRLF rewrite the rest of the request.
 pub fn validate_header_name(name: &str) -> Result<(), IntegrationError> {
     if name.is_empty() {
         return Err(IntegrationError::Invalid(
@@ -425,14 +293,6 @@ pub fn validate_header_name(name: &str) -> Result<(), IntegrationError> {
     Ok(())
 }
 
-/// The security-load-bearing one.
-///
-/// The key becomes a header *value*. A key containing CR or LF would
-/// end the header and let everything after it be read as further
-/// headers — request splitting, using a credential field as the
-/// injection point. Rejecting every control character (not just CR/LF)
-/// is the conservative version of that check, and costs nothing: no
-/// real API key contains one.
 pub fn validate_api_key(api_key: &str) -> Result<(), IntegrationError> {
     if api_key.is_empty() {
         return Err(IntegrationError::Invalid(
@@ -452,10 +312,7 @@ pub fn validate_api_key(api_key: &str) -> Result<(), IntegrationError> {
                 .to_string(),
         ));
     }
-    // Leading/trailing whitespace in a pasted key is a real and common
-    // paste artefact. Rejecting is better than silently trimming: a
-    // silently-trimmed key that still doesn't work sends the operator
-    // hunting in the wrong place.
+
     if api_key.trim() != api_key {
         return Err(IntegrationError::Invalid(
             "that API key has leading or trailing whitespace — remove it, or the request will be \
@@ -466,9 +323,6 @@ pub fn validate_api_key(api_key: &str) -> Result<(), IntegrationError> {
     Ok(())
 }
 
-/// The whole configured set. Loaded, mutated, and written back as a
-/// unit — there are at most `MAX_INTEGRATIONS` of them, so there is no
-/// reason to complicate this with partial updates.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Integrations {
     #[serde(default)]
@@ -476,8 +330,7 @@ pub struct Integrations {
 }
 
 impl Integrations {
-    /// A missing file is an empty set, not an error — an install that
-    /// has never added an integration is the normal case.
+
     pub fn load(data_dir: &Path, key: &[u8; 32]) -> Result<Self, IntegrationError> {
         let path = store_path(data_dir);
         let meta = match fs::metadata(&path) {
@@ -496,15 +349,6 @@ impl Integrations {
         serde_json::from_slice(&plaintext).map_err(|_| IntegrationError::Corrupt)
     }
 
-    /// Replaces the file atomically: a temp file in the same directory,
-    /// created 0600 *before* anything is written to it, fsynced, then
-    /// `rename`d over the destination and the directory fsynced too.
-    ///
-    /// `rename`, not the create-once hard-link dance `data_key.rs`
-    /// uses: that pattern is right for a file that must never be
-    /// replaced once it exists, and wrong for one whose whole purpose
-    /// is to be edited. A reader either sees the complete old file or
-    /// the complete new one, never a partial write.
     pub fn save(&self, data_dir: &Path, key: &[u8; 32]) -> Result<(), IntegrationError> {
         let path = store_path(data_dir);
         let plaintext = Zeroizing::new(
@@ -531,8 +375,7 @@ impl Integrations {
             let _ = fs::remove_file(&tmp);
             return Err(IntegrationError::Io(format!("{}: {e}", path.display())));
         }
-        // Without this the rename itself can be lost on power failure
-        // even though the file's own contents were synced.
+
         if let Ok(dir) = fs::File::open(data_dir) {
             let _ = dir.sync_all();
         }
@@ -625,62 +468,36 @@ mod tests {
 
     #[test]
     fn loopback_is_matched_on_the_real_host_not_a_substring() {
-        // Every one of these contains "127.0.0.1" or "localhost"
-        // somewhere while resolving to a completely different host. A
-        // substring check would have let all of them send a key in
-        // cleartext to an attacker-chosen server.
+
         assert!(validate_endpoint("http://127.0.0.1.evil.example/hook").is_err());
         assert!(validate_endpoint("http://localhost.evil.example/hook").is_err());
         assert!(validate_endpoint("http://evil.example/?h=127.0.0.1").is_err());
         assert!(validate_endpoint("http://evil.example/#127.0.0.1").is_err());
         assert!(validate_endpoint("http://evil.example/127.0.0.1").is_err());
-        // userinfo: the host is what follows the last '@', so this one
-        // really is loopback and must pass.
+
         assert!(validate_endpoint("http://127.0.0.1@localhost/hook").is_ok());
-        // ...and this one really is not, despite the loopback prefix.
+
         assert!(validate_endpoint("http://localhost@evil.example/hook").is_err());
-        // A '#' or '?' before the '@' ends the authority, so the '@'
-        // is in the fragment/query and the host is still evil.example.
+
         assert!(validate_endpoint("http://evil.example#@localhost/").is_err());
         assert!(validate_endpoint("http://evil.example?@localhost/").is_err());
     }
 
     #[test]
     fn every_alternate_loopback_spelling_curl_understands_is_refused_here() {
-        // A parser differential between this check and curl's real one
-        // is the way an API key ends up in cleartext on someone else's
-        // server, so the two were compared directly against a real
-        // curl. Each URL below is one curl resolves to 127.0.0.1 while
-        // this validator rejects it:
-        //
-        //   http://0177.0.0.1/          octal octets
-        //   http://2130706433/          the address as one integer
-        //   http://127.1/               the two-part short form
-        //   http://[::ffff:127.0.0.1]/  IPv4-mapped IPv6
-        //
-        // Being stricter than curl is the safe direction of that
-        // disagreement: the worst case is an operator having to write
-        // 127.0.0.1 the ordinary way. The dangerous direction —
-        // something accepted here that curl sends elsewhere — was
-        // tested for and not found, and these assertions are what stop
-        // a future "let's be more permissive" change from opening it.
+
         assert!(validate_endpoint("http://0177.0.0.1/hook").is_err());
         assert!(validate_endpoint("http://2130706433/hook").is_err());
         assert!(validate_endpoint("http://127.1/hook").is_err());
         assert!(validate_endpoint("http://[::ffff:127.0.0.1]/hook").is_err());
-        // Percent-encoding a dot: curl decodes it and resolves
-        // 127.0.0.1.evil.example, so this must not be read as an IP.
+
         assert!(validate_endpoint("http://127.0.0.1%2eevil.example/").is_err());
 
-        // ...and the spellings that ARE accepted must be ones curl
-        // agrees are loopback, which was also checked against a real
-        // curl rather than assumed.
         for ok in [
             "http://127.0.0.1:9/",
             "http://localhost:9/",
             "http://[::1]:9/",
-            // curl connects to the host after the last '@', same as
-            // this validator reads it.
+
             "http://127.0.0.1@localhost:9/",
         ] {
             assert!(validate_endpoint(ok).is_ok(), "{ok} should be accepted");
@@ -689,9 +506,7 @@ mod tests {
 
     #[test]
     fn an_api_key_with_a_line_break_is_refused() {
-        // The one check in this module that is genuinely a
-        // vulnerability if it is missing: this value goes into an HTTP
-        // header, and CRLF in a header value is request splitting.
+
         assert!(validate_api_key("sk_live_abcdef123456").is_ok());
         assert!(validate_api_key("key\r\nX-Injected: yes").is_err());
         assert!(validate_api_key("key\nX-Injected: yes").is_err());
@@ -747,7 +562,7 @@ mod tests {
     #[test]
     fn a_key_hint_slices_on_char_boundaries_not_bytes() {
         let mut set = Integrations::default();
-        // 16 multi-byte characters — a byte-index slice would panic.
+
         set.add(
             "unicode",
             "https://api.example.com",
@@ -814,8 +629,7 @@ mod tests {
 
     #[test]
     fn the_file_on_disk_never_contains_the_key_in_cleartext() {
-        // The point of sealing it. Worth asserting directly rather
-        // than trusting that `save` called `seal`.
+
         let dir = scratch_dir("sealed");
         let key = [4u8; 32];
         let mut set = Integrations::default();
@@ -833,7 +647,7 @@ mod tests {
         let raw = fs::read(store_path(&dir)).unwrap();
         let haystack = String::from_utf8_lossy(&raw);
         assert!(!haystack.contains("PLAINTEXTCANARY"));
-        // The endpoint is sealed too, per this module's own doc.
+
         assert!(!haystack.contains("hooks.internal.example"));
         assert!(!haystack.contains("alerts"));
         fs::remove_dir_all(&dir).ok();
@@ -853,17 +667,7 @@ mod tests {
 
     #[test]
     fn concurrent_writers_do_not_lose_each_others_additions() {
-        // The race this module's `modify` exists for. Sixteen threads
-        // each adding a uniquely-named integration to one directory:
-        // before the lock, every call reported success and three of
-        // them silently were not there afterwards, because each thread
-        // loaded before any other had saved and the last `rename` won.
-        //
-        // Threads rather than processes here so this runs as an
-        // ordinary `cargo test`; `flock` is per-open-file-description,
-        // so separate `OpenOptions::open` calls contend correctly
-        // whether they are in one process or several. The 16-process
-        // version was reproduced separately against the real binary.
+
         use std::sync::Barrier;
 
         let dir = scratch_dir("concurrent");
@@ -907,8 +711,7 @@ mod tests {
 
     #[test]
     fn a_concurrent_remove_is_not_undone_by_a_stale_writer() {
-        // The same race in the other direction: a writer holding a
-        // stale copy puts back something another caller removed.
+
         use std::sync::Barrier;
 
         let dir = scratch_dir("concurrent-remove");
@@ -962,9 +765,7 @@ mod tests {
 
     #[test]
     fn a_file_written_under_a_different_key_reports_corrupt_not_empty() {
-        // Failing open here — treating an undecryptable file as "no
-        // integrations" — would silently drop the operator's whole
-        // configuration and then happily overwrite it on the next save.
+
         let dir = scratch_dir("wrongkey");
         let mut set = Integrations::default();
         set.add(
@@ -1051,8 +852,7 @@ mod tests {
 
     #[test]
     fn a_rejected_add_leaves_the_set_untouched() {
-        // Validation runs before the push, so a bad key must not
-        // half-add anything.
+
         let mut set = Integrations::default();
         assert!(
             set.add(
