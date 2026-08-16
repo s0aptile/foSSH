@@ -206,28 +206,38 @@ distinct from Ollama's, so the two cannot be confused in a `netstat`
 listing or a firewall rule. It writes no access log, because request
 bodies are prompts.
 
+**This was built, tested against a real httpd, and then never actually
+connected to a caller until this was found and fixed.**
+`gui/fossh_console/advisor_client.py` — the only thing in the shipped
+product that calls the model — talked straight to Ollama's own port,
+bypassing the gateway, the secret, and the security headers entirely.
+Any other local account could reach `127.0.0.1:11434` directly the
+whole time; the gate existed and guarded nothing. Fixed: the console
+now talks to the gateway (`127.0.0.1:11435`) and sends the secret as
+`X-foSSH-Model-Key` on every request, read fresh from disk each time
+rather than cached, so a rotated secret takes effect on the next call
+rather than the next restart.
+
 Two details of that secret file are load-bearing and neither is
-obvious. It is owned `root:apache` at mode `0640`, with `fossh-svc`
-added to the `apache` group — Apache runs as `apache` and foSSH's own
-helper as `fossh-svc`, and a file readable by only one of them leaves
-the endpoint either permanently unreachable or entirely unguarded.
-Neither account can arrange that for itself, which is why the package
-does it. And it is written with **no trailing newline**: Apache's
-`file()` function returns the bytes verbatim, so a secret written with
-`echo` would compare as `"abc\n"` against a header of `"abc"` and deny
-every request forever while the configuration read as correct.
+obvious. It is owned `root:fossh-selfheal` at mode `0640` — one group
+answering "who may use the local model at all" for every side of it:
+the human operator (already required to join it to reach
+`/run/fossh-selfheal`), Apache (added as a secondary member so it can
+still serve the check), and `fossh-svc` (added for the headless
+scheduled tick described below, once it exists). And it is written
+with **no trailing newline**: Apache's `file()` function returns the
+bytes verbatim, so a secret written with `echo` would compare as
+`"abc\n"` against a header of `"abc"` and deny every request forever
+while the configuration read as correct.
 
-Separately, the model's configuration — which model, which endpoint,
-how many threads — is written to an OpenPGP-clearsigned manifest signed
-by a key generated at random on first run. That signature is verified
-before the advisory layer is used at all, so an edited endpoint, a
-swapped model, or a thread count raised until the box is saturated all
-fail the check. Failing it disables the advisory layer and nothing
-else.
-
-Verification parses `gpg --status-fd` output rather than trusting the
-exit code, because `gpg` exits 0 for a good signature from a revoked or
-expired key.
+Separately, this package also ships the machinery for an
+OpenPGP-clearsigned configuration manifest (`keylock.rs`) that would
+let the advisory layer refuse to run against an edited endpoint, a
+swapped model, or a thread count raised until the box is saturated.
+**That machinery is not currently called from anywhere either** — same
+shape of gap as the one above, not yet closed. Nothing in this install
+verifies the manifest today; the hardware and latency gates described
+above are the only checks actually enforced before the model runs.
 
 ## Turning it off
 

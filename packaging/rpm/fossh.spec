@@ -642,9 +642,20 @@ runuser -u fossh-watchdog -- %{_bindir}/fossh-watchdog generate-manifest \
 
 %post selfheal
 # The secret Apache checks against, generated once, as root, with
-# ownership neither side could have arranged for itself: Apache runs
-# as `apache` and the agent as `fossh-svc`, so a file readable by only
-# one of them makes the endpoint either unreachable or unguarded.
+# ownership neither side could arrange for itself. Group is
+# fossh-selfheal, not apache: verified this session that nothing
+# calling the model actually runs as apache or as fossh-svc — the
+# console (gui/fossh_console/advisor_client.py) is the only real
+# caller, running as whichever desktop account launched it, and that
+# account already has to join fossh-selfheal to reach the exclusivity
+# lock in /run/fossh-selfheal. One group now answers "who may use the
+# local model advisory layer at all" for every side of it: the human
+# operator (already required to join it), Apache (added below, so it
+# can still serve the gateway's own check), and fossh-svc (added below
+# too, for the headless scheduled tick described in
+# docs/SELF-HEALING.md that is designed but not built yet — when it
+# ships, it needs this same read access and shouldn't need a second
+# packaging change to get it).
 #
 # It lives in its own directory rather than in %%{_sysconfdir}/fossh,
 # and that is a fix rather than a preference. `fossh-watchdog` owns
@@ -667,12 +678,15 @@ fi
 # was no path back — every later upgrade skipped the block entirely
 # because the file already had content. Re-asserting them on every
 # %%post costs nothing and makes the condition self-healing.
-chgrp apache %{_sysconfdir}/fossh-model 2>/dev/null || :
-chgrp apache %{_sysconfdir}/fossh-model/model-access-secret 2>/dev/null || :
+chgrp fossh-selfheal %{_sysconfdir}/fossh-model 2>/dev/null || :
+chgrp fossh-selfheal %{_sysconfdir}/fossh-model/model-access-secret 2>/dev/null || :
 chmod 0750 %{_sysconfdir}/fossh-model
 chmod 0640 %{_sysconfdir}/fossh-model/model-access-secret
-# So the agent, which runs as fossh-svc, can read the same file Apache does.
-usermod -a -G apache fossh-svc >/dev/null 2>&1 || :
+# Apache still has to read this to serve the gateway's own check;
+# fossh-svc for the not-yet-built headless tick. Neither is the file's
+# owning group anymore, both reach it as secondary members instead.
+usermod -a -G fossh-selfheal apache >/dev/null 2>&1 || :
+usermod -a -G fossh-selfheal fossh-svc >/dev/null 2>&1 || :
 # Same reasoning as the base package's own %%post: materialize now
 # rather than waiting for the next real reboot, so `dnf install` alone
 # leaves a working /run/fossh-selfheal behind it.
@@ -759,7 +773,7 @@ fi
 %config(noreplace) %{_sysconfdir}/httpd/conf.d/fossh-model.conf
 # Owned by this subpackage alone. Sharing %%{_sysconfdir}/fossh with
 # fossh-watchdog is what broke the endpoint; see %%post.
-%dir %attr(0750,root,apache) %{_sysconfdir}/fossh-model
+%dir %attr(0750,root,fossh-selfheal) %{_sysconfdir}/fossh-model
 # %%{_datadir}/fossh itself is owned by fossh-console, which is not a
 # dependency of this subpackage -- so it is claimed here too. Shared
 # ownership of a directory is legal in rpm and is the correct fix;

@@ -11,7 +11,11 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-ENDPOINT = "http://127.0.0.1:11434"
+ENDPOINT = os.environ.get("FOSSH_MODEL_ENDPOINT", "http://127.0.0.1:11435")
+
+MODEL_SECRET_PATH = Path(
+    os.environ.get("FOSSH_MODEL_SECRET_FILE", "/etc/fossh-model/model-access-secret")
+)
 
 REVISION = "0.0.2.2"
 
@@ -197,18 +201,40 @@ def _strip_reasoning(text: str) -> str:
     return _REASONING.sub("", text).strip()
 
 
+def _gateway_headers() -> dict[str, str]:
+    """The header fossh-model.conf's Apache gateway requires.
+
+    Ollama's own bind stops the network reaching it; it does nothing
+    about another local account on this machine reaching it directly.
+    The gateway (packaging/apache/fossh-model.conf, port 11435) is what
+    actually closes that, and it has always required this header — the
+    console simply never sent it, which left the gateway installed and
+    the secret generated with nothing on this side ever presenting it.
+    Read fresh every call rather than cached: a rotated secret must
+    take effect on the next request, not after a restart.
+    """
+    try:
+        secret = MODEL_SECRET_PATH.read_text().strip()
+    except OSError:
+        return {}
+    if not secret:
+        return {}
+    return {"X-foSSH-Model-Key": secret}
+
+
 def _post(path: str, payload: dict, timeout: float):
     request = urllib.request.Request(
         f"{ENDPOINT}{path}",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **_gateway_headers()},
     )
     return urllib.request.urlopen(request, timeout=timeout)
 
 
 def installed_tags(timeout: float = 2.0) -> list[str]:
     try:
-        with urllib.request.urlopen(f"{ENDPOINT}/api/tags", timeout=timeout) as r:
+        request = urllib.request.Request(f"{ENDPOINT}/api/tags", headers=_gateway_headers())
+        with urllib.request.urlopen(request, timeout=timeout) as r:
             tags = json.load(r)
     except (urllib.error.URLError, OSError, ValueError):
         return []
@@ -217,7 +243,8 @@ def installed_tags(timeout: float = 2.0) -> list[str]:
 
 def resident_tags(timeout: float = 2.0) -> list[str]:
     try:
-        with urllib.request.urlopen(f"{ENDPOINT}/api/ps", timeout=timeout) as r:
+        request = urllib.request.Request(f"{ENDPOINT}/api/ps", headers=_gateway_headers())
+        with urllib.request.urlopen(request, timeout=timeout) as r:
             ps = json.load(r)
     except (urllib.error.URLError, OSError, ValueError):
         return []
