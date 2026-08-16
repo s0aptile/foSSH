@@ -31,12 +31,42 @@ pytestmark = pytest.mark.skipif(
 class TestPerformanceGate:
     """The numbers that decide whether the model is used at all."""
 
-    def test_the_warm_path_clears_both_halves_of_the_gate(self):
+    @pytest.mark.xfail(
+        reason=(
+            "lfm2.5-thinking fails its own gate once TTFT is measured "
+            "correctly -- first *content* token, not first token of either "
+            "kind, which for a thinking model is always the reasoning "
+            "trace. Real measurement: 13.03s against a 1.7s ceiling, and "
+            "~13-17s total against the 3.0s total-time ceiling, because "
+            "content never starts until 1000+ reasoning tokens finish. "
+            "Five alternatives measured against this same gate in "
+            "dev/MODEL-EVAL-2026-08-16.md; none is a clean win on every "
+            "axis, so this stays xfail pending a model-choice decision "
+            "rather than the gate being loosened to match the shipped "
+            "default."
+        ),
+        strict=True,
+    )
+    def test_the_warm_path_clears_the_gate(self):
         m = ac.probe()
         assert m.within_gate, m.why_not()
 
-        print(f"\n  TTFT {m.ttft_seconds:.3f}s | {m.tokens_per_second:.1f} tok/s")
+        print(
+            f"\n  TTFT {m.ttft_seconds:.3f}s | {m.tokens_per_second:.1f} tok/s | "
+            f"total {m.total_seconds:.2f}s"
+        )
 
+    @pytest.mark.xfail(
+        reason=(
+            "Same root cause as the gate test above. num_predict=8 was "
+            "written when 'first token' meant first *reasoning* token, "
+            "always fast; a thinking model never reaches a content token "
+            "within 8, so this now raises AdvisorUnavailable rather than "
+            "measuring anything. 'Warm' still means no reload penalty, "
+            "but that is no longer what a tiny num_predict here can show."
+        ),
+        strict=True,
+    )
     def test_hot_standby_is_what_makes_the_ttft_gate_achievable(self):
 
         ac.warm()

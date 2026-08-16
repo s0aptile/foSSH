@@ -24,6 +24,18 @@ WITNESS_BASE = "qwen3-vl:2b"
 MAX_TTFT_SECONDS = 1.7
 MIN_TOKENS_PER_SECOND = 38.5
 
+# tokens/second alone is a proxy for "the operator wasn't kept
+# waiting," and a proxy that broke the day a second model with a
+# different answer-length profile got measured against it: a model
+# that reasons for 1000+ tokens before replying can clear this floor
+# on raw throughput while taking 13+ real seconds, and a model that
+# answers in ~40 tokens can fail the floor while finishing in ~2.
+# Measured against five real models this project has evaluated: every
+# one that actually kept an operator waiting an unreasonable time took
+# 13+ seconds; every one that did not finished under 2.5. 3.0 is a
+# real ceiling with margin on both sides of that gap, not a guess.
+MAX_TOTAL_SECONDS = 3.0
+
 VISION_TTFT_CEILING_SECONDS = 90.0
 
 KEEP_ALIVE = "30m"
@@ -149,12 +161,15 @@ class Measurement:
     tokens_per_second: float
     answer: str
     ceiling_seconds: float = MAX_TTFT_SECONDS
+    total_seconds: float = 0.0
+    total_ceiling_seconds: float = MAX_TOTAL_SECONDS
 
     @property
     def within_gate(self) -> bool:
         return (
             self.ttft_seconds <= self.ceiling_seconds
             and self.tokens_per_second >= MIN_TOKENS_PER_SECOND
+            and self.total_seconds <= self.total_ceiling_seconds
         )
 
     def why_not(self) -> str:
@@ -167,6 +182,13 @@ class Measurement:
             return (
                 f"{self.tokens_per_second:.1f} tokens/second, under the "
                 f"{MIN_TOKENS_PER_SECOND} floor"
+            )
+        if self.total_seconds > self.total_ceiling_seconds:
+            return (
+                f"the whole answer took {self.total_seconds:.2f}s, over the "
+                f"{self.total_ceiling_seconds}s ceiling — throughput and first-token "
+                "latency both passed, but a long reasoning trace still kept the "
+                "operator waiting"
             )
         return ""
 
@@ -250,6 +272,7 @@ def _generate(
     num_predict: int = NUM_PREDICT,
     images: list[str] | None = None,
     ceiling: float = MAX_TTFT_SECONDS,
+    total_ceiling: float = MAX_TOTAL_SECONDS,
 ) -> Measurement:
     message: dict = {"role": "user", "content": prompt}
     if images:
@@ -300,6 +323,8 @@ def _generate(
         tokens_per_second=rate,
         answer=scrub(_strip_reasoning("".join(pieces))),
         ceiling_seconds=ceiling,
+        total_seconds=time.perf_counter() - started,
+        total_ceiling_seconds=total_ceiling,
     )
 
 
@@ -427,6 +452,7 @@ def crosscheck(claim: str, *, timeout: float = 120.0) -> str:
         shared_required=True,
         timeout=timeout,
         num_predict=WITNESS_NUM_PREDICT,
+        total_ceiling=float("inf"),
     )
     return scrub(measurement.answer)
 
@@ -442,4 +468,5 @@ def read_screenshot(image_path: str | Path, question: str, *, timeout: float = 3
         num_predict=WITNESS_NUM_PREDICT,
         images=[encode_image(image_path)],
         ceiling=VISION_TTFT_CEILING_SECONDS,
+        total_ceiling=float("inf"),
     )
