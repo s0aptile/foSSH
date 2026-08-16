@@ -68,6 +68,44 @@ binaries before and after, not argued from the source.
 - `php-ffi` absent, so the PHP binding's FFI mode is reviewed, not run.
 - `ocamlformat` absent, so `dune build @fmt` cannot run.
 
+### Since the section review pass, same day: the advisory layer, fixed and wired in
+
+Not covered by the table above — this work landed after it was written.
+Two real defects in the two-model advisory layer, then the layer
+actually connected to the console for the first time.
+
+| Defect | State |
+|---|---|
+| Biased One (the text model): a `stop "</think>"` sequence halted generation before any answer token — 34/34 and 40/40 calls returned empty content across both models tested | Fixed, stop sequence removed, budgets raised to what reasoning actually costs. ADR-0076. |
+| Biased One: no identity fence in the SYSTEM block, only a post-hoc term filter | Fixed, an explicit never-name-yourself instruction added; a demonstrated-refusal worked example was tried and reverted for breaking ordinary answers. ADR-0076. |
+| Hellen's Eye (the vision model, `qwen3-vl:2b`): an adversarial image could talk it into self-disclosure, and several others locked it into a non-converging reasoning loop | Fixed by switching the underlying model to `qwen3.5:4b` with `think=False` — reasoning never starts, so it cannot loop in one. ADR-0078. |
+
+`advisor_client.explain()` had existed since earlier in this session and
+was never called from anywhere in the GUI — there was no findings-list
+view for it to feed. `fossh-agent` gained a `selfheal.check` RPC method
+(`crates/fossh-agent/src/main.rs`), and `overview.py` gained a real
+Findings section (`Adw.ExpanderRow` per finding, advice filled in async
+via a new `advisor_bridge.py` worker thread) that queues an explanation
+for any finding above `info` severity automatically. `ConsoleApplication`
+re-runs the deterministic checks every 900s while open
+(`SELFHEAL_TICK_SECONDS`) — an in-console tick, not a headless daemon;
+that remains deliberately unbuilt. Verified end to end against the real
+running model, not a mock. ADR-0079.
+
+`/run/fossh-selfheal` and a dedicated `fossh-selfheal` group are new:
+the advisor's exclusivity lock needed a runtime directory a human
+console user could actually reach, without widening `/run/fossh` itself
+(the base package's own ingest runtime, unrelated to this). ADR-0080.
+`packaging/selinux/fossh.fc` does not define a context for it yet —
+flagged there as a real but currently inert gap, since nothing this
+policy confines touches it today.
+
+A three-agent doc sweep followed (`c8c93b1`) — version strings, a
+retired-TUI dependency list still in `NOTICE`, and a `docs/SELF-HEALING.md`
+claim about a scheduled tick that runs as `fossh-svc`, which does not
+exist. `granite4.1:3b` was evaluated as a replacement for Biased One and
+rejected, not shipped. ADR-0081.
+
 ## 0.0.2.1
 
 Last updated: 2026-08-15. The chapter below this section describes the

@@ -23,3 +23,22 @@
 /var/lib/fossh(/.*)?			system_u:object_r:fossh_data_t:s0
 
 /run/fossh(/.*)?			system_u:object_r:fossh_var_run_t:s0
+
+#
+# /run/fossh-selfheal (new, 62a8b96 — see packaging/systemd/
+# fossh-selfheal.tmpfiles.conf) deliberately has NO entry here yet. It
+# is not touched by fossh_cgi_t or fossh_fcgi_t (fossh.te confines only
+# those two domains, and neither one holds the advisor's exclusivity
+# lock) — its only real caller today is the console, running as an
+# ordinary desktop-session user under whatever unconfined type that
+# session already has, outside this module's scope entirely. Left
+# without a `restorecon`-relevant rule here, `systemd-tmpfiles --create`
+# (fossh.spec's `%post selfheal`) labels it from the nearest matching
+# default for a path under /run rather than a type this module owns.
+# Real gap, not yet a live one: if the headless/scheduled tick this
+# directory was also sized for (deliberately not built — see
+# docs/SELF-HEALING.md) is ever added running as fossh-svc under a
+# confined domain, it will need its own type and `allow` rules here,
+# verified the same way fossh_cgi_t/fossh_fcgi_t's own grants were —
+# against a real `semodule -i` and a real running process, not guessed
+# at from this file alone.
