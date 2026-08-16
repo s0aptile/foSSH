@@ -136,15 +136,14 @@ step does not break anything visibly: the console silently falls back
 to a lock that excludes nothing the scheduled tick's own lock does,
 and Hellen's Eye never actually runs.
 
-Hellen's Eye is a second, separate model — `qwen3-vl:2b`, invoked only
-when you explicitly submit a screenshot for it to read, never
-automatically — and it has a known, open defect the fence described
-above does not cover: an adversarial image can talk it into naming its
-own underlying model, and several other adversarial images put it into
-a non-converging reasoning loop that consumes its full token budget and
-returns nothing. Neither exposes visitor data (this model never
-receives any), and both are unresolved as of this writing. See
-`THREAT_MODEL.md`, "Explicitly not defended against," item 7.
+Hellen's Eye is a second, separate model — `qwen3.5:4b`, run with
+reasoning disabled per request, invoked only when you explicitly
+submit a screenshot for it to read, never automatically. An earlier
+base model for this role had a real, open defect (an adversarial image
+could talk it into naming itself, and several others locked it into a
+non-converging reasoning loop) that was fixed by switching models
+rather than tuning around it — see `THREAT_MODEL.md`, "Explicitly not
+defended against," item 7, for the full history and verification.
 
 Ollama is **not** packaged for Fedora or EPEL and is deliberately not a
 dependency — naming an unavailable package would make the subpackage

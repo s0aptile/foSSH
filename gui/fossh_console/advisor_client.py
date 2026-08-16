@@ -19,7 +19,7 @@ ADVISOR = f"fossh-advisor:{REVISION}"
 WITNESS = f"fossh-witness:{REVISION}"
 
 ADVISOR_BASE = "lfm2.5-thinking"
-WITNESS_BASE = "qwen3-vl:2b"
+WITNESS_BASE = "qwen3.5:4b"
 
 MAX_TTFT_SECONDS = 1.7
 MIN_TOKENS_PER_SECOND = 38.5
@@ -41,7 +41,7 @@ VISION_TTFT_CEILING_SECONDS = 90.0
 KEEP_ALIVE = "30m"
 NUM_THREAD = 4
 NUM_PREDICT = 2048
-WITNESS_NUM_PREDICT = 3000
+WITNESS_NUM_PREDICT = 2048
 
 VISION_MAX_EDGE = (1280, 720)
 
@@ -273,6 +273,7 @@ def _generate(
     images: list[str] | None = None,
     ceiling: float = MAX_TTFT_SECONDS,
     total_ceiling: float = MAX_TOTAL_SECONDS,
+    think: bool | None = None,
 ) -> Measurement:
     message: dict = {"role": "user", "content": prompt}
     if images:
@@ -291,6 +292,8 @@ def _generate(
             "top_p": 0.85,
         },
     }
+    if think is not None:
+        payload["think"] = think
     started = time.perf_counter()
     first_token_at: float | None = None
     pieces: list[str] = []
@@ -453,6 +456,7 @@ def crosscheck(claim: str, *, timeout: float = 120.0) -> str:
         timeout=timeout,
         num_predict=WITNESS_NUM_PREDICT,
         total_ceiling=float("inf"),
+        think=False,
     )
     return scrub(measurement.answer)
 
@@ -469,4 +473,5 @@ def read_screenshot(image_path: str | Path, question: str, *, timeout: float = 3
         images=[encode_image(image_path)],
         ceiling=VISION_TTFT_CEILING_SECONDS,
         total_ceiling=float("inf"),
+        think=False,
     )
