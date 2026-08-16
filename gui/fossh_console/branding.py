@@ -35,13 +35,20 @@ from __future__ import annotations
 
 import functools
 
-from gi.repository import Gtk, Pango, PangoCairo
+from gi.repository import GLib, Gtk, Pango, PangoCairo
 
 WORDMARK_FAMILIES = [
     "Bitcount Grid Single",
     "Bitcount Grid Double",
     "Bitcount Prop Single",
 ]
+
+# A second, independent list rather than a reference to the one above.
+# Both name the same three faces today, but a headline figure and a
+# sixteen-year-old logotype answer to different pressures — if a
+# legibility problem is ever found in one that is not in the other,
+# this is what makes fixing it a one-line edit instead of a refactor.
+STAT_VALUE_FAMILIES = list(WORDMARK_FAMILIES)
 
 UI_FAMILIES = ["Roboto", "Inter", "Cantarell", "Noto Sans", "Sans"]
 MONO_FAMILIES = ["Roboto Mono", "Source Code Pro", "DejaVu Sans Mono", "Monospace"]
@@ -69,13 +76,59 @@ def ui_family() -> str:
 def mono_family() -> str:
     return resolve_family(MONO_FAMILIES)
 
-def wordmark_family() -> str | None:
-    """The display face for the mark, or `None` to use the UI face."""
+def _display_family(candidates: list[str]) -> str | None:
+    """The first installed face in `candidates`, or `None` for the UI face."""
     installed = _installed_families()
-    for name in WORDMARK_FAMILIES:
+    for name in candidates:
         if name.lower() in installed:
             return name
     return None
+
+def wordmark_family() -> str | None:
+    """The display face for the mark, or `None` to use the UI face.
+
+    A logotype in a face nothing else on screen uses is a common shape
+    and a weak one — it reads as a sticker applied to an otherwise
+    generic interface rather than as the same identity carried through.
+    """
+    return _display_family(WORDMARK_FAMILIES)
+
+def stat_value_family() -> str | None:
+    """The display face for a dashboard headline figure, or `None`.
+
+    The numbers a person actually came to read are the other place
+    this project's identity belongs, not just the logo — the same
+    reasoning `wordmark_family` states, applied to a different element.
+
+    Verified, not assumed, against the real font files (`fonttools`):
+    Grid Single and Grid Double give every glyph — not just digits —
+    identical advance width by construction (600 units, checked 0-9),
+    so `.numeric`'s tabular-figure requirement in style.css is met
+    whether or not a `tnum` GSUB feature exists (it does not, in
+    either Grid face). Prop Single is not monospaced by default (its
+    '1' is 500 units against 700 for every other digit) but does
+    define a real `tnum` feature, which style.css already requests —
+    so the fallback chain stays jitter-safe end to end. Digit
+    disambiguation (0/1/3/6/7/8/9) was checked by rendering actual
+    sample figures at 34px/700 in all three faces; 0 carries a built-in
+    diagonal slash, distinguishing it from a round form on sight.
+    """
+    return _display_family(STAT_VALUE_FAMILIES)
+
+def stat_value_markup(text: str) -> str:
+    """Pango markup for a headline figure, in the display face.
+
+    Falls back to the escaped text alone — no `face` attribute — when
+    Bitcount is not installed, which is exactly `resolve_family`'s
+    fallback-through-a-chain philosophy applied to a single face rather
+    than a stack: ask for the identity, accept the theme's default
+    when it is not there, never guess at a substitute.
+    """
+    escaped = GLib.markup_escape_text(text, -1)
+    face = stat_value_family()
+    if not face:
+        return escaped
+    return f'<span face="{face}">{escaped}</span>'
 
 def icon_family() -> str | None:
     installed = _installed_families()

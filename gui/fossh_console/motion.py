@@ -153,6 +153,7 @@ def count_to(
     start: float = 0.0,
     duration_ms: int = Duration.STANDARD,
     formatter: Callable[[float], str] = format_count,
+    use_markup: bool = False,
 ) -> None:
     """Counts a label from `start` to `target`.
 
@@ -160,10 +161,19 @@ def count_to(
     Requires the label to be using tabular figures — otherwise the
     label's width changes on nearly every frame and the whole row
     jitters. The `.numeric` class in `style.css` is what supplies them.
+
+    `use_markup` routes each frame through `set_markup` instead of
+    `set_text` — for a formatter that wraps its output in a `<span>`,
+    such as `branding.stat_value_markup`. `formatter` is trusted to
+    have already escaped anything that needs it; this function does not.
     """
     span = target - start
 
     def frame(progress: float) -> None:
-        label.set_text(formatter(start + span * progress))
+        text = formatter(start + span * progress)
+        if use_markup:
+            label.set_markup(text)
+        else:
+            label.set_text(text)
 
     animate(label, duration_ms, frame)

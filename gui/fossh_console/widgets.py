@@ -11,6 +11,7 @@ import math
 
 from gi.repository import Gdk, Gtk
 
+from .branding import stat_value_markup
 from .motion import Duration, animate, count_to, format_count
 
 def _accent_rgba(widget: Gtk.Widget) -> Gdk.RGBA:
@@ -139,9 +140,10 @@ class StatTile(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.add_css_class("stat-card")
 
-        self._value_label = Gtk.Label(label="0", xalign=0)
+        self._value_label = Gtk.Label(xalign=0)
         self._value_label.add_css_class("stat-value")
         self._value_label.add_css_class("numeric")
+        self._value_label.set_markup(stat_value_markup("0"))
 
         caption = Gtk.Label(label=label, xalign=0)
         caption.add_css_class("stat-label")
@@ -159,14 +161,20 @@ class StatTile(Gtk.Box):
 
     def set_value(self, value: float, *, animated: bool = True) -> None:
         if animated:
-            count_to(self._value_label, value, start=self._current)
+            count_to(
+                self._value_label,
+                value,
+                start=self._current,
+                formatter=lambda v: stat_value_markup(format_count(v)),
+                use_markup=True,
+            )
         else:
-            self._value_label.set_text(format_count(value))
+            self._value_label.set_markup(stat_value_markup(format_count(value)))
         self._current = value
 
     def set_text_value(self, text: str) -> None:
         """For a figure that is not a number — a state word, a dash."""
-        self._value_label.set_text(text)
+        self._value_label.set_markup(stat_value_markup(text))
         self._current = 0.0
 
     def set_series(self, values: list[float]) -> None:

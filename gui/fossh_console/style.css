@@ -29,7 +29,14 @@
  * fallbacks rather than assumed: `branding.py` checks what is really
  * installed through Pango's font map, and a family named here that
  * does not exist would otherwise be silently substituted by
- * fontconfig into whatever it guessed. */
+ * fontconfig into whatever it guessed.
+ *
+ * This is the fallback stack, and the one `.wordmark` and `.stat-value`
+ * actually get when Bitcount is not installed. When it is, both are
+ * overridden per-run to `display_family()`'s result by Pango markup
+ * (`branding.py`'s `wordmark_markup` / `stat_value_markup`) — a `face`
+ * attribute wins over this rule, which CSS alone cannot express, so
+ * this file only ever sees the font that change did not choose. */
 
 window,
 .wordmark,
