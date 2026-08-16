@@ -33,7 +33,7 @@ WITNESS_NUM_PREDICT = 1100
 
 VISION_MAX_EDGE = (1280, 720)
 
-LOCK_PATH = Path(os.environ.get("FOSSH_RUNTIME_DIR", "/run/fossh")) / "advisor.model.lock"
+LOCK_PATH = Path(os.environ.get("FOSSH_RUNTIME_DIR", "/run/fossh-selfheal")) / "advisor.model.lock"
 LOCK_FALLBACK = Path.home() / ".cache" / "fossh" / "advisor.model.lock"
 
 ADVISOR_LOCK_WAIT_SECONDS = 2.0

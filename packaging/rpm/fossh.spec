@@ -306,12 +306,19 @@ BuildArch:      noarch
 Requires:       %{name} = %{version}-%{release}
 Requires:       httpd
 Requires:       gnupg2
+Requires(pre):  shadow-utils
 # Deliberately NOT `Requires: ollama`: Ollama is not packaged for
 # Fedora or EPEL, so naming it would make this subpackage
 # uninstallable from any repository it is shipped in. The endpoint is
 # probed at runtime and its absence is an ordinary, reported state —
 # see %%description.
 Suggests:       vulkan-loader
+
+# Same Fedora Users-and-Groups requirement as the base package's own
+# Provides above, for the group this subpackage's %%pre creates. A
+# human admin joins it to reach /run/fossh-selfheal; see
+# packaging/systemd/fossh-selfheal.tmpfiles.conf.
+Provides:       group(fossh-selfheal)
 
 %description selfheal
 foSSH's self-healing runs deterministic rules over the real state of an
@@ -440,6 +447,7 @@ install -D -m0644 packaging/systemd/fossh-fcgiwrap.socket %{buildroot}%{_unitdir
 install -D -m0644 packaging/systemd/fossh-fcgiwrap.service %{buildroot}%{_unitdir}/fossh-fcgiwrap.service
 install -D -m0644 packaging/systemd/fossh-fcgi.service %{buildroot}%{_unitdir}/fossh-fcgi.service
 install -D -m0644 packaging/systemd/fossh.tmpfiles.conf %{buildroot}%{_tmpfilesdir}/fossh.conf
+install -D -m0644 packaging/systemd/fossh-selfheal.tmpfiles.conf %{buildroot}%{_tmpfilesdir}/fossh-selfheal.conf
 
 install -D -m0644 packaging/selinux/fossh.pp %{buildroot}%{_datadir}/selinux/packages/fossh/fossh.pp
 
@@ -543,6 +551,13 @@ install -D -m0644 packaging/apache/fossh-model.conf \
 install -d -m0750 %{buildroot}%{_sysconfdir}/fossh-model
 install -D -m0644 packaging/model/Modelfile \
     %{buildroot}%{_datadir}/%{name}/model/Modelfile
+install -D -m0644 packaging/model/Modelfile.witness \
+    %{buildroot}%{_datadir}/%{name}/model/Modelfile.witness
+# advisor_client.py's _forbidden_terms() reads this from
+# /usr/share/fossh/model at runtime -- every scrub() call fails
+# without it, not just Hellen's Eye's own vision-side checks.
+install -D -m0644 packaging/model/forbidden-terms.json \
+    %{buildroot}%{_datadir}/%{name}/model/forbidden-terms.json
 
 
 %pre
@@ -561,6 +576,15 @@ getent group fossh-watchdog >/dev/null || groupadd -r fossh-watchdog
 getent passwd fossh-watchdog >/dev/null || useradd -r -g fossh-watchdog -d %{_sharedstatedir}/fossh-watchdog -s /sbin/nologin -c "foSSH watchdog" fossh-watchdog
 exit 0
 %endif
+
+%pre selfheal
+# No matching account: this group exists so a human running the
+# console can join it (`usermod -a -G fossh-selfheal $USER`), not for
+# a service identity of its own. fossh-svc reaches
+# /run/fossh-selfheal as the directory's owner already; see
+# packaging/systemd/fossh-selfheal.tmpfiles.conf.
+getent group fossh-selfheal >/dev/null || groupadd -r fossh-selfheal
+exit 0
 
 %post
 # /run/fossh{,/salt} (packaging/systemd/fossh.tmpfiles.conf) are
@@ -649,6 +673,10 @@ chmod 0750 %{_sysconfdir}/fossh-model
 chmod 0640 %{_sysconfdir}/fossh-model/model-access-secret
 # So the agent, which runs as fossh-svc, can read the same file Apache does.
 usermod -a -G apache fossh-svc >/dev/null 2>&1 || :
+# Same reasoning as the base package's own %%post: materialize now
+# rather than waiting for the next real reboot, so `dnf install` alone
+# leaves a working /run/fossh-selfheal behind it.
+systemd-tmpfiles --create %{_tmpfilesdir}/fossh-selfheal.conf >/dev/null 2>&1 || :
 
 %preun
 %systemd_preun fossh-fcgiwrap.socket fossh-fcgiwrap.service
@@ -740,6 +768,9 @@ fi
 %dir %{_datadir}/%{name}
 %dir %{_datadir}/%{name}/model
 %{_datadir}/%{name}/model/Modelfile
+%{_datadir}/%{name}/model/Modelfile.witness
+%{_datadir}/%{name}/model/forbidden-terms.json
+%{_tmpfilesdir}/fossh-selfheal.conf
 
 
 %changelog

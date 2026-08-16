@@ -120,6 +120,22 @@ The subpackage:
 sudo dnf install fossh-selfheal
 ```
 
+The subpackage's `%pre` creates a `fossh-selfheal` group, and the
+scheduled tick (running as `fossh-svc`) reaches its runtime directory
+as that directory's owner already — but a human running the console is
+neither, and needs to join the group to hold the same exclusivity lock
+the scheduled tick does:
+
+```
+sudo usermod -a -G fossh-selfheal $USER
+```
+
+Log out and back in for the new group membership to take effect —
+`usermod` does not change a session already in progress. Skipping this
+step does not break anything visibly: the console silently falls back
+to a lock that excludes nothing the scheduled tick's own lock does,
+and Hellen's Eye never actually runs.
+
 Ollama is **not** packaged for Fedora or EPEL and is deliberately not a
 dependency — naming an unavailable package would make the subpackage
 uninstallable. Install it yourself from
@@ -144,11 +160,17 @@ The rule that the model must never propose a fix is a security property
 of this subsystem. Baked into the model as a `SYSTEM` message, it
 survives a caller that forgets to send it; sent per request, it does
 not. The same Modelfile carries a worked example of the shape a good
-answer takes, a hard cap on reply length, sampling parameters chosen
-for "restate a known fact accurately" rather than for open-ended chat,
-a thread count matching the reservation described above, and a stop
-sequence that drops the model's own reasoning trace before it can reach
-an operator's screen.
+answer takes, a token budget sized for this model's own reasoning
+trace rather than just its reply, and sampling parameters chosen for
+"restate a known fact accurately" rather than for open-ended chat.
+
+The reasoning trace itself never reaches an operator's screen, but not
+because generation is cut short at it — an earlier version tried that
+with a stop sequence, which halts generation at the reasoning/reply
+boundary and produces no reply at all, measured on every single test
+call. Ollama's chat API separates `message.thinking` from
+`message.content` on its own for a model with this capability; the
+console only ever reads the latter.
 
 It is versioned alongside foSSH for the same reason: an install running
 0.0.2.1 against a tag built from an older Modelfile would differ in
