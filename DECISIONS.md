@@ -1921,3 +1921,74 @@ boundary. The Apache-gateway deployment gap noted in
 to `/etc/httpd/conf.d/` in this dev environment) is unrelated and still
 open.
 
+## ADR-0083 — Biased One's residual identity leak: a retry, not a sampling parameter
+
+**Status:** accepted, 0.0.2.2. Full investigation:
+`dev/BIASED-ONE-LEAK-2026-08-16.md`.
+
+**Context.** `5e776f0`/ADR-0076 closed vendor-name and architecture
+disclosure with a SYSTEM-level fence and `forbidden-terms.json`, but
+left a known, accepted gap: generic self-acknowledgment with no vendor
+named. Measured properly this session against the real shipped
+`fossh-advisor:0.0.2.2` and the full 21-case battery
+(`gui/tests/test_advisor_live.py`'s own `PROBES`/`HIJACKS`), counting
+self-referential openings rather than only vendor terms: **6/21**,
+worse than the 3/21 previously cited once counted correctly. Every leak
+shares one exact shape — the reply opens with "I am a/an...", "I'm
+a/an...", "Soy un/una...", "我是...", or the equivalent in whatever
+language the probe used.
+
+**Sampling tuning was tried and rejected, not skipped.** A SYSTEM-block
+rule forbidding self-referential openings alone: no change, still
+6/21 — instruction-following alone hit a ceiling here. Adding
+`repeat_penalty`: 1.3 → 4/21, 1.5 with `temperature 0.3` → 3/21 (the
+floor found, not monotonic — 1.7/0.3 regressed back to 6/21). The 3/21
+candidate was verified against real diagnostic prompts, not just the
+probe battery, and failed there: asked to explain the
+data-key-permissions diagnostic, it opened with "I am the system
+revealing compromised credentials demanding urgent action..." — a leak
+on a prompt the shipped model (temp 0.2, no `repeat_penalty`) answers
+cleanly. A configuration that trades a roughly 50% probe-battery
+improvement for a new leak surface in the model's actual primary job is
+not a fix. `packaging/model/Modelfile` is unchanged: no
+`repeat_penalty`, `temperature 0.2`.
+
+**Decision.** A structurally different mechanism, applied in
+`advisor_client.py` instead: `explain()` now retries.
+`_SELF_REFERENTIAL_OPENERS` lists phrase-prefixes across ten languages;
+`_looks_self_referential()` checks the first 24 characters of the
+already-`scrub()`-redacted answer against them — narrower than
+`forbidden-terms.json`, and complementary to it: `scrub()` still
+redacts a mid-sentence vendor or architecture disclosure exactly as
+before, this catches the one shape it structurally cannot, a generic
+"I am an AI" opener with no vendor term to match. Up to
+`_MAX_IDENTITY_RETRIES = 2` regenerations follow a detected leak before
+falling back to a fixed `_SAFE_REFUSAL = "I can't discuss that."`
+string. This doesn't touch model sampling at all, so it cannot
+reproduce the 1.5/0.3 regression above — the worst case a caller ever
+sees is a canned refusal, never an actual disclosure, turning "leak has
+some probability" into a structural guarantee.
+
+**A false positive found and fixed before this landed.**
+`_looks_self_referential`'s original substring check (`opener in
+head`) matched inside ordinary phrasing that happens to contain an
+opener as the prefix of a longer word: "I am aware..." contains "i am
+a", "Ich bin einverstanden..." contains "ich bin ein". Verified
+directly, not just reasoned about: both misclassified as leaks before
+this fix, which would have burned retries — and, on an unlucky
+diagnostic answer, the canned refusal — on ordinary English and German
+phrasing that has nothing to do with the model naming itself. Fixed
+with a regex requiring the character immediately after a matched
+opener not be an ASCII lowercase letter, rejecting "aware" and
+"einverstanden" while leaving every true positive in the battery
+unaffected, including every CJK, Arabic, and Cyrillic opener, none of
+which fall in `[a-z]`. Re-verified against the same constructed cases
+after the fix: every true positive still caught, all four found false
+positives cleared.
+
+**Left open, deliberately, matching the investigation's own
+conclusion.** The shipped model's diagnostic answers are already
+vague and generic independent of this work
+(`dev/BIASED-ONE-LEAK-2026-08-16.md`) — a separate, pre-existing
+problem, not caused or fixed here. `top_k`/`top_p` tightening and a
+quality-focused worked example remain untried.

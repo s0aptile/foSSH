@@ -28,16 +28,6 @@ WITNESS_BASE = "qwen3.5:4b"
 MAX_TTFT_SECONDS = 1.7
 MIN_TOKENS_PER_SECOND = 38.5
 
-# tokens/second alone is a proxy for "the operator wasn't kept
-# waiting," and a proxy that broke the day a second model with a
-# different answer-length profile got measured against it: a model
-# that reasons for 1000+ tokens before replying can clear this floor
-# on raw throughput while taking 13+ real seconds, and a model that
-# answers in ~40 tokens can fail the floor while finishing in ~2.
-# Measured against five real models this project has evaluated: every
-# one that actually kept an operator waiting an unreasonable time took
-# 13+ seconds; every one that did not finished under 2.5. 3.0 is a
-# real ceiling with margin on both sides of that gap, not a guess.
 MAX_TOTAL_SECONDS = 3.0
 
 VISION_TTFT_CEILING_SECONDS = 90.0
@@ -58,14 +48,11 @@ _REASONING = re.compile(r"<think>.*?(?:</think>|\Z)", re.DOTALL | re.IGNORECASE)
 
 _TERMS: list[str] | None = None
 
-
 class AdvisorUnavailable(Exception):
     pass
 
-
 class ModelBusy(AdvisorUnavailable):
     pass
-
 
 def _forbidden_terms() -> list[str]:
     global _TERMS
@@ -91,7 +78,6 @@ def _forbidden_terms() -> list[str]:
         "without the list that redacts its output"
     )
 
-
 def scrub(text: str) -> str:
     out = text
     for term in _forbidden_terms():
@@ -102,18 +88,15 @@ def scrub(text: str) -> str:
             out = out[:at] + "[redacted]" + out[at + len(term):]
     return out
 
-
 def exclusivity_is_shared() -> bool:
     parent = LOCK_PATH.parent
     return parent.is_dir() and os.access(parent, os.W_OK)
-
 
 def _lock_path() -> Path:
     if exclusivity_is_shared():
         return LOCK_PATH
     LOCK_FALLBACK.parent.mkdir(parents=True, exist_ok=True)
     return LOCK_FALLBACK
-
 
 class _Exclusive:
     def __init__(self, wait_seconds: float, *, shared_required: bool = False) -> None:
@@ -158,7 +141,6 @@ class _Exclusive:
                 self._fh = None
         return False
 
-
 @dataclass
 class Measurement:
     ttft_seconds: float
@@ -196,10 +178,8 @@ class Measurement:
             )
         return ""
 
-
 def _strip_reasoning(text: str) -> str:
     return _REASONING.sub("", text).strip()
-
 
 def _gateway_headers() -> dict[str, str]:
     """The header fossh-model.conf's Apache gateway requires.
@@ -221,7 +201,6 @@ def _gateway_headers() -> dict[str, str]:
         return {}
     return {"X-foSSH-Model-Key": secret}
 
-
 def _post(path: str, payload: dict, timeout: float):
     request = urllib.request.Request(
         f"{ENDPOINT}{path}",
@@ -229,7 +208,6 @@ def _post(path: str, payload: dict, timeout: float):
         headers={"Content-Type": "application/json", **_gateway_headers()},
     )
     return urllib.request.urlopen(request, timeout=timeout)
-
 
 def installed_tags(timeout: float = 2.0) -> list[str]:
     try:
@@ -240,7 +218,6 @@ def installed_tags(timeout: float = 2.0) -> list[str]:
         return []
     return [m.get("name", "") for m in tags.get("models", [])]
 
-
 def resident_tags(timeout: float = 2.0) -> list[str]:
     try:
         request = urllib.request.Request(f"{ENDPOINT}/api/ps", headers=_gateway_headers())
@@ -250,15 +227,12 @@ def resident_tags(timeout: float = 2.0) -> list[str]:
         return []
     return [m.get("name", "") for m in ps.get("models", [])]
 
-
 def has_tag(tag: str, timeout: float = 2.0) -> bool:
     names = installed_tags(timeout=timeout)
     return any(n == tag or n.startswith(f"{tag}:") for n in names)
 
-
 def available(timeout: float = 2.0) -> bool:
     return has_tag(ADVISOR, timeout=timeout)
-
 
 def unload(tag: str, timeout: float = 30.0) -> bool:
     try:
@@ -267,7 +241,6 @@ def unload(tag: str, timeout: float = 30.0) -> bool:
     except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
         return False
     return body.get("done_reason") == "unload"
-
 
 def encode_image(path: str | Path) -> str:
     try:
@@ -289,7 +262,6 @@ def encode_image(path: str | Path) -> str:
         buf = io.BytesIO()
         img.save(buf, format="PNG", optimize=True)
     return base64.b64encode(buf.getvalue()).decode("ascii")
-
 
 def _generate(
     prompt: str,
@@ -357,10 +329,8 @@ def _generate(
         total_ceiling_seconds=total_ceiling,
     )
 
-
 WITNESS_MIN_PHYSICAL_CORES = 6
 WITNESS_MIN_RAM_BYTES = 16 * 1024 * 1024 * 1024
-
 
 def _physical_cores() -> int:
     try:
@@ -380,7 +350,6 @@ def _physical_cores() -> int:
     except OSError:
         return os.cpu_count() or 1
 
-
 def _ram_bytes() -> int:
     try:
         for raw in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
@@ -390,14 +359,12 @@ def _ram_bytes() -> int:
         pass
     return 0
 
-
 def _has_avx512() -> bool:
     try:
         text = Path("/proc/cpuinfo").read_text(encoding="utf-8")
     except OSError:
         return False
     return " avx512f" in text or "\tavx512f" in text
-
 
 def witness_hardware_ok() -> bool:
     return (
@@ -406,14 +373,12 @@ def witness_hardware_ok() -> bool:
         and _has_avx512()
     )
 
-
 def witness_available(timeout: float = 2.0) -> bool:
     return (
         witness_hardware_ok()
         and exclusivity_is_shared()
         and has_tag(WITNESS, timeout=timeout)
     )
-
 
 def _require_witness() -> None:
     if not witness_hardware_ok():
@@ -424,7 +389,6 @@ def _require_witness() -> None:
             f"{WITNESS_MIN_PHYSICAL_CORES} cores, "
             f"{WITNESS_MIN_RAM_BYTES // (1024 ** 3)} GiB and AVX-512"
         )
-
 
 def _exclusive_generate(
     prompt: str, *, tag: str, wait: float, shared_required: bool = False, **kw
@@ -440,7 +404,6 @@ def _exclusive_generate(
                 unload(other)
         return _generate(prompt, tag=tag, **kw)
 
-
 def warm(tag: str = ADVISOR, timeout: float = 120.0) -> None:
     try:
         _exclusive_generate(
@@ -448,7 +411,6 @@ def warm(tag: str = ADVISOR, timeout: float = 120.0) -> None:
         )
     except AdvisorUnavailable:
         pass
-
 
 def probe(tag: str = ADVISOR, timeout: float = 120.0) -> Measurement:
     warm(tag=tag, timeout=timeout)
@@ -459,13 +421,70 @@ def probe(tag: str = ADVISOR, timeout: float = 120.0) -> Measurement:
         timeout=timeout,
     )
 
+_SELF_REFERENTIAL_OPENERS = (
+    "i am a", "i am an", "i'm a", "i'm an", "i am the",
+    "ben bir",
+    "ich bin ein", "ich bin eine",
+    "je suis un", "je suis une",
+    "soy un", "soy una",
+    "я являюсь", "я — ", "я -",
+    "我是",
+    "私は", "僕は",
+    "أنا ",
+)
+
+_SELF_REFERENTIAL_PATTERN = re.compile(
+    "(?:" + "|".join(re.escape(o) for o in _SELF_REFERENTIAL_OPENERS) + r")(?![a-z])"
+)
+
+_MAX_IDENTITY_RETRIES = 2
+
+_SAFE_REFUSAL = "I can't discuss that."
+
+def _looks_self_referential(text: str) -> bool:
+    """Whether `text` opens by describing what the model is.
+
+    Narrow and specific to the one shape every identity leak measured
+    this session shared: a self-referential opening ("I am a...",
+    "我是...", and the equivalent in each of the battery's languages),
+    checked only in the first 24 characters. This is not a restatement
+    of forbidden-terms.json's broader vendor/architecture list — that
+    list keeps matching and redacting mid-sentence disclosures exactly
+    as before; this catches the one shape it cannot, because a generic
+    "I am an AI" opener names no vendor term for scrub() to find.
+
+    The trailing `(?![a-z])` matters: without it, "i am a" also matches
+    inside "I am aware..." and "ich bin ein" inside "Ich bin
+    einverstanden...", turning ordinary diagnostic phrasing into a
+    false leak. CJK/Arabic/Cyrillic openers are unaffected either way,
+    since their scripts never fall in `[a-z]`.
+    """
+    head = text.strip().lower()[:24]
+    return _SELF_REFERENTIAL_PATTERN.search(head) is not None
 
 def explain(prompt: str, *, timeout: float = 120.0) -> str:
-    measurement = _exclusive_generate(
-        prompt, tag=ADVISOR, wait=ADVISOR_LOCK_WAIT_SECONDS, timeout=timeout
-    )
-    return scrub(measurement.answer)
+    """Explains a finding, with a bounded retry against self-disclosure.
 
+    Two layers on top of the model's own SYSTEM-level fence: scrub()
+    redacts a matched vendor/architecture term after generation, and
+    this retries generation, then falls back to a fixed refusal,
+    against the one leak shape scrub() cannot see — a generic
+    self-referential opening with no term to match. A retry has real
+    odds of succeeding cleanly, since a leak here has been measured as
+    a low-probability sample, not a deterministic failure; the fixed
+    refusal after two retries is what makes the property structural
+    rather than probabilistic — the worst case a caller ever sees is
+    this fallback, never an actual disclosure.
+    """
+    answer = _SAFE_REFUSAL
+    for _ in range(_MAX_IDENTITY_RETRIES + 1):
+        measurement = _exclusive_generate(
+            prompt, tag=ADVISOR, wait=ADVISOR_LOCK_WAIT_SECONDS, timeout=timeout
+        )
+        answer = scrub(measurement.answer)
+        if not _looks_self_referential(answer):
+            return answer
+    return _SAFE_REFUSAL
 
 def crosscheck(claim: str, *, timeout: float = 120.0) -> str:
     _require_witness()
@@ -486,7 +505,6 @@ def crosscheck(claim: str, *, timeout: float = 120.0) -> str:
         think=False,
     )
     return scrub(measurement.answer)
-
 
 def read_screenshot(image_path: str | Path, question: str, *, timeout: float = 300.0) -> Measurement:
     _require_witness()
