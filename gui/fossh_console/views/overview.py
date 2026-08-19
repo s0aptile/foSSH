@@ -9,8 +9,9 @@ gets asked.
 
 from __future__ import annotations
 
-from gi.repository import Adw, GLib, Gtk
+from gi.repository import Adw, Gio, GLib, Gtk
 
+from .. import advisor_client as ac
 from ..advisor_bridge import AdvisorBridge
 from ..agent import AgentError
 from ..iconography import symbolic_name
@@ -118,6 +119,8 @@ class OverviewView(Gtk.Box):
         self._findings_section.append(self._findings_list)
         outer.append(self._findings_section)
 
+        outer.append(self._build_vision_section())
+
         sites_section = section("Sites")
         self._site_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         self._site_list.add_css_class("boxed-list")
@@ -126,7 +129,132 @@ class OverviewView(Gtk.Box):
 
         return scroller
 
+    def _build_vision_section(self) -> Gtk.Widget:
+        section_box = section(
+            "Diagnose a screenshot",
+            "Optional. Reads one image you choose — never automatic, never scheduled.",
+        )
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        card.add_css_class("card-surface")
+
+        self._vision_busy = False
+        self._vision_question = Gtk.Entry(
+            placeholder_text="What does this screenshot show?", hexpand=True
+        )
+        self._vision_button = Gtk.Button(label="Choose image…")
+        self._vision_button.connect("clicked", self._on_choose_screenshot)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.append(self._vision_question)
+        row.append(self._vision_button)
+        card.append(row)
+
+        self._vision_spinner = Adw.Spinner(width_request=20, height_request=20)
+        self._vision_spinner.set_halign(Gtk.Align.START)
+        self._vision_spinner.set_visible(False)
+        card.append(self._vision_spinner)
+
+        self._vision_status = Gtk.Label(xalign=0, wrap=True)
+        self._vision_status.add_css_class("caption")
+        self._vision_status.set_visible(False)
+        card.append(self._vision_status)
+
+        self._vision_answer = Gtk.Label(xalign=0, wrap=True, selectable=True)
+        self._vision_answer.set_visible(False)
+        card.append(self._vision_answer)
+
+        section_box.append(card)
+        self._update_vision_availability()
+        return section_box
+
+    def _update_vision_availability(self) -> None:
+        if not ac.witness_hardware_ok():
+            self._vision_button.set_sensitive(False)
+            self._set_vision_status(
+                "This machine does not meet the hardware floor for the vision model.",
+                error=True,
+            )
+        elif not ac.has_tag(ac.WITNESS):
+            self._vision_button.set_sensitive(False)
+            self._set_vision_status(
+                f"Not installed: {ac.WITNESS} has not been built on this machine.",
+                error=True,
+            )
+        else:
+            self._vision_button.set_sensitive(True)
+            self._vision_status.set_visible(False)
+
+    def _set_vision_status(self, text: str, *, error: bool = False) -> None:
+        self._vision_status.set_text(text)
+        self._vision_status.set_visible(bool(text))
+        if error:
+            self._vision_status.add_css_class("error")
+        else:
+            self._vision_status.remove_css_class("error")
+
+    def _on_choose_screenshot(self, _button: Gtk.Button) -> None:
+        dialog = Gtk.FileDialog(title="Choose a screenshot")
+        image_filter = Gtk.FileFilter()
+        image_filter.set_name("Images")
+        image_filter.add_mime_type("image/png")
+        image_filter.add_mime_type("image/jpeg")
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(image_filter)
+        dialog.set_filters(filters)
+        dialog.open(self.get_root(), None, self._on_screenshot_chosen)
+
+    def _on_screenshot_chosen(self, dialog: Gtk.FileDialog, result) -> None:
+        try:
+            gfile = dialog.open_finish(result)
+        except GLib.Error:
+            return
+        if gfile is None:
+            return
+        path = gfile.get_path()
+        if not path:
+            return
+        question = self._vision_question.get_text().strip() or "What does this screenshot show?"
+        self._start_vision_request(path, question)
+
+    def _start_vision_request(self, path: str, question: str) -> None:
+        self._vision_busy = True
+        self._vision_button.set_sensitive(False)
+        self._vision_question.set_sensitive(False)
+        self._vision_spinner.set_visible(True)
+        self._vision_answer.set_visible(False)
+        self._set_vision_status("Reading the screenshot — this can take up to 90 seconds.")
+
+        def _ok(answer: str) -> None:
+            self._vision_busy = False
+            self._vision_spinner.set_visible(False)
+            self._vision_question.set_sensitive(True)
+            self._update_vision_availability()
+            if answer.strip():
+                self._vision_answer.set_text(answer)
+                self._vision_answer.set_visible(True)
+                self._vision_status.set_visible(False)
+            else:
+                self._set_vision_status("The model produced no answer.", error=True)
+
+        def _err(exc: Exception) -> None:
+            self._vision_busy = False
+            self._vision_spinner.set_visible(False)
+            self._vision_question.set_sensitive(True)
+            self._vision_answer.set_visible(False)
+            self._update_vision_availability()
+            if isinstance(exc, ac.ModelBusy):
+                message = "The advisor is already busy with another request — try again shortly."
+            elif isinstance(exc, ac.AdvisorUnavailable):
+                message = str(exc)
+            else:
+                message = f"Could not read the screenshot: {exc}"
+            self._set_vision_status(message, error=True)
+
+        self._advisor.read_screenshot_async(path, question, on_ok=_ok, on_err=_err)
+
     def refresh(self) -> None:
+        if not self._vision_busy:
+            self._update_vision_availability()
         if not self._loaded_once:
             self._stack.set_visible_child_name("loading")
         self._agent.call(

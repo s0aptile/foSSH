@@ -81,6 +81,26 @@ class AdvisorBridge:
         self._ensure_started()
         self._queue.put(_Job("warm", None, None, None))
 
+    def read_screenshot_async(
+        self,
+        image_path: str,
+        question: str,
+        *,
+        on_ok: Callable[[str], None] | None = None,
+        on_err: Callable[[Exception], None] | None = None,
+    ) -> None:
+        """Queues `advisor_client.read_screenshot(image_path, question)`.
+
+        Up to a 90-second ceiling, per that function's own gate — this
+        is the one call through this bridge a caller should expect to
+        wait a real, visible while for, not the sub-second path
+        `explain_async` usually is.
+        """
+        if self._stopping.is_set():
+            return
+        self._ensure_started()
+        self._queue.put(_Job("screenshot", (image_path, question), on_ok, on_err))
+
     def _worker(self) -> None:
         while True:
             job = self._queue.get()
@@ -90,7 +110,11 @@ class AdvisorBridge:
                 if job.kind == "warm":
                     ac.warm()
                     continue
-                result = ac.explain(job.arg)
+                if job.kind == "screenshot":
+                    image_path, question = job.arg
+                    result = ac.read_screenshot(image_path, question).answer
+                else:
+                    result = ac.explain(job.arg)
             except Exception as exc:  # noqa: BLE001 - reported through on_err, never raised on this thread
                 if job.on_err:
                     GLib.idle_add(job.on_err, exc)
