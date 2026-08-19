@@ -1992,3 +1992,35 @@ vague and generic independent of this work
 (`dev/BIASED-ONE-LEAK-2026-08-16.md`) — a separate, pre-existing
 problem, not caused or fixed here. `top_k`/`top_p` tightening and a
 quality-focused worked example remain untried.
+
+## ADR-0084 — `advisor.rs::DEFAULT_ENDPOINT`: the port `5ab4647` missed, because nothing calls it
+
+**Status:** accepted, 0.0.2.2.
+
+**Context.** An independent review of `5ab4647` (which fixed the
+stale `11434` baked into `fossh.spec`'s generated manifest) found one
+more instance: `crates/fossh-selfheal/src/advisor.rs` still declared
+`pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:11434"`, dating
+to the crate's original commit, `e6db4ee`.
+
+**Checked before touching it, not assumed.**
+`grep -rn "DEFAULT_ENDPOINT" --include="*.rs" .` outside `target/`
+returns exactly one line: the declaration itself. `lib.rs` re-exports
+`Availability` and `MODEL` from `advisor.rs`; `DEFAULT_ENDPOINT` is
+not among them. The real endpoint has never come from this constant —
+it comes from `keylock::ModelConfig.endpoint`, parsed out of the
+clearsigned manifest `%post` writes (the same manifest ADR-0082 fixed
+to `11435`), and separately, on the Python side, from
+`advisor_client.py`'s own constant, fixed in `3f27139`. Nothing in
+either language ever read `DEFAULT_ENDPOINT`.
+
+**Decision.** Deleted, not fixed to `11435`. A value nobody reads
+can't cause a bug today, but it can cause the next one: sitting at the
+top of the file next to `MODEL`, it reads like a real default, and
+whoever eventually wires a fallback path through it would inherit the
+wrong port by trusting a name instead of checking, the same failure
+mode `5ab4647` and `3f27139` both closed elsewhere. Dead code carrying
+a stale value is worse than no code, so it goes.
+
+**Verified.** `cargo test -p fossh-selfheal`: 90 passed, 0 failed —
+same count as before the deletion.

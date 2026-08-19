@@ -5,8 +5,6 @@ pub const BASE_MODEL: &str = "lfm2.5-thinking";
 
 pub const MODEL: &str = "fossh-advisor:0.0.2.2";
 
-pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:11434";
-
 pub const MIN_TOKENS_PER_SECOND: f64 = 38.5;
 
 pub const MAX_TTFT_SECONDS: f64 = 1.7;
