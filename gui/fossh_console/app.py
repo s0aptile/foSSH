@@ -24,13 +24,6 @@ from .window import ConsoleWindow
 
 APP_ID = "org.fossh.Console"
 
-# Periodic self-heal tick: a re-check is cheap (the rules are the whole
-# feature and always run) and this is also what keeps the advisory
-# model warm during a session that's actually being used. Ollama's own
-# `keep_alive` (advisor_client.KEEP_ALIVE, 30m) is what lets it go idle
-# again on its own once ticks stop reaching it -- this timer does not
-# reimplement that decision, it just needs to fire often enough for
-# 30m keep_alive to mean something during a session someone is using.
 SELFHEAL_TICK_SECONDS = 900
 
 class ConsoleApplication(Adw.Application):
@@ -85,8 +78,18 @@ class ConsoleApplication(Adw.Application):
             return
 
         self._agent.handshake(
-            on_ok=lambda _info: self._window.refresh_all(),
+            on_ok=self._on_handshake_ok,
             on_err=self._window.report_startup_failure,
+        )
+
+    def _on_handshake_ok(self, _info: dict) -> None:
+        assert self._window is not None and self._agent is not None
+        self._window.refresh_all()
+
+        self._agent.call(
+            "selfheal.model_config",
+            on_ok=lambda _result: None,
+            on_err=lambda error: self._advisor.disable(str(error)),
         )
 
     def restart_agent(self) -> None:

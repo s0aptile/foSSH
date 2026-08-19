@@ -230,14 +230,25 @@ bytes verbatim, so a secret written with `echo` would compare as
 `"abc\n"` against a header of `"abc"` and deny every request forever
 while the configuration read as correct.
 
-Separately, this package also ships the machinery for an
-OpenPGP-clearsigned configuration manifest (`keylock.rs`) that would
-let the advisory layer refuse to run against an edited endpoint, a
-swapped model, or a thread count raised until the box is saturated.
-**That machinery is not currently called from anywhere either** — same
-shape of gap as the one above, not yet closed. Nothing in this install
-verifies the manifest today; the hardware and latency gates described
-above are the only checks actually enforced before the model runs.
+Separately, this package ships an OpenPGP-clearsigned configuration
+manifest (`keylock.rs`) that lets the advisory layer refuse to run
+against an edited endpoint, a swapped model, or a thread count raised
+until the box is saturated. `%post selfheal` generates an
+install-local signing key once (never leaves the machine, used for
+nothing else) and clearsigns the real values `advisor_client.py`
+actually runs with — a manifest asserting anything else would just be
+a second, competing claim about the truth, not a check on it.
+
+The console checks this once, at startup, through `fossh-agent`'s
+`selfheal.model_config` — not from `advisor_client.py` itself, which
+is plain, unsigned Python and exactly as editable as whatever it would
+be checking. A missing manifest (`"configured": false`, the ordinary
+state on any install from before this existed) changes nothing; a
+manifest that fails to verify switches the advisory layer off for the
+rest of that session, with the reason shown, and does not touch the
+deterministic rules. Verified against a real generated key and a real
+tampered manifest, through the compiled `fossh-agent` binary, not just
+the parsing logic in isolation.
 
 ## Turning it off
 

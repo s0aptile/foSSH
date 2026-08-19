@@ -692,6 +692,43 @@ usermod -a -G fossh-selfheal fossh-svc >/dev/null 2>&1 || :
 # leaves a working /run/fossh-selfheal behind it.
 systemd-tmpfiles --create %{_tmpfilesdir}/fossh-selfheal.conf >/dev/null 2>&1 || :
 
+# The clearsigned config manifest crates/fossh-selfheal/src/keylock.rs
+# has carried since early in this project and nothing ever generated:
+# confirmed this session, `keylock::verify` had no manifest to check
+# and no caller either. Generated once, same idempotent shape as the
+# secret above -- an install-local signing key, used for nothing but
+# this, so a tampered endpoint/model/thread-count can be told apart
+# from the value this install actually shipped with. Not a network
+# protocol and not meant to be: the threat is local edits to the
+# machine's own config, not anyone in transit.
+GNUPGHOME=%{_sysconfdir}/fossh-model/gnupghome
+if [ ! -s %{_sysconfdir}/fossh-model/model-config-fingerprint ]; then
+    install -d -m0700 "$GNUPGHOME"
+    GNUPGHOME="$GNUPGHOME" gpg --batch --passphrase '' --quick-gen-key \
+        "foSSH model config (%{name}, this install only)" default default never \
+        >/dev/null 2>&1 || :
+    FPR=$(GNUPGHOME="$GNUPGHOME" gpg --batch --with-colons --list-secret-keys 2>/dev/null \
+        | awk -F: '/^fpr:/ {print $10; exit}')
+    if [ -n "$FPR" ]; then
+        umask 077
+        printf '%%s' "$FPR" > %{_sysconfdir}/fossh-model/model-config-fingerprint
+        # Real values, not placeholders: what advisor_client.py actually
+        # uses (ENDPOINT, ADVISOR, NUM_THREAD) -- a manifest asserting
+        # anything else would just be a second, competing lie.
+        printf 'endpoint=http://127.0.0.1:11435\nmodel=fossh-advisor:%{version}\nthreads=4\n' \
+            | GNUPGHOME="$GNUPGHOME" gpg --batch --default-key "$FPR" --clearsign \
+            > %{_sysconfdir}/fossh-model/model-config.asc 2>/dev/null || :
+    fi
+fi
+# Outside the guard, deliberately, same reasoning as the secret block
+# above: re-asserting ownership costs nothing and makes a wrong first
+# install self-healing on the next upgrade instead of stuck forever.
+chgrp -R fossh-selfheal "$GNUPGHOME" 2>/dev/null || :
+chgrp fossh-selfheal %{_sysconfdir}/fossh-model/model-config-fingerprint \
+    %{_sysconfdir}/fossh-model/model-config.asc 2>/dev/null || :
+chmod 0640 %{_sysconfdir}/fossh-model/model-config-fingerprint \
+    %{_sysconfdir}/fossh-model/model-config.asc 2>/dev/null || :
+
 %preun
 %systemd_preun fossh-fcgiwrap.socket fossh-fcgiwrap.service
 %systemd_preun fossh-fcgi.service

@@ -10,7 +10,6 @@ SKIP_DIRS = {
     "artifacts", "corpus",
 }
 
-
 def strip_c_like(src, line_comment_tokens, block=("/*", "*/"), nested=False,
                  lifetimes=False, raw_strings=False):
     out = []
@@ -91,7 +90,6 @@ def strip_c_like(src, line_comment_tokens, block=("/*", "*/"), nested=False,
         i += 1
     return "".join(out)
 
-
 def strip_ocaml(src):
     out = []
     i = 0
@@ -164,7 +162,6 @@ def strip_ocaml(src):
         i += 1
     return "".join(out)
 
-
 def strip_hash(src, keep_shebang=True, heredoc=True):
     out = []
     lines = src.split("\n")
@@ -221,7 +218,6 @@ def strip_hash(src, keep_shebang=True, heredoc=True):
         out.append(text.rstrip() if cut else text)
     return "\n".join(out)
 
-
 def strip_python(src):
     import io
     import tokenize
@@ -235,7 +231,6 @@ def strip_python(src):
         return tokenize.untokenize(kept)
     except (ValueError, IndentationError):
         return None
-
 
 def tidy(text):
     lines = [ln.rstrip() for ln in text.split("\n")]
@@ -253,7 +248,6 @@ def tidy(text):
         out.pop()
     return "\n".join(out) + "\n" if out else ""
 
-
 HANDLERS = {
     ".rs": lambda s: strip_c_like(s, ["//"], nested=True, lifetimes=True,
                                  raw_strings=True),
@@ -266,7 +260,6 @@ HANDLERS = {
     ".rb": lambda s: strip_hash(s),
     ".sh": lambda s: strip_hash(s),
 }
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -317,7 +310,6 @@ def main():
     print(f"{'stripped' if args.apply else 'would strip'}: {changed} files")
     for s in skipped:
         print(f"  could not parse, left alone: {s}", file=sys.stderr)
-
 
 if __name__ == "__main__":
     main()

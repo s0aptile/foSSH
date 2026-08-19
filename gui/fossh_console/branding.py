@@ -43,11 +43,6 @@ WORDMARK_FAMILIES = [
     "Bitcount Prop Single",
 ]
 
-# A second, independent list rather than a reference to the one above.
-# Both name the same three faces today, but a headline figure and a
-# sixteen-year-old logotype answer to different pressures — if a
-# legibility problem is ever found in one that is not in the other,
-# this is what makes fixing it a one-line edit instead of a refactor.
 STAT_VALUE_FAMILIES = list(WORDMARK_FAMILIES)
 
 UI_FAMILIES = ["Roboto", "Inter", "Cantarell", "Noto Sans", "Sans"]

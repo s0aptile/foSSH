@@ -32,10 +32,15 @@ fn main() -> std::process::ExitCode {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/etc/fossh/setup-token"));
 
+    let model_config_dir = std::env::var_os("FOSSH_MODEL_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/etc/fossh-model"));
+
     let mut agent = Agent {
         data_dir,
         k_anonymity,
         setup: setup::Setup::new(setup_token_path),
+        model_config_dir,
         authenticated: false,
     };
 
@@ -151,6 +156,7 @@ struct Agent {
     data_dir: PathBuf,
     k_anonymity: u32,
     setup: setup::Setup,
+    model_config_dir: PathBuf,
 
     authenticated: bool,
 }
@@ -204,6 +210,7 @@ impl Agent {
             "telemetry.query" => self.telemetry_query(p),
             "watchdog.status" => self.watchdog_status(),
             "selfheal.check" => self.selfheal_check(),
+            "selfheal.model_config" => self.selfheal_model_config(),
             "setup.state" => Ok(self.setup_state()),
             "setup.reload" => {
                 self.setup.reload();
@@ -437,6 +444,36 @@ impl Agent {
             .collect();
 
         Ok(json!({ "findings": findings }))
+    }
+
+    fn selfheal_model_config(&self) -> MethodResult {
+        use fossh_selfheal::keylock::{self, LockError};
+
+        let fingerprint_path = self.model_config_dir.join("model-config-fingerprint");
+        let fingerprint = match std::fs::read_to_string(&fingerprint_path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(json!({ "configured": false }));
+            }
+            Err(e) => {
+                return Err(MethodError::internal(format!(
+                    "{}: {e}",
+                    fingerprint_path.display()
+                )));
+            }
+        };
+
+        match keylock::verify(&self.model_config_dir, fingerprint.trim()) {
+            Ok(cfg) => Ok(json!({
+                "configured": true,
+                "model": cfg.model,
+                "endpoint": cfg.endpoint,
+                "threads": cfg.threads,
+            })),
+            Err(LockError::NotConfigured) => Ok(json!({ "configured": false })),
+            Err(e @ LockError::Tampered(_)) => Err(MethodError::unavailable(e.to_string())),
+            Err(e) => Err(MethodError::internal(e.to_string())),
+        }
     }
 
     fn setup_state(&self) -> Value {
@@ -733,10 +770,17 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        let model_config_dir = std::env::temp_dir().join(format!(
+            "fossh-agent-dispatch-{name}-model-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&model_config_dir);
+        std::fs::create_dir_all(&model_config_dir).unwrap();
         Agent {
             data_dir: dir,
             k_anonymity: 5,
             setup: setup::Setup::new(PathBuf::from("/nonexistent/fossh/setup-token")),
+            model_config_dir,
             authenticated: false,
         }
     }
@@ -781,6 +825,13 @@ mod tests {
         );
         assert_eq!(result["state"], "ready");
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn model_config_with_no_manifest_reads_as_unconfigured_not_an_error() {
+        let mut agent = agent_for_tests("model-config-unset");
+        let result = call(&mut agent, "selfheal.model_config", json!({})).unwrap();
+        assert_eq!(result["configured"], false);
     }
 
     #[test]

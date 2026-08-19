@@ -1833,3 +1833,91 @@ test would also drag `qwen3.5:4b`'s own earlier "5/5 clean" result
 down, which was never checked. `packaging/model/Modelfile`
 (`lfm2.5-thinking`) stays the shipped default pending further work on
 either candidate.
+
+## ADR-0082 — the clearsigned config manifest gets the same treatment its sibling already got
+
+**Status:** accepted, 0.0.2.2.
+
+**Context.** `3f27139` fixed one of two structurally identical gaps
+`keylock.rs` had carried since early in this project: the Apache-fronted
+model-secret gateway was fully built and tested and never actually
+called by anything real. The clearsigned-manifest half was left
+explicitly open at the time — `dev/SNAPSHOT-2026-08-16-2000.md` called
+it "the next honest candidate for the same treatment, not yet started"
+— and `docs/SELF-HEALING.md` said so plainly: `keylock::verify()`
+existed, had its own passing test suite, and nothing in the shipped
+product ever called it.
+
+**Decision.** Wired end to end, not stubbed. `fossh-agent` gained
+`Agent.model_config_dir` (from `FOSSH_MODEL_CONFIG_DIR`, default
+`/etc/fossh-model`) and RPC method `selfheal.model_config`, which reads
+`model-config-fingerprint` and calls `keylock::verify()` against it:
+`{"configured": false}` when no manifest exists (the ordinary case,
+true of every install predating this fix), the parsed config when it
+verifies, and an "unavailable" error — never a silent pass — when
+`LockError::Tampered`. `fossh.spec`'s `%post selfheal` generates an
+install-local GPG signing key once, idempotently, the same shape as the
+secret-generation block beside it, and clearsigns the real values
+`advisor_client.py` actually runs with (endpoint, model, thread count)
+into `/etc/fossh-model/model-config.asc` plus a fingerprint file, owned
+by group `fossh-selfheal` — a manifest asserting anything other than
+the real shipped values would just be a second, competing claim about
+the truth, not a check on it.
+
+`app.py`'s handshake now calls `selfheal.model_config` once at startup;
+on error it calls a new `AdvisorBridge.disable(reason)`
+(`advisor_bridge.py`), which fails every future advisor call
+immediately with that reason rather than ever reaching Ollama — the one
+case `advisor_client.py` itself cannot detect on its own, since this
+check has to run before anything there is trusted to run at all.
+
+**Two real defects found while verifying this end to end, neither
+cosmetic.** `keylock::verify()`'s own test suite (11 tests, all
+passing) never once exercised the real `gpg --decrypt` subprocess it
+calls in production — every test drove `parse_verified_manifest[_parts]`
+with hand-written `[GNUPG:]` status lines instead. Running the actual
+compiled `fossh-agent` binary against a real key generated the same way
+`%post selfheal` generates one surfaced what that gap was hiding:
+`verify()` never told `gpg` where the key lived. With no `GNUPGHOME`
+set, `gpg --decrypt` fell back to the calling process's own default
+keyring, which never contains the install-local key `%post` generated
+in `$model_config_dir/gnupghome` — so on every real install this would
+have returned `ERRSIG` ("the signature could not be checked") for a
+perfectly good manifest, and the console would have disabled the
+advisory layer on every single startup, the opposite of this feature's
+purpose. Fixed with one line, `.env("GNUPGHOME", state_dir.join
+("gnupghome"))`, the same pattern `operator_auth_client.rs` already
+uses for its own gpg calls. Separately, `%post`'s clearsigned manifest
+baked in `endpoint=http://127.0.0.1:11434` — the value
+`advisor_client.py` used *before* `3f27139`, not the `11435` gateway it
+has used since — contradicting `%post`'s own comment ("real values, not
+placeholders"). `keylock::verify()` only checks that a manifest is
+byte-for-byte what its own key signed, not that the values match
+anything live, so this didn't fail verification and had no runtime
+symptom — but it is exactly the field this mechanism exists to
+notarize, and it was wrong. Fixed to `11435`.
+
+**Verified against the real compiled binary, not just unit logic.** A
+real key generated with the exact `%post` invocation, a real manifest
+clearsigned with it, and the real `fossh-agent` binary driven over its
+actual stdin/stdout JSON-RPC protocol: a good manifest now returns
+`{"configured": true, "endpoint": "http://127.0.0.1:11435", ...}`; a
+one-byte-edited manifest returns the `unavailable` error with "the
+signature does not match"; no manifest at all returns `{"configured":
+false}`. All three match the design, none did before the `GNUPGHOME`
+fix. A new test, `a_real_manifest_signed_with_a_real_key_verifies
+_through_real_gpg`, encodes the first case permanently — the exact
+real-subprocess path the previous 11 tests all skipped — following the
+same real-gpg-round-trip pattern `operator_auth_client.rs` already
+established for its own key generation tests. `fossh-agent`: 103
+passed. `fossh-selfheal`: 90 passed (89 pre-existing plus the new one).
+`docs/SELF-HEALING.md` updated to describe this as now-live rather than
+the honest "not currently called from anywhere either" it said before.
+
+**What this doesn't cover.** Same boundary as the sibling fix: this
+checks a config manifest against local tampering, not a network
+boundary. The Apache-gateway deployment gap noted in
+`dev/SNAPSHOT-2026-08-16-2000.md` (`fossh-model.conf` never installed
+to `/etc/httpd/conf.d/` in this dev environment) is unrelated and still
+open.
+

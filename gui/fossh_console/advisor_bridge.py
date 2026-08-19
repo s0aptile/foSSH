@@ -41,6 +41,19 @@ class AdvisorBridge:
         self._queue: queue.Queue[_Job | None] = queue.Queue()
         self._thread: threading.Thread | None = None
         self._stopping = threading.Event()
+        self._disabled_reason: str | None = None
+
+    def disable(self, reason: str) -> None:
+        """Switches the advisory layer off for the rest of this session.
+
+        For a signed model-config manifest that failed verification
+        (`selfheal.model_config` via `fossh-agent`) — the one case
+        `advisor_client` itself cannot detect, since the check has to
+        run before anything here is trusted to run at all. Every
+        queued and future call fails with this reason rather than ever
+        reaching Ollama; the deterministic rules are unaffected.
+        """
+        self._disabled_reason = reason
 
     def _ensure_started(self) -> None:
         if self._thread is not None:
@@ -66,6 +79,10 @@ class AdvisorBridge:
         """Queues `advisor_client.explain(prompt)`. Never touches a widget."""
         if self._stopping.is_set():
             return
+        if self._disabled_reason is not None:
+            if on_err:
+                GLib.idle_add(on_err, ac.AdvisorUnavailable(self._disabled_reason))
+            return
         self._ensure_started()
         self._queue.put(_Job("explain", prompt, on_ok, on_err))
 
@@ -76,7 +93,7 @@ class AdvisorBridge:
         slower first `explain_async`. `advisor_client.warm()` already
         swallows `AdvisorUnavailable` itself for the same reason.
         """
-        if self._stopping.is_set():
+        if self._stopping.is_set() or self._disabled_reason is not None:
             return
         self._ensure_started()
         self._queue.put(_Job("warm", None, None, None))
@@ -98,6 +115,10 @@ class AdvisorBridge:
         """
         if self._stopping.is_set():
             return
+        if self._disabled_reason is not None:
+            if on_err:
+                GLib.idle_add(on_err, ac.AdvisorUnavailable(self._disabled_reason))
+            return
         self._ensure_started()
         self._queue.put(_Job("screenshot", (image_path, question), on_ok, on_err))
 
@@ -115,7 +136,7 @@ class AdvisorBridge:
                     result = ac.read_screenshot(image_path, question).answer
                 else:
                     result = ac.explain(job.arg)
-            except Exception as exc:  # noqa: BLE001 - reported through on_err, never raised on this thread
+            except Exception as exc:
                 if job.on_err:
                     GLib.idle_add(job.on_err, exc)
                 continue

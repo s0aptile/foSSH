@@ -118,6 +118,7 @@ pub fn verify(state_dir: &Path, expected_fingerprint: &str) -> Result<ModelConfi
     ));
 
     let output = std::process::Command::new("gpg")
+        .env("GNUPGHOME", state_dir.join("gnupghome"))
         .arg("--batch")
         .arg("--no-tty")
         .arg("--status-file")
@@ -465,6 +466,64 @@ mod tests {
 
         let dir = scratch("no-manifest");
         assert!(matches!(verify(&dir, FPR), Err(LockError::NotConfigured)));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_real_manifest_signed_with_a_real_key_verifies_through_real_gpg() {
+        use std::io::Write;
+
+        let dir = scratch("real-gpg-round-trip");
+        let gnupghome = dir.join("gnupghome");
+        fs::create_dir_all(&gnupghome).unwrap();
+        fs::set_permissions(&gnupghome, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let keygen = std::process::Command::new("gpg")
+            .env("GNUPGHOME", &gnupghome)
+            .args([
+                "--batch", "--passphrase", "", "--quick-gen-key",
+                "keylock test key (fossh-selfheal test suite)", "default", "default", "never",
+            ])
+            .status()
+            .expect("a real gpg must be on PATH for this test");
+        assert!(keygen.success());
+
+        let listing = std::process::Command::new("gpg")
+            .env("GNUPGHOME", &gnupghome)
+            .args(["--batch", "--with-colons", "--list-secret-keys"])
+            .output()
+            .unwrap();
+        let listing = String::from_utf8_lossy(&listing.stdout);
+        let fpr = listing
+            .lines()
+            .find(|l| l.starts_with("fpr:"))
+            .and_then(|l| l.split(':').nth(9))
+            .expect("a freshly generated key must report its own fingerprint")
+            .to_string();
+
+        let config = ModelConfig {
+            model: "fossh-advisor:0.0.2.2".to_string(),
+            endpoint: "http://127.0.0.1:11435".to_string(),
+            threads: 4,
+        };
+        let mut sign = std::process::Command::new("gpg")
+            .env("GNUPGHOME", &gnupghome)
+            .args(["--batch", "--default-key", &fpr, "--clearsign"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        sign.stdin
+            .take()
+            .unwrap()
+            .write_all(canonical_manifest(&config).as_bytes())
+            .unwrap();
+        let signed = sign.wait_with_output().unwrap();
+        assert!(signed.status.success());
+        fs::write(manifest_path(&dir), &signed.stdout).unwrap();
+
+        assert_eq!(verify(&dir, &fpr).unwrap(), config);
+
         fs::remove_dir_all(&dir).ok();
     }
 
