@@ -2087,3 +2087,132 @@ no live GTK display or spun main loop is needed. `pytest` is not
 installed in this environment, so the suite runs on stdlib
 `unittest`, which is also what `pytest` would collect natively if run
 in CI.
+
+## ADR-0086 — `_looks_self_referential()`'s noun-blind opener check, and a retry that asked the same question the same way three times
+
+**Status:** accepted, 0.0.2.2.
+
+**Context.** A second independent review of `c928787` (ADR-0083)
+found a real false-positive class the original fix's own boundary
+guard could not close, and proved it by running the shipped
+`_looks_self_referential()` — no live model involved. `(?![a-z])`
+only rejects an opener glued to one longer word ("i am a" inside "I am
+aware"); it does nothing when the opener is followed by a space and
+then an ordinary, unrelated word. All five constructed against the
+shipped function came back `True` when they should not have:
+"I am a bit worried about the exposed key file here.", "I'm a little
+unsure whether this is exploitable.", "I am an avid supporter of open
+standards.", "Je suis un peu inquiet de cette configuration.", "Soy un
+poco cauteloso sobre esta clave expuesta." A security-diagnostic tool
+hedging in the operator's own language ("I'm a little unsure whether
+this is exploitable") is exactly the kind of sentence this feature
+exists to let through untouched, and the old check burned a retry —
+or, on the third attempt, the canned refusal — on every one.
+
+**Decision.** `_looks_self_referential()` now requires two things, not
+one: the existing opener match in the first 24 characters, *and* an
+identity noun (`_IDENTITY_NOUNS_EXACT`/`_IDENTITY_NOUNS_PREFIX`/
+`_CJK_IDENTITY_NOUNS` — "model", "AI", "assistant", "chatbot", "bot",
+"system", "program", "language model", "artificial intelligence", and
+the equivalents in Turkish, German, French, Spanish, Russian, Chinese,
+Japanese, and Arabic) inside the next 40 characters. A same-word-prefix
+boundary check can never distinguish "opener + unrelated word" from a
+real leak, because the failure isn't glued words, it's an ordinary
+sentence that happens to start the same way a leak does — only
+checking for what comes after actually tells them apart. Several
+identity nouns overlap `packaging/model/forbidden-terms.json`
+("language model", "Sprachmodell", "yapay zeka modeli") deliberately,
+per that file's own multilingual vocabulary, reused rather than
+duplicated.
+
+**A real interaction bug found while building this, not shipped.**
+`_generate()` already runs `scrub()` before `explain()` ever sees the
+answer. The first version of this fix checked the scrub()-redacted
+text, and every true positive built from a forbidden-terms.json word
+("I am a language model...") silently started failing — scrub() had
+already replaced the exact evidence the noun check was looking for
+with `[redacted]`, before the check ever ran. `Measurement` gained a
+`raw_answer` field (the pre-scrub text, alongside the existing
+scrub()-redacted `answer`); `_looks_self_referential()` now checks
+`raw_answer`, so the two layers stay independent the way ADR-0083
+described: scrub() still redacts a matched term for display either
+way, and this still retries on the self-referential shape regardless
+of whether scrub() happened to also have a term to catch.
+
+**A second boundary bug found the same way, in the CJK/Arabic/Cyrillic
+openers ADR-0083 called safe.** That commit's own reasoning — "CJK,
+Arabic, and Cyrillic openers are unaffected [by the glued-word guard],
+since their scripts never fall in `[a-z]`" — assumed the character
+*after* a non-Latin opener would always be non-Latin too. Japanese
+routinely glues a romanized loanword straight onto a hiragana particle
+with no space ("私はAIアシスタント..."), so `(?![a-z])` was rejecting a
+legitimate self-reference the moment the model said "AI" in Latin
+script. Fixed by splitting `_SELF_REFERENTIAL_OPENERS` into
+`_SELF_REFERENTIAL_OPENERS_LATIN` (keeps the glued-word guard — Turkish
+is Latin-script too and has the same "ben bir" / "biraz" collision
+risk) and `_SELF_REFERENTIAL_OPENERS_OTHER` (no guard at all). Safe
+now that the identity-noun stage carries real weight: a bare opener
+match with no noun nearby is no longer sufficient on its own.
+
+**The retry-effectiveness gap.** `_exclusive_generate` used a fixed
+`temperature: 0.2` on every attempt, including retries — so a
+stylistic pattern that triggered the detector once was being asked
+again from close to the same low-entropy distribution, not a
+genuinely different sample. Each retry in `explain()` now adds
+`_IDENTITY_RETRY_TEMPERATURE_STEP = 0.1` over `DEFAULT_TEMPERATURE`,
+topping out at 0.4 across the three attempts `_MAX_IDENTITY_RETRIES =
+2` makes. This is unrelated to the sampling investigation
+`dev/BIASED-ONE-LEAK-2026-08-16.md` closed as unshippable — that was
+about the *default* every answer uses; `packaging/model/Modelfile` is
+untouched, still no `repeat_penalty`, `temperature 0.2`, and the bump
+here only ever applies after a leak was already caught, never to a
+first attempt.
+
+**Verified directly**, the same way both reviews found the bugs —
+string/regex logic, no live model call. All five false positives above
+now return `False`; the original true-positive battery
+(`I am a language model...`, `我是一个语言模型...`, and the rest) still
+returns `True`; the original two-case boundary-bug regression guard
+(`I am aware...`, `Ich bin einverstanden...`) still returns `False`.
+`gui/tests/test_advisor_client.py` is new — 32 cases, including the
+required battery, the scrub-interaction case, the Japanese
+glued-loanword case, and a plural-noun collision
+("I'm an experienced systems administrator") the first draft of this
+fix also got wrong before `_IDENTITY_NOUNS_EXACT` was given a trailing
+boundary. `python3 -m pytest gui/tests/`: 113 passed, 28 skipped (all
+skips are the live-model suite; the model is not installed here), 0
+failed.
+
+**Left open, honestly.** The identity-noun window can still collide
+with an unrelated noun phrase a word-boundary check cannot see past —
+"I am a system administrator" would still match, because "system" is
+grammatically the very next word regardless of what follows it. No
+regex-window heuristic without real parsing closes this; it is
+accepted the same way ADR-0083 accepted the shipped model's vague
+diagnostic answers as a separate, pre-existing problem. Also left
+open: Arabic's definite article prefixes directly onto a noun with no
+space ("النموذج" = "the model"), which `_IDENTITY_NOUNS_EXACT`'s
+leading boundary would miss the same way the old opener guard missed
+Japanese — not fixed here, since nothing in the required battery or
+this session's own testing exercises it, and it is genuinely unclear
+whether the failure mode is common enough in real model output to
+justify the same asymmetric-boundary treatment given to Turkish and
+Russian.
+
+**A disclosure-discipline gap, corrected here rather than left
+standing.** `5ab4647`'s commit message claimed a "repo-wide comment
+strip" among its rides-along changes. That claim is inaccurate as
+written: `advisor_client.py` carried a real, ten-line pre-purge-rule
+comment (added in `a4eb0ba`, after the original `8ca5c0b` sweep,
+documenting the reasoning behind `MAX_TOTAL_SECONDS = 3.0`) that
+`5ab4647` never touched — that commit's own diff does not include
+`advisor_client.py` at all — and which `c928787` then silently deleted
+one commit later, with no mention in that commit's message. Confirmed
+directly: `git show 5ab4647 --stat` has no `advisor_client.py` line;
+`git show c928787 -- gui/fossh_console/advisor_client.py` shows the
+exact ten `-#` lines removed. No functional issue — the reasoning is
+independently preserved in ADR-0077 — but `5ab4647`'s own text said
+"repo-wide," and this one file's history says otherwise, and unlike
+`branding.py`'s case in that same commit (disclosed by name), this one
+was not. Named here since this project corrects its own overstated
+claims in public rather than leaving them stand.

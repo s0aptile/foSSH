@@ -146,6 +146,7 @@ class Measurement:
     ttft_seconds: float
     tokens_per_second: float
     answer: str
+    raw_answer: str
     ceiling_seconds: float = MAX_TTFT_SECONDS
     total_seconds: float = 0.0
     total_ceiling_seconds: float = MAX_TOTAL_SECONDS
@@ -263,6 +264,8 @@ def encode_image(path: str | Path) -> str:
         img.save(buf, format="PNG", optimize=True)
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
+DEFAULT_TEMPERATURE = 0.2
+
 def _generate(
     prompt: str,
     *,
@@ -273,6 +276,7 @@ def _generate(
     ceiling: float = MAX_TTFT_SECONDS,
     total_ceiling: float = MAX_TOTAL_SECONDS,
     think: bool | None = None,
+    temperature: float = DEFAULT_TEMPERATURE,
 ) -> Measurement:
     message: dict = {"role": "user", "content": prompt}
     if images:
@@ -287,7 +291,7 @@ def _generate(
             "num_gpu": 0,
             "num_thread": NUM_THREAD,
             "num_predict": num_predict,
-            "temperature": 0.2,
+            "temperature": temperature,
             "top_p": 0.85,
         },
     }
@@ -320,10 +324,12 @@ def _generate(
         raise AdvisorUnavailable("the model produced nothing at all")
 
     rate = (eval_count / eval_seconds) if eval_seconds > 0 else 0.0
+    stripped = _strip_reasoning("".join(pieces))
     return Measurement(
         ttft_seconds=first_token_at,
         tokens_per_second=rate,
-        answer=scrub(_strip_reasoning("".join(pieces))),
+        answer=scrub(stripped),
+        raw_answer=stripped,
         ceiling_seconds=ceiling,
         total_seconds=time.perf_counter() - started,
         total_ceiling_seconds=total_ceiling,
@@ -421,46 +427,136 @@ def probe(tag: str = ADVISOR, timeout: float = 120.0) -> Measurement:
         timeout=timeout,
     )
 
-_SELF_REFERENTIAL_OPENERS = (
+_SELF_REFERENTIAL_OPENERS_LATIN = (
     "i am a", "i am an", "i'm a", "i'm an", "i am the",
     "ben bir",
     "ich bin ein", "ich bin eine",
     "je suis un", "je suis une",
     "soy un", "soy una",
+)
+
+_SELF_REFERENTIAL_OPENERS_OTHER = (
     "я являюсь", "я — ", "я -",
     "我是",
     "私は", "僕は",
     "أنا ",
 )
 
+_SELF_REFERENTIAL_OPENERS = _SELF_REFERENTIAL_OPENERS_LATIN + _SELF_REFERENTIAL_OPENERS_OTHER
+
 _SELF_REFERENTIAL_PATTERN = re.compile(
-    "(?:" + "|".join(re.escape(o) for o in _SELF_REFERENTIAL_OPENERS) + r")(?![a-z])"
+    "(?:" + "|".join(re.escape(o) for o in _SELF_REFERENTIAL_OPENERS_LATIN) + r")(?![a-z])"
+    "|(?:" + "|".join(re.escape(o) for o in _SELF_REFERENTIAL_OPENERS_OTHER) + r")"
 )
+
+_OPENER_SEARCH_CHARS = 24
+_IDENTITY_NOUN_WINDOW_CHARS = 40
+
+_IDENTITY_NOUNS_EXACT = (
+    "ai", "ia", "ki", "ии", "bot", "llm",
+    "large language model", "language model", "artificial intelligence",
+    "ai assistant", "assistant", "chatbot", "chat bot", "program", "system",
+    "model",
+    "künstliche intelligenz", "sprachmodell", "assistent", "programm",
+    "modell",
+    "intelligence artificielle", "modèle de langage", "programme",
+    "système", "modèle",
+    "inteligencia artificial", "modelo de lenguaje", "asistente",
+    "programa", "sistema", "modelo",
+    "ذكاء اصطناعي", "نموذج اللغة", "مساعد", "روبوت", "برنامج", "نظام",
+    "نموذج",
+)
+
+_IDENTITY_NOUNS_PREFIX = (
+    "yapay zeka", "büyük dil modeli", "dil modeli", "asistan", "sohbet bot",
+    "sistem",
+    "языков", "искусственн", "интеллект", "ассистент", "чат-бот",
+    "программ", "систем", "модел",
+)
+
+_CJK_IDENTITY_NOUNS = (
+    "语言模型", "大语言模型", "大模型", "人工智能", "助手", "聊天机器人",
+    "机器人", "程序", "系统", "模型",
+    "言語モデル", "人工知能", "アシスタント", "チャットボット", "ボット",
+    "プログラム", "システム", "モデル",
+)
+
+_IDENTITY_NOUN_PATTERN = re.compile(
+    r"\b(?:" + "|".join(re.escape(n) for n in _IDENTITY_NOUNS_EXACT) + r")\b"
+    r"|\b(?:" + "|".join(re.escape(n) for n in _IDENTITY_NOUNS_PREFIX) + r")",
+    re.IGNORECASE,
+)
+
+def _identity_noun_follows(window: str) -> bool:
+    if _IDENTITY_NOUN_PATTERN.search(window):
+        return True
+    return any(noun in window for noun in _CJK_IDENTITY_NOUNS)
 
 _MAX_IDENTITY_RETRIES = 2
 
+_IDENTITY_RETRY_TEMPERATURE_STEP = 0.1
+
 _SAFE_REFUSAL = "I can't discuss that."
 
-def _looks_self_referential(text: str) -> bool:
-    """Whether `text` opens by describing what the model is.
+def _looks_self_referential(raw_text: str) -> bool:
+    """Whether `raw_text` opens by naming what the model is.
 
-    Narrow and specific to the one shape every identity leak measured
-    this session shared: a self-referential opening ("I am a...",
-    "我是...", and the equivalent in each of the battery's languages),
-    checked only in the first 24 characters. This is not a restatement
-    of forbidden-terms.json's broader vendor/architecture list — that
-    list keeps matching and redacting mid-sentence disclosures exactly
-    as before; this catches the one shape it cannot, because a generic
-    "I am an AI" opener names no vendor term for scrub() to find.
+    Takes the *pre-`scrub()`* text, deliberately — see `explain()`.
+    Two stages, not one substring check. First, an opener match in the
+    first 24 characters ("I am a...", "我是...", and the rest of
+    `_SELF_REFERENTIAL_OPENERS`) — unchanged from the original design,
+    still narrow to the one leak shape `forbidden-terms.json` cannot
+    see, a generic self-reference with no vendor term to match. Second,
+    a bounded look-ahead: the next 40 characters after the opener must
+    themselves contain an identity noun ("model", "AI", "assistant",
+    "system", and the equivalents `_IDENTITY_NOUNS_EXACT`/
+    `_IDENTITY_NOUNS_PREFIX`/`_CJK_IDENTITY_NOUNS` cover in the same
+    languages the opener list does).
 
-    The trailing `(?![a-z])` matters: without it, "i am a" also matches
-    inside "I am aware..." and "ich bin ein" inside "Ich bin
-    einverstanden...", turning ordinary diagnostic phrasing into a
-    false leak. CJK/Arabic/Cyrillic openers are unaffected either way,
-    since their scripts never fall in `[a-z]`.
+    The first stage alone is not enough: "I am a bit worried..." and
+    "I am an avid supporter..." both open with a listed pronoun+verb
+    phrase and have nothing to do with the model naming itself. A
+    same-word-prefix boundary check (the original `(?![a-z])` fix)
+    cannot tell those apart from a real leak, because the failure is
+    "opener + space + unrelated word," not "opener glued to one longer
+    word." Requiring an identity noun in the window is what actually
+    distinguishes them.
+
+    `_IDENTITY_NOUNS_EXACT` uses `\\bterm\\b` — both boundaries. Short
+    tokens ("ai", "bot", "ии") need this or they match inside unrelated
+    words ("explain" contains "ai"; the Russian root "работ-" contains
+    "бот"); ordinary nouns ("system", "model", "assistant") need it too
+    — without the trailing boundary, "system" matches as a prefix of
+    "systems administrator", an unrelated occupation this project's own
+    diagnostics plausibly mention. `_IDENTITY_NOUNS_PREFIX` anchors
+    only the leading boundary, deliberately, and only for Turkish and
+    Russian: both inflect these specific nouns by suffix
+    ("modeliyim", "моделью"), and a trailing boundary would miss every
+    inflected form. `_CJK_IDENTITY_NOUNS` has no boundary at all,
+    matching `forbidden-terms.json`'s own precedent — Chinese and
+    Japanese do not space words, so there is no boundary to anchor to.
+
+    The opener-stage boundary guard (`(?![a-z])`, rejecting "aware"
+    after "i am a") is applied only to `_SELF_REFERENTIAL_OPENERS_LATIN`
+    — Latin-script openers, the ones actually at risk of being a prefix
+    of one longer word in their own script. Applying it to every opener
+    indiscriminately, as the original fix did, silently broke a real
+    case: Japanese commonly glues a romanized loanword straight onto a
+    hiragana particle with no space ("私はAIアシスタント..."), so the
+    character right after "私は" is legitimately `a`, from "AI" — the
+    same shape the guard was written to reject.
+    `_SELF_REFERENTIAL_OPENERS_OTHER` (CJK, Arabic, Cyrillic) skips the
+    guard entirely; the identity-noun stage still has to find a real
+    noun in the window regardless, so this stage no longer needs to
+    carry that precision alone.
     """
-    head = text.strip().lower()[:24]
-    return _SELF_REFERENTIAL_PATTERN.search(head) is not None
+    lowered = raw_text.strip().lower()
+    head = lowered[:_OPENER_SEARCH_CHARS]
+    match = _SELF_REFERENTIAL_PATTERN.search(head)
+    if match is None:
+        return False
+    window = lowered[match.end():match.end() + _IDENTITY_NOUN_WINDOW_CHARS]
+    return _identity_noun_follows(window)
 
 def explain(prompt: str, *, timeout: float = 120.0) -> str:
     """Explains a finding, with a bounded retry against self-disclosure.
@@ -475,14 +571,43 @@ def explain(prompt: str, *, timeout: float = 120.0) -> str:
     refusal after two retries is what makes the property structural
     rather than probabilistic — the worst case a caller ever sees is
     this fallback, never an actual disclosure.
+
+    Each retry raises `temperature` by `_IDENTITY_RETRY_TEMPERATURE_STEP`
+    over `DEFAULT_TEMPERATURE`, capping at 0.4 across the three
+    attempts this makes. A fixed 0.2 on every attempt asks the same
+    low-entropy distribution the same question three times, which is
+    not a genuinely different sample — a stylistic pattern that
+    triggered the detector once has a real chance of recurring
+    unchanged. This is unrelated to the sampling investigation in
+    `dev/BIASED-ONE-LEAK-2026-08-16.md`, which was about the *shipped
+    default* every answer uses; `packaging/model/Modelfile` still sets
+    no `repeat_penalty` and `temperature 0.2`, and the bump here only
+    ever applies to a retry that already followed a detected leak, and
+    only stays at 0.4 for at most one of the three attempts.
+
+    `_looks_self_referential` runs on `measurement.raw_answer`, not the
+    already-`scrub()`-redacted `measurement.answer`: several identity
+    nouns this checks for ("language model", "Sprachmodell", "yapay
+    zeka modeli") are themselves in `forbidden-terms.json`, so on the
+    redacted text they would already read "[redacted]" — the exact
+    evidence this check looks for, erased before it runs. Checking the
+    raw text keeps the two layers independent, as designed: scrub()
+    still redacts a matched vendor term for display either way, and
+    this still retries on the self-referential shape regardless of
+    whether scrub() happened to also have a term to redact.
     """
     answer = _SAFE_REFUSAL
-    for _ in range(_MAX_IDENTITY_RETRIES + 1):
+    for attempt in range(_MAX_IDENTITY_RETRIES + 1):
+        temperature = DEFAULT_TEMPERATURE + _IDENTITY_RETRY_TEMPERATURE_STEP * attempt
         measurement = _exclusive_generate(
-            prompt, tag=ADVISOR, wait=ADVISOR_LOCK_WAIT_SECONDS, timeout=timeout
+            prompt,
+            tag=ADVISOR,
+            wait=ADVISOR_LOCK_WAIT_SECONDS,
+            timeout=timeout,
+            temperature=temperature,
         )
         answer = scrub(measurement.answer)
-        if not _looks_self_referential(answer):
+        if not _looks_self_referential(measurement.raw_answer):
             return answer
     return _SAFE_REFUSAL
 
