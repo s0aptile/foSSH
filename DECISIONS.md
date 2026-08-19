@@ -2024,3 +2024,66 @@ a stale value is worse than no code, so it goes.
 
 **Verified.** `cargo test -p fossh-selfheal`: 90 passed, 0 failed —
 same count as before the deletion.
+
+## ADR-0085 — `warm_async()` could reach Ollama before `selfheal.model_config` resolved
+
+**Status:** accepted, 0.0.2.2.
+
+**Context.** Independent review of `5ab4647` (the clearsigned
+config-manifest verification gate, ADR-0082) found a real ordering
+gap. `app.py`'s `do_activate()` called `self._start_agent()`, then, on
+the same synchronous line, `self._advisor.warm_async()`.
+`_start_agent()` only *queues* `agent.hello` — its `on_ok` is
+`_on_handshake_ok`, which itself queues `selfheal.model_config` as a
+second async call, and only that call's `on_err` invokes
+`AdvisorBridge.disable()`. Both round trips resolve later, through
+`GLib.idle_add`, off `fossh-agent`'s I/O thread. `warm_async()`'s own
+guard (`if self._disabled_reason is not None: return`) is checked at
+call time; at the point `do_activate()` called it, neither round trip
+had happened yet, so `_disabled_reason` was still `None` on every
+startup — tampered manifest or not. Confirmed by tracing the actual
+call sequence in `app.py`/`agent.py`, not by trusting the report, and
+reproduced against the pre-fix code: `gui/tests/test_app_ordering.py`
+fails 4 of its 6 cases when run against the old `do_activate()`,
+confirmed by temporarily stashing this fix and rerunning.
+
+**Decision.** Moved the `warm_async()` call out of `do_activate()` and
+into the `on_ok` branch of the `selfheal.model_config` call already
+inside `_on_handshake_ok()` — warming now only happens once that check
+has actually resolved to something other than a disable. `on_ok`
+covers both a verified manifest and `{"configured": false}` (no
+manifest present, the ordinary case on every install predating
+ADR-0082); only `LockError::Tampered` and its siblings reach `on_err`,
+which still disables first and never warms. One side effect worth
+naming: `restart_agent()` (the failure page's "Try again" button) now
+re-warms on every successful reconnect too, since it shares
+`_on_handshake_ok` with `do_activate()` — before this fix it never
+re-warmed at all, since the only `warm_async()` call in the file lived
+in `do_activate()`.
+
+**Real-world severity: low, said plainly.** `warm_async()` is
+fire-and-forget pre-warming with no callback and no user-facing
+answer; a failed or skipped warm only costs one slower first
+`explain_async`. And `advisor_client.py`'s `ENDPOINT`/`ADVISOR`/
+`NUM_THREAD` are still hardcoded, never populated from the verified
+manifest — the `on_ok` handler takes the parsed config as `_result`
+and still never reads it, only reacts to the fact that the call
+succeeded — so `selfheal.model_config` remains a pure
+notarization/kill-switch today, not a live config source. Worth fixing
+anyway: it is a genuine claim-vs-code mismatch against `5ab4647`'s own
+stated guarantee ("this check has to run before anything there is
+trusted to run at all"), and the next call added to `do_activate()`
+that does reach Ollama would have inherited the same race by copying
+the pattern already there.
+
+**Verified.** `python3 -m py_compile` on both touched files. New
+`gui/tests/test_app_ordering.py` (6 cases): all pass against the fix,
+run via `python3 -m unittest gui.tests.test_app_ordering`. `gui/tests/`
+had no test file exercising `app.py`'s GTK application lifecycle
+before this one. `ConsoleApplication` is built through `__new__` to
+skip `Adw.Application.__init__`, and `Agent`/`ConsoleWindow` are
+swapped for fakes that record callbacks instead of invoking them, so
+no live GTK display or spun main loop is needed. `pytest` is not
+installed in this environment, so the suite runs on stdlib
+`unittest`, which is also what `pytest` would collect natively if run
+in CI.

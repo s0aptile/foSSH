@@ -49,7 +49,6 @@ class ConsoleApplication(Adw.Application):
             self._agent = Agent()
             self._window = ConsoleWindow(self, self._agent, self._advisor)
             self._start_agent()
-            self._advisor.warm_async()
             self._tick_source = GLib.timeout_add_seconds(
                 SELFHEAL_TICK_SECONDS, self._on_selfheal_tick
             )
@@ -88,7 +87,7 @@ class ConsoleApplication(Adw.Application):
 
         self._agent.call(
             "selfheal.model_config",
-            on_ok=lambda _result: None,
+            on_ok=lambda _result: self._advisor.warm_async(),
             on_err=lambda error: self._advisor.disable(str(error)),
         )
 
