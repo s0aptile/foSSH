@@ -48,8 +48,6 @@ STAT_VALUE_FAMILIES = list(WORDMARK_FAMILIES)
 UI_FAMILIES = ["Roboto", "Inter", "Cantarell", "Noto Sans", "Sans"]
 MONO_FAMILIES = ["Roboto Mono", "Source Code Pro", "DejaVu Sans Mono", "Monospace"]
 
-ICON_FAMILIES = ["Material Symbols Outlined", "Material Icons"]
-
 @functools.lru_cache(maxsize=1)
 def _installed_families() -> set[str]:
     """Every family Pango can actually see, lowercased."""
@@ -124,13 +122,6 @@ def stat_value_markup(text: str) -> str:
     if not face:
         return escaped
     return f'<span face="{face}">{escaped}</span>'
-
-def icon_family() -> str | None:
-    installed = _installed_families()
-    for name in ICON_FAMILIES:
-        if name.lower() in installed:
-            return name
-    return None
 
 DIAMOND = "◆"
 TAGLINE = "local admin console"

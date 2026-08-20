@@ -63,13 +63,9 @@ class TestTheTwoFamilyListsAreActuallyTwoLists:
             branding.WORDMARK_FAMILIES.remove("Only For The Mark")
 
 class TestStatValueMarkup:
-    def test_plain_text_survives_unescaped_when_no_face_is_found(self):
+    def test_plain_text_survives_unescaped_when_no_face_is_found(self, monkeypatch):
 
-        assert branding._display_family(branding.STAT_VALUE_FAMILIES) is None, (
-            "this suite assumes Bitcount is not installed in CI/dev; if it now "
-            "is, the fallback-path assertions below need a forced-absent face "
-            "instead of relying on the real environment"
-        )
+        monkeypatch.setattr(branding, "stat_value_family", lambda: None)
         assert branding.stat_value_markup("1,234") == "1,234"
 
     @pytest.mark.parametrize(
