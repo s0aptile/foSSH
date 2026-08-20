@@ -7,9 +7,9 @@ fail=0
 self_exclude='scripts/check-public-private-boundary.sh|scripts/test-public-private-boundary-gate.sh|^DECISIONS\.md$'
 # DECISIONS.md is excluded deliberately: it is an immutable historical
 # log, and it already carries its own header note (added the day this
-# gate was written) explaining that its dev/*-2026-08-16.md citations
-# are provenance for past decisions, not live links. Every other
-# tracked file is still checked in full.
+# gate was written) explaining that its dev/*-2026-08-16.md and
+# dev/DURUM.md citations are provenance for past decisions, not live
+# links. Every other tracked file is still checked in full.
 
 fossh_ls_files() {
   git ls-files -z --cached --others --exclude-standard

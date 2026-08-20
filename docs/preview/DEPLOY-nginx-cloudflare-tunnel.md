@@ -6,8 +6,8 @@
 > has been run against a real Apache instance. This guide is preview
 > tier: it hasn't been through the adversarial-review QA gate the rest
 > of this project's deployment surfaces go through, and the nginx
-> config below has not itself been run against a live nginx — see
-> `dev/DURUM.md` for current status. Read it as the intended shape for
+> config below has not itself been run against a live nginx.
+> Read it as the intended shape for
 > the zero-inbound-port pattern it describes, not a reviewed, verified
 > path. If Apache is an option for you, use that guide instead.
 

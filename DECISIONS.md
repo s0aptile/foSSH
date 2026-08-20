@@ -2,7 +2,7 @@
 
 One entry per non-obvious choice. Newest at the bottom. Format: decision, alternatives rejected, reason.
 
-Several entries cite `dev/*-2026-08-16.md` session notes as the source of a specific measurement or finding. Those files are internal working notes, kept privately rather than shipped in this repository — the citations below are historical provenance for how a decision was reached, not live links.
+Several entries cite `dev/*-2026-08-16.md` session notes or `dev/DURUM.md` as the source of a specific measurement, finding, or status snapshot. Those files are internal working notes, kept privately rather than shipped in this repository — the citations below are historical provenance for how a decision was reached, not live links.
 
 ---
 

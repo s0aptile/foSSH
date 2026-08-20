@@ -98,7 +98,7 @@ Atomic-specific.
 ## 4. First-run setup
 
 Same as the Fedora-native path documented elsewhere in this project
-(README's "Deployment shapes", `dev/DURUM.md`'s current chapter):
+(README's "Deployment shapes"):
 `fossh-fcgiwrap.socket` and `fossh-watchdog.service` are enabled but
 not started by the package install (`%post`'s `%systemd_post`, deferred
 start by design — see `fossh.spec`'s own comment on why nothing

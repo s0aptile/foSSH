@@ -398,8 +398,8 @@ semodule_package -o packaging/selinux/fossh.pp -m packaging/selinux/fossh.mod -f
 
 %check
 # Dev-profile, not %%build's release profile — a second, separate
-# build/test cycle, same as every other test run in this project (see
-# dev/DURUM.md). Same network caveat as %%build above: needs a warm
+# build/test cycle, same as every other test run in this project.
+# Same network caveat as %%build above: needs a warm
 # cargo registry cache, not yet safe under a network-denied mock/koji
 # build (§3.10). Runs on every chroot, EPEL included — real `gpg` is
 # already a BuildRequires above for exactly this (fossh-agent's own

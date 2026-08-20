@@ -3,7 +3,7 @@
 # request), fossh-fcgi is itself the long-lived process — no fcgiwrap,
 # no per-request exec. It binds its own Unix socket directly (no
 # systemd socket activation in this pass — a later integration, not
-# this one; see dev/DURUM.md) and writes accepted events straight to
+# this one) and writes accepted events straight to
 # SQLite through its own batching writer thread instead of spooling.
 #
 # No dedicated SELinux domain yet, unlike fossh-cgi (packaging/selinux/
@@ -16,7 +16,7 @@
 # domain execs it (typically `unconfined_service_t` on Fedora's
 # targeted policy for a unit with no `SELinuxContext=` of its own) —
 # functional, not broken, but without the same kernel-enforced
-# confinement fossh-cgi has. Tracked as an open gap in dev/DURUM.md,
+# confinement fossh-cgi has. Tracked as an open gap,
 # not silently assumed equivalent.
 [Unit]
 Description=foSSH persistent FastCGI listener
@@ -91,8 +91,8 @@ SystemCallFilter=@system-service
 # calls from @privileged); systemd merges multiple SystemCallFilter=
 # lines (allow-lists intersect, deny-lists union), so this is additive
 # restriction, not a replacement. Verified with `systemd-analyze
-# security --offline=true` (see dev/DURUM.md) — this and the block
-# below took this unit's exposure score from 1.2 (OK) to 0.2 (SAFE).
+# security --offline=true` — this and the block below took this
+# unit's exposure score from 1.2 (OK) to 0.2 (SAFE).
 SystemCallFilter=~@privileged @resources
 SystemCallArchitectures=native
 PrivateDevices=yes

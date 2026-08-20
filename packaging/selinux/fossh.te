@@ -21,7 +21,7 @@
 # `urandom_device_t`), not assumed from memory. What compiling can
 # never catch, because `require{}` isn't resolved against a real base
 # policy until load time: a *missing* `allow` rule. An adversarial
-# review pass (see dev/DURUM.md's §3.2 retrospective) found three
+# review pass found three
 # concretely missing grants this way — ancestor-directory `search`
 # permissions for `/etc`, `/usr`, `/var`, `/var/lib` (SELinux checks
 # `dir:search` at every path component the dynamic linker and this
@@ -104,8 +104,7 @@ type fossh_var_run_t;
 # providing no real confinement at all. This third source domain is
 # this module's best guess at closing that gap without root access to
 # confirm it; the actual confirmation (`ps -eZ | grep fcgiwrap` after a
-# real `semodule -i` + service start) is still an open item — see
-# dev/DURUM.md. ---
+# real `semodule -i` + service start) is still an open item. ---
 
 allow init_t fossh_cgi_exec_t:file { getattr open read execute execute_no_trans map };
 allow init_t fossh_cgi_t:process { transition siginh rlimitinh noatsecure };
@@ -191,7 +190,7 @@ allow fossh_cgi_t fossh_var_run_t:file { read write open getattr create unlink a
 
 # --- fossh_fcgi_t (new in 1.1.0): closes the gap `packaging/systemd/
 # fossh-fcgi.service`'s and `fossh-watchdog.service`'s own header
-# comments, and dev/DURUM.md's §3.2 retrospective, already documented
+# comments, already documented
 # as open — `fossh-fcgi` (the persistent FastCGI listener that opens
 # `fossh.db` directly, unlike `fossh-cgi`) had no SELinux domain of
 # its own at all, so it ran in whatever unconfined the execing
@@ -286,7 +285,7 @@ allow fossh_fcgi_t fossh_data_t:file { read write open getattr create unlink app
 # granting is the enforcement" reasoning as fossh_cgi_t. Real, open
 # follow-up, not silently covered: when built with the optional `quic`
 # Cargo feature (`fossh-fcgi/quic`, now part of the actual release
-# build per dev/DURUM.md), a background thread
+# build), a background thread
 # (`fossh-fcgi::quic_client`) may open a loopback UDP socket to the
 # watchdog once §2.4's bootstrap handoff exists on disk — this pass
 # deliberately does not grant `udp_socket`/`AF_INET` permissions for

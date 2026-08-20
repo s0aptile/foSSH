@@ -53,8 +53,8 @@ jobs:
     # watchdog's ctypes bindings link against) and fossh-ipc (the
     # core<->watchdog QUIC/mTLS IPC channel itself) had zero CI
     # supply-chain coverage despite both having a real deny.toml,
-    # relying entirely on being re-checked by hand each session
-    # (dev/DURUM.md documents exactly that manual habit). Neither needs
+    # relying entirely on being re-checked by hand each session.
+    # Neither needs
     # a full build to check — cargo-audit/cargo-deny only resolve the
     # dependency graph — so there was no build-cost reason for the gap.
     name: cargo audit + cargo deny (all 4 workspaces)
