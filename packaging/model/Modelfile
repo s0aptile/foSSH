@@ -45,7 +45,7 @@ PARAMETER num_ctx 4096
 # regardless — but a thinking model's reasoning draws from this same
 # budget before any reply token is produced. Measured: capping this at
 # the reply's own length left no room to finish reasoning, and produced
-# an empty answer on 34/34 test calls (dev/BREACH-TESTS-2026-08-16.md).
+# an empty answer on 34/34 test calls.
 # A real diagnostic measured ~1160 tokens of reasoning alone before the
 # model reached its own answer. Ollama's chat API separates
 # message.thinking from message.content on its own; the caller
@@ -119,8 +119,8 @@ confident guess, and much easier to act on.
 # unrelated questions instead of an explanation — worse than the
 # generic identity leaks it was meant to close. This model's residual
 # generic self-acknowledgment ("I am an AI model/system", no vendor or
-# architecture named) is left as a known, lower-severity gap; see
-# dev/BREACH-TESTS-2026-08-16.md and re-verify before trying again.
+# architecture named) is left as a known, lower-severity gap; re-verify
+# against a real breach-test pass before trying again.
 MESSAGE user """Diagnostic: The data key is readable beyond its owner
 Severity: critical
 Detail: /var/lib/fossh/.data_key is mode 644. This key decrypts the spool and the stored integration credentials; anyone who can read it can read both."""

@@ -39,9 +39,9 @@ class TestPerformanceGate:
             "trace. Real measurement: 13.03s against a 1.7s ceiling, and "
             "~13-17s total against the 3.0s total-time ceiling, because "
             "content never starts until 1000+ reasoning tokens finish. "
-            "Five alternatives measured against this same gate in "
-            "dev/MODEL-EVAL-2026-08-16.md; none is a clean win on every "
-            "axis, so this stays xfail pending a model-choice decision "
+            "Five alternatives measured against this same gate; none is "
+            "a clean win on every axis, so this stays xfail pending a "
+            "model-choice decision "
             "rather than the gate being loosened to match the shipped "
             "default."
         ),

@@ -559,43 +559,6 @@ def _looks_self_referential(raw_text: str) -> bool:
     return _identity_noun_follows(window)
 
 def explain(prompt: str, *, timeout: float = 120.0) -> str:
-    """Explains a finding, with a bounded retry against self-disclosure.
-
-    Two layers on top of the model's own SYSTEM-level fence: scrub()
-    redacts a matched vendor/architecture term after generation, and
-    this retries generation, then falls back to a fixed refusal,
-    against the one leak shape scrub() cannot see — a generic
-    self-referential opening with no term to match. A retry has real
-    odds of succeeding cleanly, since a leak here has been measured as
-    a low-probability sample, not a deterministic failure; the fixed
-    refusal after two retries is what makes the property structural
-    rather than probabilistic — the worst case a caller ever sees is
-    this fallback, never an actual disclosure.
-
-    Each retry raises `temperature` by `_IDENTITY_RETRY_TEMPERATURE_STEP`
-    over `DEFAULT_TEMPERATURE`, capping at 0.4 across the three
-    attempts this makes. A fixed 0.2 on every attempt asks the same
-    low-entropy distribution the same question three times, which is
-    not a genuinely different sample — a stylistic pattern that
-    triggered the detector once has a real chance of recurring
-    unchanged. This is unrelated to the sampling investigation in
-    `dev/STRONNICZY-LEAK-2026-08-16.md`, which was about the *shipped
-    default* every answer uses; `packaging/model/Modelfile` still sets
-    no `repeat_penalty` and `temperature 0.2`, and the bump here only
-    ever applies to a retry that already followed a detected leak, and
-    only stays at 0.4 for at most one of the three attempts.
-
-    `_looks_self_referential` runs on `measurement.raw_answer`, not the
-    already-`scrub()`-redacted `measurement.answer`: several identity
-    nouns this checks for ("language model", "Sprachmodell", "yapay
-    zeka modeli") are themselves in `forbidden-terms.json`, so on the
-    redacted text they would already read "[redacted]" — the exact
-    evidence this check looks for, erased before it runs. Checking the
-    raw text keeps the two layers independent, as designed: scrub()
-    still redacts a matched vendor term for display either way, and
-    this still retries on the self-referential shape regardless of
-    whether scrub() happened to also have a term to redact.
-    """
     answer = _SAFE_REFUSAL
     for attempt in range(_MAX_IDENTITY_RETRIES + 1):
         temperature = DEFAULT_TEMPERATURE + _IDENTITY_RETRY_TEMPERATURE_STEP * attempt
