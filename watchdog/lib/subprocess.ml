@@ -65,8 +65,11 @@ let run_raw ~(prog : string) ~(argv : string array) ~(stdin_content : string) :
   Unix.close out_write;
   Unix.close err_write;
   write_stdin_in_background in_write stdin_content;
+  let stderr_box = ref "" in
+  let stderr_thread = Thread.create (fun () -> stderr_box := read_all err_read) () in
   let stdout = read_all out_read in
-  let stderr = read_all err_read in
+  Thread.join stderr_thread;
+  let stderr = !stderr_box in
   let _, exit_status = Unix.waitpid [] pid in
   { stdout; stderr; exit_status }
 

@@ -2419,3 +2419,55 @@ fixes were the whole of it — `ENVIRONMENT`, `FILES`, `EXIT STATUS`,
 `SEE ALSO`, and the `NOTES` section's `fossh-console` group
 instructions (from `1dc3fe6`, this session) all still read accurate.
 Verified with `groff -man -Tascii` and `man -l`, both clean.
+
+## ADR-0091 — Copr's real build caught what `--nocheck` hid: a subprocess pipe-read ordering bug in the watchdog
+
+**Status:** accepted, 0.0.2.2.
+
+**Context.** The first real Copr submission of this session (build
+10882464) failed `%check` on 4 of 5 chroots (`fedora-44/45-x86_64`,
+`fedora-rawhide-x86_64`, `epel-9-x86_64`) and passed clean on the
+fifth (`epel-10-x86_64`) — same commit, same SRPM, same test suite.
+Two `fossh-agent` interop tests failed identically on the four:
+`operator_auth_client::tests::{authenticate,setup}_interops_with_the_
+real_compiled_watchdog_binary`, both against a real compiled
+`fossh-watchdog` binary, both failing with `invalid_key` during GPG
+key enrollment. This gap existed only because this session's own
+local `build-release-rpm.sh` run used `--nodeps --nocheck` and never
+actually exercised `%check` — a build that called itself "successful"
+without running the one step that would have caught this.
+
+**Root cause, found by reading, not guessed.**
+`watchdog/lib/subprocess.ml`'s `run_raw` read `stdout` to completion,
+then read `stderr` to completion, sequentially, from a single thread.
+This is a classic pipe-deadlock shape: if a child process (`gpg`,
+here) writes enough to `stderr` to fill the OS pipe buffer while
+nobody is draining it, the child blocks writing and the parent blocks
+reading `stdout`, waiting for an EOF that never arrives because the
+child is stuck. Different chroots' `gpg2` package versions plausibly
+emit different amounts of stderr text (agent-startup notices,
+version-specific warnings) on `--import`/`--list-keys` — enough to
+explain why `epel-10-x86_64` cleared the threshold and the other four
+chroots didn't, without needing a chroot-by-chroot repro to be
+confident the mechanism is real. `write_stdin_in_background` already
+established the "hand one stream to a background thread" pattern
+elsewhere in this same file; `stdout`/`stderr` just never got it.
+
+**Decision.** `stderr` is now read on a background thread
+concurrently with the main thread reading `stdout`, joined before
+`waitpid`. Verified against the real OCaml test suite, not just a
+clean build: `dune test` (with `LD_LIBRARY_PATH` pointed at the
+vendored `libquiche.so.0`, a local dev-checkout requirement the RPM
+build's own `ld.so.conf.d` drop-in handles for a real install) — 24/24
+`test_operator_auth_server` checks and 11/11 `test_operator_key`
+checks pass, including a forced-overlap concurrent-enrollment stress
+test that exercises this exact subprocess path under real thread
+contention.
+
+**Honestly not yet closed.** This is a real, defensible fix for a
+genuine bug — reading two pipes sequentially from one thread is wrong
+regardless of whether it is confirmed as *the* trigger for this
+specific flake. It has not yet been confirmed against Copr's own
+build infrastructure, the only environment that has reproduced the
+failure so far. A local test pass is necessary, not sufficient; the
+next Copr submission is what actually confirms this.
