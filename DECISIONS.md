@@ -2494,3 +2494,37 @@ should be read as weak evidence at best for this specific mechanism,
 not confirmation — something else in the chroot difference could just
 as easily be what was actually flaky, and that possibility is still
 completely open.
+
+## ADR-0092 — Leap 3: a checks harness that actually covers all three languages, not just Rust
+
+**Status:** accepted, 0.0.2.2.
+
+**Context.** `.github/workflows/ci.yml` was real and substantial —
+4-workspace Rust coverage, a network-egress-denial proof, supply-chain
+audit, fuzz smoke tests, identity hygiene — but covered Rust only.
+Every real bug this session's own work found in the OCaml watchdog
+(ADR-0091's pipe-read fix) and the Python console (the rotted
+`gui/tests/screenshot.py` harness, the `/var/lib/fossh` permission
+gap only a real screenshot caught) existed specifically because
+nothing automated ever ran that code's own tests. This CI has also
+never run on real GitHub Actions infrastructure yet — no remote has
+it live — so even the Rust coverage is unconfirmed against real CI
+runners, not just this gap.
+
+**Decision.** Three new jobs. `watchdog`: `dune build` + `dune test`
+against a real OCaml 5 toolchain, `LD_LIBRARY_PATH` pointed at the
+vendored `libquiche.so.0` the same way a real dev checkout needs it.
+`console`: `pytest` against the real unit suite (no display needed),
+plus `gui/tests/screenshot.py` under `xvfb-run` — a real render,
+proving the app actually draws rather than just importing cleanly.
+`packaging`: a real `rpmbuild` inside a Fedora container, then
+`rpmlint` against the actual built RPMs — this session's own
+`60e2443` (a redundant `openssl-libs` Requires) was found exactly
+this way, a check that doesn't exist without a real built package.
+
+**Honestly unverified.** Written and locally sanity-checked (`python3
+-c "import yaml; yaml.safe_load(...)"` for syntax, each job's exact
+command line re-run locally where practical) but not yet run through
+real GitHub Actions — this repository has no live remote with Actions
+enabled yet, the same gap the existing Rust jobs already had. First
+real run is what confirms this, not this entry.

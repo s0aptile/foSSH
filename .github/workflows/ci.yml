@@ -103,6 +103,82 @@ jobs:
             exit 1
           fi
 
+  watchdog:
+    # The OCaml half of this project had zero CI coverage before this
+    # entry -- every real bug this session found in it (the subprocess
+    # pipe-read ordering fix, ADR-0091) was caught by hand, on one
+    # machine, not by anything that runs automatically. libquiche.so.0
+    # is vendored in watchdog/quic/vendor/, not installed system-wide,
+    # so LD_LIBRARY_PATH has to point at it explicitly -- the same
+    # requirement a real dev-checkout build has, see ADR-0091.
+    name: watchdog (dune test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install OCaml toolchain
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5"
+      - name: install system deps (gpg, gnupg2)
+        run: sudo apt-get update && sudo apt-get install -y gnupg2
+      - name: dune build
+        working-directory: watchdog
+        run: opam exec -- dune build
+      - name: dune test
+        working-directory: watchdog
+        run: |
+          export LD_LIBRARY_PATH="$PWD/quic/vendor:$LD_LIBRARY_PATH"
+          opam exec -- dune test
+
+  console:
+    # The Python/GTK4 console had zero CI coverage before this entry
+    # either. gui/tests/screenshot.py -- the one tool that would have
+    # caught this session's rotted-harness bug (a stale ConsoleWindow()
+    # call, unnoticed because nothing ever ran it) -- needs a real
+    # display; xvfb-run provides a virtual one headlessly. The unit
+    # suite (gui/tests/*.py, not screenshot.py) needs no display and
+    # is the bulk of real coverage (palette/WCAG, branding, advisor
+    # logic, app lifecycle ordering -- ADR-0085's own regression test).
+    name: console (pytest + a real screenshot render)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install GTK4/libadwaita + test deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gir1.2-gtk-4.0 gir1.2-adw-1 python3-gi xvfb
+          pip install pytest PyGObject
+      - name: pytest (headless, no display needed)
+        run: python3 -m pytest gui/tests/ -q --ignore=gui/tests/screenshot.py
+      - name: real screenshot render, proves the app actually draws
+        run: |
+          xvfb-run -a env PYTHONPATH=gui python3 gui/tests/screenshot.py /tmp/ci-shots
+          test -f /tmp/ci-shots/overview.png
+
+  packaging:
+    # rpmlint against a real built package -- this session found real,
+    # actionable findings this way (60e2443's redundant openssl-libs
+    # Requires) that a spec-only review would never surface, because
+    # rpmlint's most useful checks (non-standard-uid/gid, dangerous
+    # scriptlet commands, unpackaged tmpfiles) only exist once there's
+    # a real built RPM to inspect.
+    name: rpmbuild + rpmlint (Fedora)
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install build deps
+        run: |
+          dnf install -y rpm-build rpmlint rust cargo ocaml ocaml-dune \
+            git pkgconfig clang-devel cmake gnupg2
+      - name: build (skips %check here -- covered by the test/watchdog/console jobs above)
+        run: sh scripts/build-release-rpm.sh
+      - name: rpmlint the real built packages
+        run: rpmlint dist/*.rpm
+
   release-hygiene:
     name: identity-hygiene gate (§19.4.12)
     runs-on: ubuntu-latest
