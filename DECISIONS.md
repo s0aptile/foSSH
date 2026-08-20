@@ -2572,11 +2572,16 @@ GnuPG's `gpg-agent` needs `GNUPGHOME` in its own environment (not
 just the frontend `gpg` client's `--homedir` flag) to reliably place
 its runtime socket inside the specified homedir rather than a
 default runtime directory that may not exist or be writable in a
-minimal chroot. **This is not a new class of bug for this project** —
-it is the exact same shape ADR-0082/commit `5ab4647` already found
-and fixed on the Rust side (`keylock::verify()` needed `GNUPGHOME`
-set as an environment variable, not just relying on gpg's default
-keyring resolution). The OCaml side never got the equivalent fix.
+minimal chroot. **Related to, but weaker a precedent than first
+claimed here** — a debate-verify pass read `5ab4647`'s actual diff and
+found that bug was shaped differently: the pre-fix Rust code passed
+*no* `--homedir` at all, silently resolving against the calling
+process's own default keyring — a wrong-keyring bug. This OCaml code
+has always correctly passed `--homedir`; this fix adds `GNUPGHOME` as
+an environment variable on top, for the agent's own socket placement
+specifically — a narrower, more targeted mechanism, not the same
+shape of bug recurring. Worth fixing regardless; not the same proven
+class it was first described as.
 
 **Decision.** `Subprocess.run`/`run_raw` gained an `?extra_env`
 parameter (`Unix.create_process_env`, filtering any conflicting keys
@@ -2596,6 +2601,12 @@ skipped).
 **Honestly still open in the one way that matters.** This fix targets
 the literal error string Copr's log showed, not a summarized/inferred
 symptom — higher confidence than ADR-0091's pipe-read theory, which a
-debate-verify pass found didn't actually fit the evidence. But real
-confirmation is still only the next Copr build succeeding on the
-chroots that failed twice already, not this entry.
+debate-verify pass found didn't actually fit the evidence. That same
+pass also found this project's own earlier websearch (this ADR's own
+context section) had already surfaced *other* documented causes for
+the identical error string unrelated to `GNUPGHOME` entirely — a
+missing `/dev/shm` mount in minimal containers, specifically — and
+that possibility was never ruled out. A green Copr rebuild confirms
+the problem is gone; it does not by itself confirm this mechanism was
+why. Real confirmation is the next Copr build succeeding on the
+chroots that failed twice already, read as "fixed," not "proven."
