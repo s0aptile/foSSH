@@ -141,7 +141,6 @@ This is a lot of root-level files — most of them sit here because the project'
 
 | File | What it's for |
 |---|---|
-| `readme.md` | The *release* readme (zip root) — shorter, quickstart-focused. Distinct from this file. |
 | `PRIVACY.md` | Paste-able privacy-page text. |
 | `THREAT_MODEL.md` | Assets, adversaries, what's defended against and what isn't, alpha caveats. |
 | `tos.md` | Terms of use and disclaimer — the legal posture, not a contract for services. |

@@ -269,7 +269,7 @@ Restated here only so a reader of this file doesn't have to cross-reference the 
 
 ## §19.7 release zip
 
-`scripts/build-release-zip.sh` produces `dist/fossh-oa.zip` per the required layout (`readme.md`/`tos.md`/`SHA256SUMS` at the zip root, the full repo under `fossh/`). Built twice independently and diffed the SHA-256 — byte-identical, reproducibility genuinely verified. `dist/`'s contents reflect what this build environment can actually produce (the glibc release binaries, the RPM/SRPM, `libfossh.{so,a}`, `fossh.h`) rather than the full §19.7 wish list (musl ×2 arches, an SBOM, a signed manifest) — those remain open, tracked here rather than silently implied.
+`scripts/build-release-zip.sh` produces `dist/fossh-oa.zip` per the required layout (`README.md`/`tos.md`/`SHA256SUMS` at the zip root, the full repo under `fossh/`). Built twice independently and diffed the SHA-256 — byte-identical, reproducibility genuinely verified. `dist/`'s contents reflect what this build environment can actually produce (the glibc release binaries, the RPM/SRPM, `libfossh.{so,a}`, `fossh.h`) rather than the full §19.7 wish list (musl ×2 arches, an SBOM, a signed manifest) — those remain open, tracked here rather than silently implied.
 
 ## Retrospectives
 
