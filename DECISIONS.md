@@ -2420,7 +2420,7 @@ fixes were the whole of it — `ENVIRONMENT`, `FILES`, `EXIT STATUS`,
 instructions (from `1dc3fe6`, this session) all still read accurate.
 Verified with `groff -man -Tascii` and `man -l`, both clean.
 
-## ADR-0091 — Copr's real build caught what `--nocheck` hid: a subprocess pipe-read ordering bug in the watchdog
+## ADR-0091 — a real subprocess pipe-read bug, fixed; the Copr flake's actual cause is still open
 
 **Status:** accepted, 0.0.2.2.
 
@@ -2437,8 +2437,9 @@ local `build-release-rpm.sh` run used `--nodeps --nocheck` and never
 actually exercised `%check` — a build that called itself "successful"
 without running the one step that would have caught this.
 
-**Root cause, found by reading, not guessed.**
-`watchdog/lib/subprocess.ml`'s `run_raw` read `stdout` to completion,
+**A real bug, found by reading — but its fit to the evidence has a
+hole an independent debate-verify pass found, not this entry's first
+draft.** `watchdog/lib/subprocess.ml`'s `run_raw` read `stdout` to completion,
 then read `stderr` to completion, sequentially, from a single thread.
 This is a classic pipe-deadlock shape: if a child process (`gpg`,
 here) writes enough to `stderr` to fill the OS pipe buffer while
@@ -2464,10 +2465,32 @@ checks pass, including a forced-overlap concurrent-enrollment stress
 test that exercises this exact subprocess path under real thread
 contention.
 
-**Honestly not yet closed.** This is a real, defensible fix for a
-genuine bug — reading two pipes sequentially from one thread is wrong
-regardless of whether it is confirmed as *the* trigger for this
-specific flake. It has not yet been confirmed against Copr's own
-build infrastructure, the only environment that has reproduced the
-failure so far. A local test pass is necessary, not sufficient; the
-next Copr submission is what actually confirms this.
+**Honestly not yet closed — and weaker than this entry first claimed.**
+A debate-verify pass, dispatched specifically because "tests pass"
+was correctly rejected as proof, found the causal story doesn't
+actually fit: a genuine pipe deadlock hangs the connection-handling
+thread indefinitely inside the `gpg` call, which would surface to the
+Rust test client as a timeout (`operator_auth_client.rs`'s own
+10-second `read_timeout`), not a clean response. But
+`SetupError::EnrollFailed("invalid_key")` is only ever constructed by
+parsing a literal `"ENROLL_FAILED invalid_key\n"` line off the wire
+(`operator_auth_client.rs:339`/`1345`, confirmed directly) — meaning
+the watchdog's `gpg` call *completed* and returned a real, well-formed
+protocol error, not that it hung. A permanent deadlock does not
+produce this symptom. A more convoluted variant (pipe fills, `gpg`
+blocks, something external kills it, OCaml sees a real but unexpected
+exit) could reconcile the two, but nothing found any evidence of an
+external killer, and a gpg-version-dependent difference in
+`--with-colons --list-keys` output feeding `extract_single_fingerprint`
+fits the same evidence at least as well and was not investigated.
+
+The fix itself stays — reading two pipes sequentially from one thread
+is wrong regardless of whether it is this flake's trigger, the
+implementation was independently re-derived as thread-safe (real
+`Thread.join` happens-before, not a data race), and the real OCaml
+test suite was independently re-run clean (24/24, 11/11, not just
+trusted from the first pass). But a green Copr rebuild after this
+should be read as weak evidence at best for this specific mechanism,
+not confirmation — something else in the chroot difference could just
+as easily be what was actually flaky, and that possibility is still
+completely open.
