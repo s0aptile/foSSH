@@ -18,6 +18,7 @@ from gi.repository import Adw, GLib, Gtk
 
 from ..agent import AgentError
 from ..iconography import symbolic_name
+from ..motion import Duration
 
 GROUP_FIELDS = [
     ("path", "Page"),
@@ -86,7 +87,7 @@ class TelemetryView(Gtk.Box):
 
         self._stack = Gtk.Stack()
         self._stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
-        self._stack.set_transition_duration(250)
+        self._stack.set_transition_duration(Duration.STANDARD)
         self._stack.set_vexpand(True)
         self.append(self._stack)
 

@@ -15,6 +15,7 @@ from .. import advisor_client as ac
 from ..advisor_bridge import AdvisorBridge
 from ..agent import AgentError
 from ..iconography import symbolic_name
+from ..motion import Duration
 from ..widgets import StatTile, StatusRow, pad, section
 
 _SEVERITY_STATE = {"critical": "bad", "warning": "warn", "info": "idle"}
@@ -32,7 +33,7 @@ class OverviewView(Gtk.Box):
 
         self._stack = Gtk.Stack()
         self._stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
-        self._stack.set_transition_duration(250)
+        self._stack.set_transition_duration(Duration.STANDARD)
         self._stack.set_vexpand(True)
         self.append(self._stack)
 

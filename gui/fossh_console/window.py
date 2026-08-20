@@ -15,6 +15,7 @@ from gi.repository import Adw, Gtk
 from .agent import AgentError
 from .branding import Wordmark
 from .iconography import icon, icon_button, symbolic_name
+from .motion import Duration
 from .views.integrations import IntegrationsView
 from .views.legal import LegalView
 from .views.overview import OverviewView
@@ -51,7 +52,7 @@ class ConsoleWindow(Adw.ApplicationWindow):
 
         self._content_stack = Gtk.Stack()
         self._content_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
-        self._content_stack.set_transition_duration(200)
+        self._content_stack.set_transition_duration(Duration.STANDARD)
         for name, view in self._views.items():
             self._content_stack.add_named(view, name)
 
