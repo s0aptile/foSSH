@@ -408,8 +408,8 @@ semodule_package -o packaging/selinux/fossh.pp -m packaging/selinux/fossh.mod -f
 # rather than failing, when it doesn't find a compiled watchdog binary
 # in this checkout — the documented behavior for "the OCaml side
 # wasn't built here", which on EPEL it never is.
-cargo test --workspace
-(cd crates/fossh-ffi && cargo test)
+cargo test --workspace -- --test-threads=1
+(cd crates/fossh-ffi && cargo test -- --test-threads=1)
 
 %if 0%{?fedora}
 # LD_LIBRARY_PATH: every test binary this produces links against
@@ -419,7 +419,7 @@ cargo test --workspace
 # run yet at this point in a package build — there is no other way for
 # the dynamic linker to find a library that lives in this source tree,
 # not yet in any system library path.
-(cd watchdog && LD_LIBRARY_PATH="$(pwd)/quic/vendor" dune test)
+(cd watchdog && LD_LIBRARY_PATH="$(pwd)/quic/vendor" dune test -j 1)
 %endif
 
 %install

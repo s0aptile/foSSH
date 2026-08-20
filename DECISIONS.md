@@ -2718,3 +2718,62 @@ Real diagnosis is unchanged from this ADR's own conclusion: needs
 because the same finding recurring in a second, independent codepath
 is itself real evidence worth recording, not because anything new was
 resolved.
+
+## ADR-0095 — a fifth Copr failure moved the target again, which is the actual diagnosis: test parallelism, not any one test
+
+**Status:** accepted, 0.0.2.2. Supersedes ADR-0094's exclusion
+approach — those exclusions are reverted by this entry, not layered
+on top of it.
+
+**Context.** A fifth Copr build (10882729), after ADR-0094's
+addendum excluded three specific OCaml test binaries, failed again —
+on `test_setup_token`, a binary nobody had touched or suspected.
+Between attempts four and five, the specific set of failing tests
+changed with no code difference in the tests themselves. That is the
+signature of a resource race, not a per-test defect: whichever
+gpg-agent-spawning tests happen to run concurrently on a given build
+are the ones that lose, and which ones that is varies build to
+build. Whack-a-mole exclusion cannot converge against that — there is
+no fixed list of "the broken tests," because the tests aren't broken.
+
+**Root cause, now well-supported rather than guessed.** `dune`'s `-j`
+default is `auto`, which detects the *host's* core count — a
+documented containerized-CI trap when the real cgroup CPU quota is
+much smaller than what the container can see, exactly matching this
+project's own earlier finding (ADR-0092/`a797b84`'s debate-verify,
+independently, before this evidence existed) that "default thread
+count... in a container often reads the host's full core count even
+under a much smaller cgroup CPU quota." `cargo test` has the identical
+default-parallelism behavior. Copr's real builders are shared,
+resource-constrained infrastructure (this project's own earlier ADRs
+already establish this); this dev machine has 12 uncontended cores.
+Every local reproduction attempt in ADR-0094 ran a *subset* of tests,
+under *some* concurrency, on a machine with headroom Copr's builder
+doesn't have — none of them tested "the full suite, at Copr's actual
+concurrency-to-quota ratio," because that ratio can't be reproduced
+locally without knowing Copr's exact allocation.
+
+**Decision.** Reverted every ADR-0094 exclusion — `watchdog/test/dune`
+back to one `(tests ...)` stanza with all sixteen binaries, both
+Rust `#[ignore]` attributes removed. In their place, `%check` now
+forces sequential execution on both sides: `dune test -j 1` for the
+watchdog, `cargo test --workspace -- --test-threads=1` (and the same
+for `fossh-ffi`'s own workspace) for Rust. This trades build time for
+determinism — sequential gpg-agent spawns can never contend with each
+other, on any machine, regardless of core count or cgroup quota,
+which no per-test exclusion could ever guarantee.
+
+**Verified:** full local `dune test -j 1` (all 16 binaries) and
+`cargo test --workspace --release -- --test-threads=1` (all Rust
+tests, including both restored interop tests) — zero failures, zero
+ignored, every test that existed before any of this investigation
+started is back and passing.
+
+**Honestly still open.** This is the strongest-evidenced hypothesis
+of the five attempts, not a confirmed one — the actual mechanism
+(cgroup quota vs. detected core count) is inferred from a documented
+general pattern and this investigation's own observed race signature,
+not read directly from a `mock --shell` session inside Copr's real
+buildroot, which remains the one thing that would make this certain
+rather than well-supported. If this build also fails, that specific
+uncertainty is where to look first.
