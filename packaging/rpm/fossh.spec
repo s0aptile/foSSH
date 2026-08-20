@@ -586,6 +586,18 @@ exit 0
 getent group fossh-selfheal >/dev/null || groupadd -r fossh-selfheal
 exit 0
 
+%pre console
+# Same shape as fossh-selfheal above (ADR-0080), same reason: no
+# matching account, exists only so a human running the console can
+# join it (`usermod -a -G fossh-console $USER`). fossh-agent always
+# runs as whoever launches the console -- it is a helper the console
+# spawns over a pipe, never a service (see %description console) --
+# so it needs its own path into /var/lib/fossh, which %post console
+# below grants without touching fossh-svc's ownership of the
+# directory or fossh-fcgi's ability to write it.
+getent group fossh-console >/dev/null || groupadd -r fossh-console
+exit 0
+
 %post
 # /run/fossh{,/salt} (packaging/systemd/fossh.tmpfiles.conf) are
 # tmpfiles.d entries — normally only materialized by
@@ -728,6 +740,19 @@ chgrp fossh-selfheal %{_sysconfdir}/fossh-model/model-config-fingerprint \
     %{_sysconfdir}/fossh-model/model-config.asc 2>/dev/null || :
 chmod 0640 %{_sysconfdir}/fossh-model/model-config-fingerprint \
     %{_sysconfdir}/fossh-model/model-config.asc 2>/dev/null || :
+
+%post console
+# The base package's own %%post (above) already made /var/lib/fossh
+# fossh-svc:fossh-svc, 0700 -- correct for a base-only (EPEL) install,
+# where nothing but fossh-fcgi ever touches it. Once this subpackage
+# is present, fossh-agent -- always spawned as whoever launches the
+# console (see %%description console) -- needs a way in too. Outside
+# any conditional, deliberately, same as the selfheal block above: a
+# base package reinstalled on its own resets the group with nothing to
+# put it back until this subpackage's own %%post runs again, which is
+# a real, narrow gap, not one this scriptlet alone can close.
+chgrp fossh-console %{_sharedstatedir}/fossh 2>/dev/null || :
+chmod 0770 %{_sharedstatedir}/fossh 2>/dev/null || :
 
 %preun
 %systemd_preun fossh-fcgiwrap.socket fossh-fcgiwrap.service

@@ -2277,3 +2277,83 @@ untouched.
 
 **Verified:** `cargo test -p fossh-selfheal` — 90 passed, 0 failed,
 same count as before the rename.
+
+## ADR-0088 — `/var/lib/fossh` had no human path in either, and the console's own Overview page proved it
+
+**Status:** accepted, 0.0.2.2.
+
+**Context.** A real screenshot of the running console (`cosmic-screenshot`,
+then `gui/tests/screenshot.py` once its own `ConsoleWindow(self,
+self._agent)` call — missing the `advisor` argument `5ab4647` added —
+was fixed to pass it) showed the Overview, Telemetry, and Integrations
+pages all landing on the same error: "This install has no data
+directory yet" / "data key file I/O: Permission denied (os error
+13)". No prior check this session caught it, because every one of
+them asked "did the process crash," and it doesn't — it fails
+silently into a rendered error state.
+
+Root cause: `%{_sharedstatedir}/fossh` (`/var/lib/fossh`) is created
+`fossh-svc:fossh-svc`, mode `0700`, and nothing before this ADR ever
+gave a human a way in — the same shape of gap ADR-0080 already closed
+for `/run/fossh`, just never applied here. `fossh-agent` is not a
+service (`%description console`: "It never listens on a socket...
+a helper process it spawns over a pipe") — it always runs as whoever
+launches the console, so it always inherited that user's own
+permissions against a directory that user was never granted access
+to. `crates/fossh-agent/src/main.rs`'s `data_key()`,
+`Integrations::load`/`save`, and `telemetry::query`/`load_summary`
+all read or write this same directory directly; there is no other
+path in.
+
+**Checked before assuming ADR-0080's exact fix transfers.** `/var/lib/
+fossh` is not selfheal's single-purpose lock directory — it also holds
+`fossh.db` (written by `fossh-fcgi`, running as `fossh-svc`, the
+service ADR-0080 was careful not to touch) and the rotating salt file
+P2's privacy model depends on. Widening it carelessly could have meant
+a human reading raw pre-fold rows directly, bypassing the k-anonymity
+fold `telemetry::query` applies at read time — a real regression, not
+a formality. `THREAT_MODEL.md`'s own "The curious operator" section
+settles this: k-anonymity is enforced by never writing a raw
+per-visitor identifier in the first place, not by hiding the store's
+bytes from the operator, and states plainly that "the adversary here
+is the operator, who is already outside what this software can
+constrain." A human reading their own install's `/var/lib/fossh` was
+never the thing being defended against.
+
+**Decision.** Same idiom as ADR-0080, applied to this directory: a new
+`fossh-console` group, no matching service account, created in a new
+`%pre console` for a human to join (`usermod -a -G fossh-console
+$USER`, documented in `docs/man/fossh-console.1`'s NOTES). A new `%post
+console` sets `/var/lib/fossh` to group `fossh-console`, mode `0770`
+— after the base package's own `%post` has already made it
+`fossh-svc:fossh-svc`, correct as the baseline for a base-only (EPEL)
+install with no console. `fossh-svc` keeps ownership; `fossh-fcgi`'s
+writes are unaffected.
+
+**Left open, honestly.** The widening happens in the console
+subpackage's own `%post`, not the base package's — a base package
+reinstalled or upgraded on its own, without the console package also
+transacting, resets the directory to `fossh-svc:fossh-svc` with
+nothing in that same transaction to put the group back, until console
+next runs its own `%post`. Real, narrow, not fixed here: closing it
+properly means either duplicating the widening into base's `%post`
+guarded on the group's existence, or moving ownership of this
+decision entirely into console's `%triggerin`, and neither was
+verified against a real multi-package upgrade transaction this pass.
+
+**Verified.** `rpmspec --parse` clean. Could not verify the real
+`/var/lib/fossh` chown/chmod without root on this machine (surfaced,
+not worked around blind: `sudo chgrp fossh-console /var/lib/fossh &&
+sudo chmod 0770 /var/lib/fossh` is the equivalent manual step for an
+existing install). Instead verified the underlying claim directly:
+built `fossh-agent` fresh, pointed it at a scratch directory this user
+does own via `FOSSH_DATA_DIR`, and ran the real `gui/tests/
+screenshot.py` harness (not a compositor screenshot — its own
+docstring explains why: a `WidgetPaintable` snapshot with no window
+background behind it once produced a false contrast-defect report on
+transparent GTK header regions that does not exist in the running
+app) against it. Overview and Telemetry both rendered their real empty
+states — "No sites yet," the actual `fossh site create` hint — instead
+of the permission error, confirming the permission model was the only
+thing wrong with these three pages, not a second, hidden defect
+behind it.

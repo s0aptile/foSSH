@@ -110,7 +110,7 @@ class Harness(ConsoleApplication):
             print(f"agent: {exc}", file=sys.stderr)
             self.quit()
             return
-        self._window = ConsoleWindow(self, self._agent)
+        self._window = ConsoleWindow(self, self._agent, self._advisor)
         self._window.set_default_size(1100, 760)
         self._window.present()
         self._agent.handshake(

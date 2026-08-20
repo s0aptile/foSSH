@@ -100,3 +100,21 @@ This console replaces the
 .B fossh\-tui
 terminal interface shipped up to 0.1.3. That release line is retired;
 see RETIREMENT.md for what was wrong with it.
+.PP
+.B fossh\-agent
+always runs as whoever launches this console, never as a service (see
+DESCRIPTION). On a fresh install this package's own
+.I %post
+joins its files to the
+.B fossh\-console
+group already, but on an upgrade of a session already logged in, or of
+the base package alone without this one, the running user may need
+.RS
+.EX
+usermod \-a \-G fossh\-console $USER
+.EE
+.RE
+followed by logging out and back in, before
+.I /var/lib/fossh
+is reachable and this console shows real data instead of "This install
+has no data directory yet."
