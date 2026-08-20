@@ -156,3 +156,30 @@ This project's own honesty-about-gaps convention (see `THREAT_MODEL.md`'s "Alpha
 - **Whether Fedora's own `rust`/`cargo`/`ocaml`/`ocaml-dune` RPMs actually satisfy this spec's `BuildRequires` without `--nodeps`.** Every real build so far, on this dev machine, has used `--nodeps` specifically because Rust here is rustup-managed, not the system package — see `dev/DURUM.md`. **Resolved (2026-08-06), confirmed against a real Copr build, not just repoquery:** an actual `fedora-44-x86_64` build got well past `BuildRequires` resolution and into a live `cargo build` (dependency crates downloading and compiling, `boring-sys v4.22.0` among them) — `rust`/`cargo`/`ocaml`/`ocaml-dune` all resolved and satisfied this spec without `--nodeps`, exactly as the repoquery-based prediction below said they should. The build still failed, but past this concern entirely, on something unrelated: `boring-sys`'s own build script shells out to `git init` (BoringSSL's own vendoring step, one layer under the `§3.4` QUIC feature), and Copr's minimal Fedora buildroot doesn't carry `git` by default — a real, reproduced, different failure (`error: failed to run custom build command for boring-sys v4.22.0`), already addressed with an explicit `BuildRequires: git` line in `fossh.spec`. (Original repoquery evidence, still true: `dnf repoquery --available rust cargo` against a real Fedora 44 system shows `rust`/`cargo` 1.97.1 in the Updates repo, exactly satisfying the workspace's `rust-version = "1.97"` pin in `Cargo.toml`.)
 
 Neither of these blocks getting a Copr project *created* and a first build *attempted* — they were the likely first real failures on Fedora chroots, both now resolved one way or another; see "EPEL/RHEL-family build status" above for the equivalent, still-open picture on EPEL chroots specifically.
+
+## Real build status as of 0.0.2.2, six real submissions in — one chroot green, four blocked on a named, tracked, unfixed cause
+
+**`epel-10-x86_64` builds clean.** Confirmed six separate times
+(builds 10882464 through 10882767), same result every time regardless
+of which fix was being tested. `dnf copr enable s0aptile/fossh
+epel-10-x86_64` is honest to publish and to tell an end user, today.
+
+**`fedora-44-x86_64`, `fedora-45-x86_64`, `fedora-rawhide-x86_64`, and
+`epel-9-x86_64` are not green, and should not be enabled or offered
+to anyone until one of them is.** All four fail `%check` on
+`gpg: failed to start gpg-agent '/usr/bin/gpg-agent': General error`
+— the local watchdog/agent test suite spawning real `gpg` subprocesses
+that need a live agent, which cannot start inside Copr's real Mock
+buildroot for a reason six real, distinct fix attempts did not
+resolve (a pipe-read ordering bug, a missing `GNUPGHOME` environment
+variable, and forced-sequential test execution on both Rust and
+OCaml — each one a real fix, none of them the actual cause; full
+investigation trail in `DECISIONS.md` ADR-0091 through ADR-0096).
+Every local reproduction attempt — a capability-matched rootless
+container, CPU-throttled parallel execution, the full unfiltered
+workspace test suite — passed clean; only Copr's real infrastructure
+reproduces this. Real diagnosis needs `mock --shell` against Copr's
+own real buildroot, genuine interactive access this investigation
+never had (needs `dnf install mock` and root). Until someone with
+that access closes it, these four chroots stay enabled on the live
+project (free to re-attempt) but undocumented as installable.
