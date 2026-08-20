@@ -2835,3 +2835,21 @@ not achieved is a green build on `fedora-44/45/rawhide-x86_64` and
 `epel-9-x86_64` specifically, for a cause that resists diagnosis
 without infrastructure access this session does not have. That is
 the whole, honest state — not smaller, not larger.
+
+**Decision, made explicitly rather than left open: Leap 2 closes
+here.** A green build on the remaining four chroots is not achievable
+with what this session has access to — that is a fact, not a
+choice available to make. Shipping `s0aptile/fossh` in its current,
+real state — one chroot (`epel-10-x86_64`) genuinely green, four
+documented as failing for a named, tracked, infrastructure-access-
+gated reason, not a silent or unknown one — is the choice, and it is
+made here, not deferred. `dnf copr enable s0aptile/fossh
+epel-10-x86_64` is honest to publish today. The other four chroots
+stay enabled on the live project (re-attempting costs nothing once
+`mock --shell` access closes ADR-0096's real gap) but are not to be
+told to any end user as installable until one of them goes green for
+real. This matches this project's own existing, established
+discipline — see `docs/PACKAGING-copr.md`'s own "don't tell anyone to
+`dnf copr enable` any chroot until a build succeeds there," already
+the house rule for exactly this situation before this session found
+a new instance of it.
