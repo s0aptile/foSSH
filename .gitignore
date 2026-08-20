@@ -33,3 +33,10 @@ __pycache__/
 # store a second copy of history inside history. The README and the
 # checksums are tracked; the archives are not.
 /graveyard/*/*.tar.gz
+
+# Raw session scratch output: real local paths get baked into these by
+# whatever generated them, and they're derived/reproducible from the
+# investigation .md reports that DO belong in dev/ and ARE tracked, so
+# nothing of value is lost by never committing the raw form.
+/dev/*-raw/
+/fossh.toml
