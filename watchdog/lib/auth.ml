@@ -7,7 +7,8 @@ let verify_signature ~(gnupghome : string) ~(expected_key_fingerprint : string)
         Tempfile.with_contents signature_binary (fun sig_path ->
             Tempfile.with_contents "" (fun status_path ->
                 match
-                  Subprocess.run ~prog:gpg_path
+                  Subprocess.run ~extra_env:[ ("GNUPGHOME", gnupghome) ]
+                    ~prog:gpg_path
                     ~argv:
                       [|
                         "gpg";
@@ -21,7 +22,7 @@ let verify_signature ~(gnupghome : string) ~(expected_key_fingerprint : string)
                         sig_path;
                         data_path;
                       |]
-                    ~stdin_content:""
+                    ~stdin_content:"" ()
                 with
                 | Error _ -> false
                 | Ok _ -> (

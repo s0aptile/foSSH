@@ -17,9 +17,9 @@ let rec rm_rf path =
 
 let run_gpg_ok ~(gnupghome : string) (args : string list) : string =
   match
-    Subprocess.run ~prog:"/usr/bin/gpg"
+    Subprocess.run ~extra_env:[ ("GNUPGHOME", gnupghome) ] ~prog:"/usr/bin/gpg"
       ~argv:(Array.of_list ("gpg" :: "--batch" :: "--homedir" :: gnupghome :: args))
-      ~stdin_content:""
+      ~stdin_content:"" ()
   with
   | Ok out -> out
   | Error e -> failwith ("gpg " ^ String.concat " " args ^ " failed: " ^ e)

@@ -48,13 +48,30 @@ let read_all (fd : Unix.file_descr) : string =
 
 type outcome = { stdout : string; stderr : string; exit_status : Unix.process_status }
 
-let run_raw ~(prog : string) ~(argv : string array) ~(stdin_content : string) :
+let run_raw ?(extra_env : (string * string) list = [])
+    ~(prog : string) ~(argv : string array) ~(stdin_content : string) () :
     outcome =
   let in_read, in_write = pipe () in
   let out_read, out_write = pipe () in
   let err_read, err_write = pipe () in
+  let env =
+    if extra_env = [] then Unix.environment ()
+    else
+      let overridden_keys = List.map fst extra_env in
+      let is_overridden entry =
+        match String.index_opt entry '=' with
+        | None -> false
+        | Some i -> List.mem (String.sub entry 0 i) overridden_keys
+      in
+      let base =
+        Array.to_list (Unix.environment ())
+        |> List.filter (fun e -> not (is_overridden e))
+      in
+      Array.of_list
+        (base @ List.map (fun (k, v) -> k ^ "=" ^ v) extra_env)
+  in
   let pid =
-    try Unix.create_process prog argv in_read out_write err_write
+    try Unix.create_process_env prog argv env in_read out_write err_write
     with e ->
       List.iter
         (fun fd -> try Unix.close fd with Unix.Unix_error _ -> ())
@@ -73,9 +90,10 @@ let run_raw ~(prog : string) ~(argv : string array) ~(stdin_content : string) :
   let _, exit_status = Unix.waitpid [] pid in
   { stdout; stderr; exit_status }
 
-let run ~(prog : string) ~(argv : string array) ~(stdin_content : string) :
+let run ?(extra_env : (string * string) list = [])
+    ~(prog : string) ~(argv : string array) ~(stdin_content : string) () :
     (string, string) result =
-  let o = run_raw ~prog ~argv ~stdin_content in
+  let o = run_raw ~extra_env ~prog ~argv ~stdin_content () in
   match o.exit_status with
   | Unix.WEXITED 0 -> Ok o.stdout
   | Unix.WEXITED code ->

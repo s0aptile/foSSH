@@ -2544,3 +2544,58 @@ pass found no fault in.
 of this has run on real GitHub Actions — no live remote has it yet.
 Every fix above closes a *known, evidenced* gap; it does not promise
 a clean run. First real execution is the actual confirmation.
+
+## ADR-0093 — the real Copr error, and the actual cause: GNUPGHOME was never an environment variable
+
+**Status:** accepted, 0.0.2.2.
+
+**Context.** ADR-0091's pipe-read fix landed and was resubmitted
+(Copr build 10882556) — same result, 4 of 5 chroots failed. This
+time the log carried the real mechanism, not a summarized error code:
+`gpg: error running '/usr/bin/gpg-agent': exit status 2` /
+`gpg: failed to start gpg-agent '/usr/bin/gpg-agent': General error`
+/ `gpg: can't connect to the gpg-agent: General error`, immediately
+after a successful key import (`imported: 1`) — meaning `gpg` itself
+completed, but a later gpg-agent-dependent step inside the same
+invocation failed to start the agent in Copr's mock chroot. This
+symptom is a documented, common class of problem (confirmed via
+public reports of the identical error string across containerized/
+sandboxed GnuPG use — mock chroots, minimal containers, restricted
+socket directories) and is unrelated to pipe buffering.
+
+**Root cause.** Every `gpg` invocation in `watchdog/lib/` passed
+`--homedir <dir>` as a command-line flag but never exported
+`GNUPGHOME` as an environment variable — `Subprocess.run_raw` used
+`Unix.create_process`, which always inherits the parent's environment
+wholesale, with no mechanism to set or override a variable. Modern
+GnuPG's `gpg-agent` needs `GNUPGHOME` in its own environment (not
+just the frontend `gpg` client's `--homedir` flag) to reliably place
+its runtime socket inside the specified homedir rather than a
+default runtime directory that may not exist or be writable in a
+minimal chroot. **This is not a new class of bug for this project** —
+it is the exact same shape ADR-0082/commit `5ab4647` already found
+and fixed on the Rust side (`keylock::verify()` needed `GNUPGHOME`
+set as an environment variable, not just relying on gpg's default
+keyring resolution). The OCaml side never got the equivalent fix.
+
+**Decision.** `Subprocess.run`/`run_raw` gained an `?extra_env`
+parameter (`Unix.create_process_env`, filtering any conflicting keys
+out of the inherited environment first so an override actually wins,
+not just gets shadowed by ordering). Every `gpg`-invoking call site in
+`watchdog/lib/` (`auth.ml`, `keypair.ml`, `manifest.ml` — two call
+sites, `operator_key.ml`) and every gpg-invoking test helper now
+passes `~extra_env:[ ("GNUPGHOME", gnupghome) ]` alongside the
+existing `--homedir` flag. `openssl` call sites are unaffected — no
+agent concept applies there.
+
+**Verified:** full `dune test` suite, all 16 test binaries, zero
+failures (`7/7` through `26/26` across every group, matching the
+pre-fix baseline count exactly — nothing regressed, nothing newly
+skipped).
+
+**Honestly still open in the one way that matters.** This fix targets
+the literal error string Copr's log showed, not a summarized/inferred
+symptom — higher confidence than ADR-0091's pipe-read theory, which a
+debate-verify pass found didn't actually fit the evidence. But real
+confirmation is still only the next Copr build succeeding on the
+chroots that failed twice already, not this entry.

@@ -19,9 +19,9 @@ let gnupghome_of ~(dir : string) : string = Filename.concat dir "operator-gnupgh
 let fingerprint_pin_path ~(dir : string) : string = Filename.concat dir "operator-fingerprint.pin"
 
 let run_gpg ~(gnupghome : string) (args : string list) : (string, string) result =
-  Subprocess.run ~prog:gpg_path
+  Subprocess.run ~extra_env:[ ("GNUPGHOME", gnupghome) ] ~prog:gpg_path
     ~argv:(Array.of_list ("gpg" :: "--batch" :: "--homedir" :: gnupghome :: args))
-    ~stdin_content:""
+    ~stdin_content:"" ()
 
 let extract_single_fingerprint (with_colons_listing : string) : (string, error) result =
   let is_record_type prefix line = String.length line >= 4 && String.sub line 0 4 = prefix in

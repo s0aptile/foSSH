@@ -26,7 +26,7 @@ let cert_is_valid (path : string) : bool =
   match
     Subprocess.run ~prog:openssl_path
       ~argv:[| "openssl"; "x509"; "-in"; path; "-noout"; "-checkend"; "0" |]
-      ~stdin_content:""
+      ~stdin_content:"" ()
   with
   | Ok _ -> true
   | Error _ -> false
@@ -36,7 +36,7 @@ let key_is_valid (path : string) : bool =
   &&
   match
     Subprocess.run ~prog:openssl_path ~argv:[| "openssl"; "pkey"; "-in"; path; "-noout" |]
-      ~stdin_content:""
+      ~stdin_content:"" ()
   with
   | Ok _ -> true
   | Error _ -> false
@@ -63,7 +63,7 @@ let ensure_identity ~(dir : string) ~(common_name : string) : (t, error) result 
                     "-keyout"; key_pem_path; "-out"; cert_pem_path; "-subj";
                     Printf.sprintf "/CN=%s" common_name;
                   |]
-                ~stdin_content:""
+                ~stdin_content:"" ()
             with
             | Error e -> Error (Generate_failed e)
             | Ok _ ->

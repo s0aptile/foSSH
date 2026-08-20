@@ -7,7 +7,7 @@ let sha256_hex (path : string) : (string, string) result =
     match
       Subprocess.run ~prog:sha256_path
         ~argv:[| "sha256sum"; "--"; path |]
-        ~stdin_content:""
+        ~stdin_content:"" ()
     with
     | Error e -> Error e
     | Ok output -> (
@@ -60,13 +60,13 @@ let gpg_path = "/usr/bin/gpg"
 
 let sign ~(gnupghome : string) ~(key_id : string) ~(passphrase : string) (content : string) :
     (string, string) result =
-  Subprocess.run ~prog:gpg_path
+  Subprocess.run ~extra_env:[ ("GNUPGHOME", gnupghome) ] ~prog:gpg_path
     ~argv:
       [|
         "gpg"; "--batch"; "--pinentry-mode"; "loopback"; "--passphrase"; passphrase;
         "--homedir"; gnupghome; "--local-user"; key_id; "--clearsign";
       |]
-    ~stdin_content:content
+    ~stdin_content:content ()
 
 let generate_and_sign ~(gnupghome : string) ~(key_id : string) ~(passphrase : string)
     (paths : string list) : (string, string) result =
@@ -79,13 +79,13 @@ let verify_and_extract ~(gnupghome : string) ~(expected_key_fingerprint : string
   try
     Tempfile.with_contents "" (fun status_path ->
         match
-          Subprocess.run ~prog:gpg_path
+          Subprocess.run ~extra_env:[ ("GNUPGHOME", gnupghome) ] ~prog:gpg_path
             ~argv:
               [|
                 "gpg"; "--batch"; "--homedir"; gnupghome; "--status-file";
                 status_path; "--decrypt";
               |]
-            ~stdin_content:clearsigned
+            ~stdin_content:clearsigned ()
         with
         | Error e -> Error e
         | Ok body -> (

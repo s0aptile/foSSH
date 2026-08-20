@@ -16,7 +16,7 @@ let generate_self_signed_cert (common_name : string) : cert =
           "ec_paramgen_curve:prime256v1"; "-days"; "1"; "-nodes"; "-keyout"; key_pem; "-out";
           cert_pem; "-subj"; Printf.sprintf "/CN=%s" common_name;
         |]
-      ~stdin_content:""
+      ~stdin_content:"" ()
   with
   | Ok _ -> { dir; cert_pem; key_pem }
   | Error e -> failwith (Printf.sprintf "openssl req failed for %s: %s" common_name e)

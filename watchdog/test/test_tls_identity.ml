@@ -202,7 +202,7 @@ let () =
            "-not_before"; "20200101000000Z"; "-not_after"; "20210101000000Z"; "-keyout"; expired_key;
            "-out"; expired_cert; "-subj"; "/CN=already-expired";
          |]
-       ~stdin_content:""
+       ~stdin_content:"" ()
    with
   | Error e -> check ("could not even generate an expired test certificate: " ^ e) false
   | Ok _ -> (

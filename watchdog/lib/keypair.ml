@@ -34,9 +34,9 @@ let ensure_passphrase (gnupghome : string) : (string, error) result =
 
 let run_gpg ~(gnupghome : string) (args : string list) : (string, string) result
     =
-  Subprocess.run ~prog:gpg_path
+  Subprocess.run ~extra_env:[ ("GNUPGHOME", gnupghome) ] ~prog:gpg_path
     ~argv:(Array.of_list ("gpg" :: "--batch" :: "--homedir" :: gnupghome :: args))
-    ~stdin_content:""
+    ~stdin_content:"" ()
 
 let extract_fingerprint (with_colons_listing : string) : string option =
   String.split_on_char '\n' with_colons_listing

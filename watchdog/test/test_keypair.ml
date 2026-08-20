@@ -30,9 +30,9 @@ let () =
         (first = second);
 
       let secret_key_count =
-        match Subprocess.run ~prog:"/usr/bin/gpg"
+        match Subprocess.run ~extra_env:[ ("GNUPGHOME", gnupghome) ] ~prog:"/usr/bin/gpg"
                 ~argv:[| "gpg"; "--batch"; "--homedir"; gnupghome; "--with-colons"; "--list-secret-keys" |]
-                ~stdin_content:""
+                ~stdin_content:"" ()
         with
         | Error e -> failwith e
         | Ok listing ->
