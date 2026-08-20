@@ -579,7 +579,7 @@ def explain(prompt: str, *, timeout: float = 120.0) -> str:
     not a genuinely different sample — a stylistic pattern that
     triggered the detector once has a real chance of recurring
     unchanged. This is unrelated to the sampling investigation in
-    `dev/BIASED-ONE-LEAK-2026-08-16.md`, which was about the *shipped
+    `dev/STRONNICZY-LEAK-2026-08-16.md`, which was about the *shipped
     default* every answer uses; `packaging/model/Modelfile` still sets
     no `repeat_penalty` and `temperature 0.2`, and the bump here only
     ever applies to a retry that already followed a detected leak, and
