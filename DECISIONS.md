@@ -2357,3 +2357,65 @@ states — "No sites yet," the actual `fossh site create` hint — instead
 of the permission error, confirming the permission model was the only
 thing wrong with these three pages, not a second, hidden defect
 behind it.
+
+## ADR-0089 — `crosscheck()`: a tested capability with a backend and no front door
+
+**Status:** deliberately left open, 0.0.2.2. Not a bug, not deleted.
+
+**Context.** A deep audit (not a symbol grep) of `gui/fossh_console/advisor_client.py`
+found `witness_available()` and `crosscheck(claim)` with zero callers
+anywhere in `gui/`, including tests — the same shape a symbol-reference
+check would flag as dead code, and the same shape `icon_family()`
+(`932a8be`) and `ui_family()`/`mono_family()` (`f6ba160`) already were.
+This one is not that. `crosscheck()`'s sibling in the same file,
+`read_screenshot()`, is fully wired through `advisor_bridge.py`
+(`read_screenshot_async`) since ADR-0079; `crosscheck()` never got the
+same treatment. ADR-0077 already states its contract explicitly:
+`total_ceiling=float("inf")` is deliberate because "a person who clicks
+'read this screenshot' and watches it work is in a different contract
+entirely" — this was designed from the start as an explicit,
+user-triggered second opinion, never an automatic call the way
+`explain()` auto-fires for any finding above `info` severity. ADR-0078
+verified its backend directly against all six adversarial cases in the
+original breach battery, clean.
+
+**Why not wired now.** Doing this properly means a real UI affordance
+(a "second opinion" action on a finding's advice row), a new
+`AdvisorBridge` async wrapper matching `read_screenshot_async`'s shape,
+and — the part not to guess at — confirming `exclusivity_is_shared()`
+actually holds under this specific call pattern rather than assuming
+the existing gate is enough. This project already measured what
+concurrent Biased One + Hellen's Eye costs (82x time-to-first-token
+regression, `dev/MEASURED-2026-08-16.md`); a crosscheck action fired
+carelessly next to an in-flight `explain()` queue is exactly the shape
+of bug that regression came from. That is real feature work, not this
+pass's scope.
+
+**Decision.** Left open, named plainly rather than silently ignored —
+same treatment `persona.rs`'s `PUBLIC_NAME` got earlier this session.
+Next step when this is picked up: a UI trigger on `overview.py`'s
+finding rows, a `crosscheck_async` on `AdvisorBridge`, and a real,
+measured test of the exclusivity gate under a genuine concurrent call
+before trusting it — not assumed correct because the code exists.
+
+## ADR-0090 — two stale claims in the console's own man page
+
+**Status:** accepted, 0.0.2.2.
+
+**Context.** `docs/man/fossh-console.1`'s own `.TH` header claimed
+version `0.2.0` — a version that has never shipped; the real line is
+`0.0.2.x` (`0.0.2.2` current, `RETIREMENT.md`). Separately, its
+`KEYBOARD` section documented `Ctrl+1 .. Ctrl+4` jumping to four named
+pages, while `window.py` generates a real `Ctrl+{index}` accelerator
+per entry in `PAGES` — five pages since Legal was added, confirmed
+correct and current in the in-app shortcuts overlay
+(`window.py`: `"Ctrl+1 … Ctrl+5"`). The man page was never updated when
+Legal joined the other four.
+
+**Decision.** Corrected both: header to `foSSH 0.0.2.2`, dated
+2026-08-20; keyboard section to `Ctrl+1 .. Ctrl+5`, five pages named.
+Checked the rest of the file line by line rather than assuming two
+fixes were the whole of it — `ENVIRONMENT`, `FILES`, `EXIT STATUS`,
+`SEE ALSO`, and the `NOTES` section's `fossh-console` group
+instructions (from `1dc3fe6`, this session) all still read accurate.
+Verified with `groff -man -Tascii` and `man -l`, both clean.
