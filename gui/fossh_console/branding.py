@@ -45,9 +45,6 @@ WORDMARK_FAMILIES = [
 
 STAT_VALUE_FAMILIES = list(WORDMARK_FAMILIES)
 
-UI_FAMILIES = ["Roboto", "Inter", "Cantarell", "Noto Sans", "Sans"]
-MONO_FAMILIES = ["Roboto Mono", "Source Code Pro", "DejaVu Sans Mono", "Monospace"]
-
 @functools.lru_cache(maxsize=1)
 def _installed_families() -> set[str]:
     """Every family Pango can actually see, lowercased."""
@@ -62,12 +59,6 @@ def resolve_family(candidates: list[str]) -> str:
         if name.lower() in installed:
             return name
     return candidates[-1]
-
-def ui_family() -> str:
-    return resolve_family(UI_FAMILIES)
-
-def mono_family() -> str:
-    return resolve_family(MONO_FAMILIES)
 
 def _display_family(candidates: list[str]) -> str | None:
     """The first installed face in `candidates`, or `None` for the UI face."""
