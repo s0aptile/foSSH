@@ -43,7 +43,7 @@ if [ -f "$project_root/crates/fossh-ffi/target/release/libfossh.so" ]; then
 fi
 cp "$project_root/include/fossh.h" "$stage/fossh/dist/"
 
-cp "$project_root/readme.md" "$stage/readme.md"
+cp "$project_root/README.md" "$stage/README.md"
 cp "$project_root/tos.md" "$stage/tos.md"
 
 ( cd "$stage" && find fossh -type f | LC_ALL=C sort | xargs sha256sum ) > "$stage/SHA256SUMS"

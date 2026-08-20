@@ -162,11 +162,3 @@ This is a lot of root-level files — most of them sit here because the project'
 ## License
 
 Licensed under [MIT](LICENSE).
-
-## Funding
-
-foSSH accepts donations on:
-
-- **Solana (SPL):** `J7wgrgySAVvWmreXiM51ig3rqY1vNnpdpvqZsHZLPfwD`
-- **Neon (Neon EVM):** `0xEde8Dd4413b667269e3Df902C49532C2212475AF`
-- **Monero** — accepted, but a transfer is harder to reconcile against a donation than the two above, so it is the last resort rather than the first choice: `87NdV4EUcpQWsBR77L4PdCcWZjxhxcy91YGH1hJCdeXU7ERZrwwRZYT843gCojF7wsWfTUm8zH83BRNA7DTLdh9xC8pxnmZ`
