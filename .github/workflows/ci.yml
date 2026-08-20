@@ -107,28 +107,37 @@ jobs:
     # The OCaml half of this project had zero CI coverage before this
     # entry -- every real bug this session found in it (the subprocess
     # pipe-read ordering fix, ADR-0091) was caught by hand, on one
-    # machine, not by anything that runs automatically. libquiche.so.0
-    # is vendored in watchdog/quic/vendor/, not installed system-wide,
-    # so LD_LIBRARY_PATH has to point at it explicitly -- the same
-    # requirement a real dev-checkout build has, see ADR-0091.
+    # machine, not by anything that runs automatically.
+    #
+    # Deliberately NOT opam (a debate-verify pass caught the first
+    # draft of this job using ocaml/setup-ocaml@v3 -- wrong toolchain
+    # entirely): the real %build section's own comment states dune
+    # resolves ocaml/ocaml-dune/ocaml-ctypes from the *system*
+    # findlib, matching packaging/rpm/fossh.spec exactly, not an
+    # opam-managed switch. Same reasoning, apt-equivalent packages.
+    #
+    # libquiche.so.0 is gitignored (watchdog/quic/vendor/.gitignore),
+    # not committed -- scripts/build-quiche-ffi.sh produces it and has
+    # to run before dune build, the same order %build itself uses.
     name: watchdog (dune test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: install OCaml toolchain
-        uses: ocaml/setup-ocaml@v3
-        with:
-          ocaml-compiler: "5"
-      - name: install system deps (gpg, gnupg2)
-        run: sudo apt-get update && sudo apt-get install -y gnupg2
+      - uses: dtolnay/rust-toolchain@stable
+      - name: install system OCaml toolchain + build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ocaml dune libctypes-ocaml-dev ocaml-findlib jq gnupg2
+      - name: build-quiche-ffi (produces watchdog/quic/vendor/libquiche.so.0)
+        run: ./scripts/build-quiche-ffi.sh
       - name: dune build
         working-directory: watchdog
-        run: opam exec -- dune build
+        run: dune build --profile release
       - name: dune test
         working-directory: watchdog
         run: |
-          export LD_LIBRARY_PATH="$PWD/quic/vendor:$LD_LIBRARY_PATH"
-          opam exec -- dune test
+          export LD_LIBRARY_PATH="$(pwd)/quic/vendor:$LD_LIBRARY_PATH"
+          dune test
 
   console:
     # The Python/GTK4 console had zero CI coverage before this entry
@@ -171,9 +180,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: install build deps
+        # Every line here is packaging/rpm/fossh.spec's own real
+        # BuildRequires list (23 entries, re-grepped from the spec
+        # itself, not retyped from memory -- a debate-verify pass
+        # caught the first draft of this job missing 16 of them).
         run: |
-          dnf install -y rpm-build rpmlint rust cargo ocaml ocaml-dune \
-            git pkgconfig clang-devel cmake gnupg2
+          dnf install -y rpm-build rpmlint \
+            cargo rust gcc git openssl-devel pkgconfig openssl \
+            checkpolicy policycoreutils systemd-rpm-macros \
+            selinux-policy selinux-policy-devel \
+            gnupg2 cmake clang-devel \
+            ocaml ocaml-dune ocaml-ctypes-devel ocaml-findlib jq libffi-devel \
+            python3-devel desktop-file-utils libappstream-glib appstream
       - name: build (skips %check here -- covered by the test/watchdog/console jobs above)
         run: sh scripts/build-release-rpm.sh
       - name: rpmlint the real built packages

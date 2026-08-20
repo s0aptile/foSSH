@@ -2522,9 +2522,25 @@ proving the app actually draws rather than just importing cleanly.
 `60e2443` (a redundant `openssl-libs` Requires) was found exactly
 this way, a check that doesn't exist without a real built package.
 
-**Honestly unverified.** Written and locally sanity-checked (`python3
--c "import yaml; yaml.safe_load(...)"` for syntax, each job's exact
-command line re-run locally where practical) but not yet run through
-real GitHub Actions — this repository has no live remote with Actions
-enabled yet, the same gap the existing Rust jobs already had. First
-real run is what confirms this, not this entry.
+**First draft was wrong — caught by debate-verify, not by luck.** A
+dispatched adversarial pass, not a self-review, found the `watchdog`
+and `packaging` jobs would both fail on a real runner: `watchdog` used
+`ocaml/setup-ocaml@v3` (an opam-managed switch), which contradicts
+`%build`'s own comment ("Deliberately NOT `eval $(opam env)`... dune
+resolves ocaml/ocaml-dune/ocaml-ctypes from the *system* findlib") and
+never ran `scripts/build-quiche-ffi.sh`, so the gitignored
+`libquiche.so.0` it links against would never exist; `packaging`'s
+`dnf install` line had 11 of the spec's real 23 `BuildRequires`,
+missing `checkpolicy`/`selinux-policy-devel`/`ocaml-ctypes-devel`
+among others. Both rewritten to match `packaging/rpm/fossh.spec`'s
+actual `%build`/`BuildRequires` verbatim rather than invented from
+memory — the packaging list cross-checked programmatically (every one
+of the 23 real entries confirmed present, not eyeballed), the Ubuntu
+`libctypes-ocaml-dev` package name confirmed against Debian/Ubuntu's
+own package pages, not assumed. `console` was the one job the debate
+pass found no fault in.
+
+**Still honestly unverified in the one way that matters most**: none
+of this has run on real GitHub Actions — no live remote has it yet.
+Every fix above closes a *known, evidenced* gap; it does not promise
+a clean run. First real execution is the actual confirmation.
