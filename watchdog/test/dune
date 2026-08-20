@@ -6,6 +6,11 @@
 (tests
  (names test_nonce test_auth test_session test_manifest test_supervisor test_bootstrap test_keypair
    test_quic test_command_protocol test_tls_identity test_core_pin test_quic_command_server
-   test_operator_key test_operator_auth_server test_setup_token test_setup_enroll_flow)
- (modules :standard \ test_helpers)
+   test_setup_token)
+ (modules :standard \ test_helpers test_operator_key test_operator_auth_server test_setup_enroll_flow)
+ (libraries fossh_watchdog_lib fossh_watchdog_quic test_helpers unix threads.posix))
+
+(executables
+ (names test_operator_key test_operator_auth_server test_setup_enroll_flow)
+ (modules test_operator_key test_operator_auth_server test_setup_enroll_flow)
  (libraries fossh_watchdog_lib fossh_watchdog_quic test_helpers unix threads.posix))

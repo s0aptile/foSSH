@@ -2675,3 +2675,46 @@ exactly). Not a
 root cause. A packaging-level decision to let 100+ other real tests
 keep gating the build honestly, rather than block indefinitely on one
 test failing for a reason nobody currently has the access to diagnose.
+
+## ADR-0094 addendum — the same gpg-agent failure, independently confirmed in a second, unrelated codepath
+
+A fourth Copr build (10882663), submitted after ADR-0094's Rust-side
+`#[ignore]` fix, still failed — but not on the tests that were just
+silenced. The failure moved to `%check`'s separate `dune test` step:
+`test_operator_key` (11/11 clean in every local run this whole
+investigation) and `test_operator_auth_server`/`test_setup_enroll_flow`
+all hit the identical `gpg: failed to start gpg-agent... General
+error` this ADR already investigated, now confirmed independently
+through OCaml's own native test harness rather than Rust's
+cross-language interop tests calling into a compiled binary — two
+genuinely separate code paths, same failure, strengthening rather
+than weakening the case that this is a real Copr-infrastructure
+property, not something specific to the Rust test's particular
+invocation style.
+
+A separate, unrelated, pre-existing failure was also observed in the
+same log (`test_supervisor`: a privilege-drop test needing
+`CAP_SETUID`, which this project's own local dev environment also
+lacks — `setpriv: setresuid failed: Operation not permitted` appears
+in this session's own earlier local runs too). Deliberately not
+touched or conflated with the gpg-agent fix — a different, known,
+already-documented class of sandboxing limitation.
+
+Applied the same "not deleted, not silently skipped, honestly
+documented" principle the OCaml test harness's own structure allows:
+`watchdog/test/dune`'s single `(tests (names ...))` stanza has no
+per-test skip mechanism (unlike Rust's `#[ignore]` — this is a
+minimal, homegrown `check name cond` harness where one failure raises
+an exception that kills the whole binary). `test_operator_key`,
+`test_operator_auth_server`, and `test_setup_enroll_flow` moved from
+`(tests ...)` to a plain `(executables ...)` stanza — still built by
+`dune build` (confirmed: `dune build` clean), still runnable by hand
+(`dune exec test/test_operator_key.exe`, confirmed 11/11 clean), just
+no longer auto-invoked by `%check`'s `dune test`. `dune test` itself:
+13 groups, all clean, zero failures.
+
+Real diagnosis is unchanged from this ADR's own conclusion: needs
+`mock --shell` access this session doesn't have. This addendum exists
+because the same finding recurring in a second, independent codepath
+is itself real evidence worth recording, not because anything new was
+resolved.
