@@ -1,4 +1,4 @@
-pub const PUBLIC_NAME: &str = "Biased One";
+pub const PUBLIC_NAME: &str = "Stronniczy";
 
 const FORBIDDEN_JSON: &str = include_str!("../../../packaging/model/forbidden-terms.json");
 
@@ -290,7 +290,7 @@ mod tests {
 
     #[test]
     fn the_public_name_is_the_only_name() {
-        assert_eq!(PUBLIC_NAME, "Biased One");
+        assert_eq!(PUBLIC_NAME, "Stronniczy");
 
         assert!(is_clean(PUBLIC_NAME));
     }

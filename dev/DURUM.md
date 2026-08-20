@@ -76,8 +76,8 @@ actually connected to the console for the first time.
 
 | Defect | State |
 |---|---|
-| Biased One (the text model): a `stop "</think>"` sequence halted generation before any answer token — 34/34 and 40/40 calls returned empty content across both models tested | Fixed, stop sequence removed, budgets raised to what reasoning actually costs. ADR-0076. |
-| Biased One: no identity fence in the SYSTEM block, only a post-hoc term filter | Fixed, an explicit never-name-yourself instruction added; a demonstrated-refusal worked example was tried and reverted for breaking ordinary answers. ADR-0076. |
+| Stronniczy (the text model): a `stop "</think>"` sequence halted generation before any answer token — 34/34 and 40/40 calls returned empty content across both models tested | Fixed, stop sequence removed, budgets raised to what reasoning actually costs. ADR-0076. |
+| Stronniczy: no identity fence in the SYSTEM block, only a post-hoc term filter | Fixed, an explicit never-name-yourself instruction added; a demonstrated-refusal worked example was tried and reverted for breaking ordinary answers. ADR-0076. |
 | Hellen's Eye (the vision model, `qwen3-vl:2b`): an adversarial image could talk it into self-disclosure, and several others locked it into a non-converging reasoning loop | Fixed by switching the underlying model to `qwen3.5:4b` with `think=False` — reasoning never starts, so it cannot loop in one. ADR-0078. |
 
 `advisor_client.explain()` had existed since earlier in this session and
@@ -103,7 +103,7 @@ policy confines touches it today.
 A three-agent doc sweep followed (`c8c93b1`) — version strings, a
 retired-TUI dependency list still in `NOTICE`, and a `docs/SELF-HEALING.md`
 claim about a scheduled tick that runs as `fossh-svc`, which does not
-exist. `granite4.1:3b` was evaluated as a replacement for Biased One and
+exist. `granite4.1:3b` was evaluated as a replacement for Stronniczy and
 rejected, not shipped. ADR-0081.
 
 ## 0.0.2.1

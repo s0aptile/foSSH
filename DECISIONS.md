@@ -1209,12 +1209,12 @@ reads as "not configured" rather than as tampering.
 
 ---
 
-## ADR-0068 — "Biased One": the advisory layer has no public face
+## ADR-0068 — "Stronniczy": the advisory layer has no public face
 
 **Status:** accepted, 0.0.2.1.
 
 **Decision.** The optional local model is never named, never converses,
-and never explains itself. In public it is `Biased One` — a name chosen
+and never explains itself. In public it is `Stronniczy` — a name chosen
 to identify a component without describing one. It does not appear in
 the interface, has no chat surface, and its output reaches an operator
 only as explanatory text attached to a diagnostic the deterministic
@@ -1792,7 +1792,7 @@ was one `ollama create` away from an advisor that refuses to run at
 all, witness fence included. Both are now installed and packaged
 alongside the Modelfile that already was.
 
-## ADR-0081 — `granite4.1:3b` considered as Biased One's replacement, not shipped
+## ADR-0081 — `granite4.1:3b` considered as Stronniczy's replacement, not shipped
 
 **Status:** rejected, 0.0.2.2. Full findings:
 `dev/GRANITE-ADVISOR-2026-08-16.md`.
@@ -1921,10 +1921,10 @@ boundary. The Apache-gateway deployment gap noted in
 to `/etc/httpd/conf.d/` in this dev environment) is unrelated and still
 open.
 
-## ADR-0083 — Biased One's residual identity leak: a retry, not a sampling parameter
+## ADR-0083 — Stronniczy's residual identity leak: a retry, not a sampling parameter
 
 **Status:** accepted, 0.0.2.2. Full investigation:
-`dev/BIASED-ONE-LEAK-2026-08-16.md`.
+`dev/STRONNICZY-LEAK-2026-08-16.md`.
 
 **Context.** `5e776f0`/ADR-0076 closed vendor-name and architecture
 disclosure with a SYSTEM-level fence and `forbidden-terms.json`, but
@@ -1989,7 +1989,7 @@ positives cleared.
 **Left open, deliberately, matching the investigation's own
 conclusion.** The shipped model's diagnostic answers are already
 vague and generic independent of this work
-(`dev/BIASED-ONE-LEAK-2026-08-16.md`) — a separate, pre-existing
+(`dev/STRONNICZY-LEAK-2026-08-16.md`) — a separate, pre-existing
 problem, not caused or fixed here. `top_k`/`top_p` tightening and a
 quality-focused worked example remain untried.
 
@@ -2162,7 +2162,7 @@ genuinely different sample. Each retry in `explain()` now adds
 `_IDENTITY_RETRY_TEMPERATURE_STEP = 0.1` over `DEFAULT_TEMPERATURE`,
 topping out at 0.4 across the three attempts `_MAX_IDENTITY_RETRIES =
 2` makes. This is unrelated to the sampling investigation
-`dev/BIASED-ONE-LEAK-2026-08-16.md` closed as unshippable — that was
+`dev/STRONNICZY-LEAK-2026-08-16.md` closed as unshippable — that was
 about the *default* every answer uses; `packaging/model/Modelfile` is
 untouched, still no `repeat_penalty`, `temperature 0.2`, and the bump
 here only ever applies after a leak was already caught, never to a
@@ -2216,3 +2216,64 @@ independently preserved in ADR-0077 — but `5ab4647`'s own text said
 `branding.py`'s case in that same commit (disclosed by name), this one
 was not. Named here since this project corrects its own overstated
 claims in public rather than leaving them stand.
+
+## ADR-0087 — "Biased One" becomes "Stronniczy"
+
+**Status:** accepted, 0.0.2.2.
+
+**Decision.** The advisory layer's codename (ADR-0068) changes from
+`Biased One` to `Stronniczy`. Every occurrence renamed, not adopted
+only going forward: `persona.rs`'s `PUBLIC_NAME` and its two test
+assertions, ADR-0068 and ADR-0081's own text, `dev/DURUM.md`, and the
+untracked session notes under `dev/` — including
+`dev/BIASED-ONE-LEAK-2026-08-16.md` itself, renamed to
+`dev/STRONNICZY-LEAK-2026-08-16.md`, with every cross-reference to that
+filename elsewhere in the tree updated to match.
+
+**Verified renamed, four passes, not one.** A case-insensitive grep
+across every git-tracked and untracked file with no extension filter; a
+separate `git grep` restricted to tracked files as a cross-check; a
+`strings` scan of every build artifact under `target/` for anything
+baked into a prior compiled binary; and a full re-run of all three
+after the rename landed. The binary scan found real hits on the first
+pass — the old name compiled into six stale `.rlib`/deps files from
+before this session's own earlier work, none of them source, none of
+them shipped — cleared by `cargo clean -p fossh-selfheal` and a
+rebuild, confirmed with a second scan showing zero remaining hits
+anywhere in `target/`.
+
+**Two hits left as-is, deliberately.** `dev/STRONNICZY-LEAK-2026-08-16.md`
+and `dev/SNAPSHOT-2026-08-16-2000.md` both still say
+`/tmp/biased-one-test/` once each — the literal name of a scratch
+directory a prior investigation actually used on disk (confirmed gone:
+`/tmp/biased-one-test/` no longer exists). That is a historical fact
+about what a path was called, not a reference to the persona's current
+name, the same category this project already treats git hashes and
+past ADR numbers as exempt from rewriting.
+
+**`PUBLIC_NAME` stays unwired — a decision, not an oversight.**
+Checked before touching it: `PUBLIC_NAME` has exactly one reader
+anywhere in the tree, its own two test assertions. `lib.rs` does not
+re-export it; nothing in the Python console reads it either. Left dead
+on purpose rather than newly wired into a display surface —
+`persona.rs`'s entire job, end to end, is refusal and redaction
+(`classify_intent`, `scrub`, `is_clean`); it has never had a display
+responsibility, and ADR-0068's whole premise is that this component
+"has no chat surface" and "does not appear in the interface." Building
+a new UI surface to show a name that same decision says should stay
+unshown would work against ADR-0068, not complete it. If a name is ever
+meant to surface — an about panel, say — that is a real console feature
+with its own design and tests, not something to improvise inside a
+rename.
+
+**Out of this pass's scope, found, not fixed.**
+`gui/fossh_console/advisor_client.py:582` (added by `5b7c262`, earlier
+this session) references the old filename
+`dev/BIASED-ONE-LEAK-2026-08-16.md` in a docstring. Python and the
+console are a parallel track's scope by design; flagged here so it
+isn't silently lost. `forbidden-terms.json` and every `Modelfile` were
+confirmed clean of the old name before this rename began and remain
+untouched.
+
+**Verified:** `cargo test -p fossh-selfheal` — 90 passed, 0 failed,
+same count as before the rename.
