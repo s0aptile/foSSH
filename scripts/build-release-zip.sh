@@ -17,7 +17,6 @@ mkdir -p "$stage/fossh"
 
 scratch_index=$(mktemp)
 GIT_INDEX_FILE="$scratch_index" git -C "$project_root" read-tree HEAD
-GIT_INDEX_FILE="$scratch_index" git -C "$project_root" add -A
 
 GIT_INDEX_FILE="$scratch_index" git -C "$project_root" ls-files -z -- ':!RULES.md' \
   | (cd "$stage/fossh" && xargs -0 -I{} sh -c 'mkdir -p "$(dirname "{}")" && cp "'"$project_root"'/{}" "{}"')
