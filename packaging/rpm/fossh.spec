@@ -169,7 +169,6 @@ BuildRequires:  clang-devel
 
 Requires:       fcgiwrap
 Requires:       gnupg2
-Requires:       openssl-libs
 Requires(pre):  shadow-utils
 %{?systemd_requires}
 
