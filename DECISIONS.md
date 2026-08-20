@@ -2853,3 +2853,41 @@ discipline — see `docs/PACKAGING-copr.md`'s own "don't tell anyone to
 `dnf copr enable` any chroot until a build succeeds there," already
 the house rule for exactly this situation before this session found
 a new instance of it.
+
+## ADR-0097 — Leap 4 groundwork: the real Linux-specific surface, measured not guessed
+
+**Status:** informational — groundwork only, not implementation. Per
+the standing directive: don't build Darwin/aarch64 support now, don't
+leave it painted into a corner either.
+
+**Findings.** Grepped every Rust and OCaml source file (not
+packaging) for Linux-only APIs — `/proc`, `/sys`, `setpriv`, `prctl`,
+`std::os::linux`. Exactly two files touch any of it:
+
+- `crates/fossh-selfheal/src/capability.rs` reads `/proc/cpuinfo` and
+  `/proc/meminfo` directly, for the advisory model's hardware-capability
+  gate (physical core count, RAM). Darwin has no `/proc`; the
+  equivalent is `sysctl -n hw.physicalcpu` and `sysctl -n hw.memsize`,
+  a different API shape entirely, not a path swap.
+- `watchdog/lib/supervisor.ml` shells out to `/usr/bin/setpriv`
+  (util-linux, Linux-only) for privilege drop when spawning the
+  supervised child. Darwin has no `setpriv`; the equivalent is calling
+  `setgid`/`setuid` directly rather than delegating to an external
+  tool, a different mechanism, not a different binary path.
+
+**Everything else in the actual Rust/OCaml business logic is already
+portable** — confirmed by absence, not assumed. The real Linux
+concentration is entirely in packaging (6 systemd unit/socket files,
+2 SELinux `.te`/`.fc` files), which isn't something to "port" for
+Darwin at all — a Darwin package would need `launchd` plists and has
+no SELinux equivalent, a separate packaging effort when Leap 4
+actually starts, not a code portability question.
+
+**Not done here, deliberately:** no `#[cfg(target_os)]` branches, no
+sysctl/launchd code, no new abstraction layer. Two files, precisely
+named, is a small enough real surface that building a speculative
+adapter trait now — before a second platform's actual constraints are
+known — would be exactly the kind of premature abstraction this
+project's own conventions warn against. This entry exists so Leap 4
+starts from two named files and two named API differences, not from
+"go find out what's Linux-specific."
